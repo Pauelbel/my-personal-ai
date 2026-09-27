@@ -7,16 +7,19 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from local_agent.agent.loader import load_agents
-from local_agent.agent.registry import AgentRegistry
+from local_agent.agent.loader import load_agents, load_skills
+from local_agent.agent.registry import AgentRegistry, SkillRegistry
 from local_agent.agent.runtime import AgentRuntime, RuntimeLimits
 from local_agent.agent.summary import ConversationSummarizer
 from local_agent.api.middleware import LocalOriginMiddleware, RequestLoggingMiddleware
+from local_agent.api.routes.folders import router as folders_router
 from local_agent.api.routes.health import router as health_router
 from local_agent.api.routes.memory import router as memory_router
 from local_agent.api.routes.messages import router as messages_router
 from local_agent.api.routes.models import router as models_router
+from local_agent.api.routes.projects import router as projects_router
 from local_agent.api.routes.sessions import router as sessions_router
+from local_agent.api.routes.skills import router as skills_router
 from local_agent.api.routes.tools import router as tools_router
 from local_agent.api.routes.turns import router as turns_router
 from local_agent.config.logging import configure_logging
@@ -27,10 +30,19 @@ from local_agent.llm.registry import LLMRegistry
 from local_agent.memory.conversation import ConversationService
 from local_agent.memory.markdown import MarkdownMemoryStore
 from local_agent.memory.service import MemoryService
+from local_agent.projects.service import ProjectService
 from local_agent.sessions.service import SessionService
+from local_agent.storage.json.projects import JsonProjectRepository
 from local_agent.storage.json.sessions import JsonSessionRepository
 from local_agent.storage.jsonl.conversation import JsonlConversationStore
-from local_agent.tools.filesystem import ListFilesTool, ReadFileTool, SearchFilesTool, WriteFileTool
+from local_agent.tools.filesystem import (
+    EditFileTool,
+    ListFilesTool,
+    ReadFileTool,
+    SearchFilesTool,
+    WriteFileTool,
+)
+from local_agent.tools.git import GitLogTool, GitShowTool
 from local_agent.tools.registry import ToolRegistry
 
 
@@ -62,12 +74,17 @@ def create_app(
         conversation_store.initialize()
         session_repository = JsonSessionRepository(active_settings.sessions_path)
         session_repository.initialize()
+        project_repository = JsonProjectRepository(active_settings.projects_path)
+        project_repository.initialize()
         memory_store = MarkdownMemoryStore(active_settings.memory_path)
 
         app.state.session_service = SessionService(
             session_repository,
+            projects=project_repository,
             on_deleted=(conversation_store.delete, memory_store.forget),
         )
+        app.state.project_service = ProjectService(project_repository, app.state.session_service)
+        app.state.project_service.adopt_sessions()
         app.state.conversation_service = ConversationService(
             conversation_store,
             on_saved=lambda message: app.state.session_service.touch(
@@ -84,11 +101,13 @@ def create_app(
         )
         app.state.memory_service.initialize()
         app.state.tool_registry = ToolRegistry([
-            ListFilesTool(), ReadFileTool(), SearchFilesTool(), WriteFileTool(),
+            ListFilesTool(), ReadFileTool(), SearchFilesTool(), WriteFileTool(), EditFileTool(),
+            GitLogTool(), GitShowTool(),
         ])
         app.state.agent_registry = AgentRegistry(
             load_agents(active_settings.agents_path, active_settings.default_model)
         )
+        app.state.skill_registry = SkillRegistry(load_skills(active_settings.skills_path))
         app.state.agent_runtime = AgentRuntime(
             app.state.session_service,
             app.state.conversation_service,
@@ -96,6 +115,7 @@ def create_app(
             app.state.llm_registry,
             app.state.memory_service,
             app.state.tool_registry,
+            app.state.skill_registry,
             ConversationSummarizer(
                 app.state.session_service,
                 app.state.conversation_service,
@@ -121,11 +141,14 @@ def create_app(
     app.add_middleware(RequestLoggingMiddleware)
     app.include_router(health_router, prefix="/api")
     app.include_router(sessions_router, prefix="/api")
+    app.include_router(projects_router, prefix="/api")
+    app.include_router(folders_router, prefix="/api")
     app.include_router(messages_router, prefix="/api")
     app.include_router(memory_router, prefix="/api")
     app.include_router(models_router, prefix="/api")
     app.include_router(turns_router, prefix="/api")
     app.include_router(tools_router, prefix="/api")
+    app.include_router(skills_router, prefix="/api")
 
     ui_dir = Path(__file__).resolve().parents[1] / "ui"
     app.mount("/ui", StaticFiles(directory=ui_dir), name="ui")

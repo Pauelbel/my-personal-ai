@@ -5,9 +5,10 @@ import logging
 import time
 from collections.abc import AsyncIterator, Coroutine
 from dataclasses import dataclass
+from datetime import date
 
 from local_agent.agent.context import build_context, build_system_prompt, estimate_message_tokens
-from local_agent.agent.registry import AgentRegistry
+from local_agent.agent.registry import AgentRegistry, SkillRegistry
 from local_agent.agent.summary import ConversationSummarizer
 from local_agent.agent.tool_executor import ToolExecutor
 from local_agent.llm.base import context_length, stream_chat
@@ -19,11 +20,13 @@ from local_agent.memory.service import MemoryService, MemoryServiceError
 from local_agent.sessions.service import SessionService
 from local_agent.tools.base import ToolResult
 from local_agent.tools.registry import ToolRegistry
+from local_agent.tools.skills import UseSkillTool
 
 logger = logging.getLogger(__name__)
 
 LOG_ARGUMENTS_CHARS = 160
-MAX_TOOL_ROUNDS = 5
+# Навык обычно занимает несколько шагов подряд: use_skill, git_log, git_show, read_file.
+MAX_TOOL_ROUNDS = 8
 MAX_CALLS_PER_ROUND = 4
 APPROVAL_TIMEOUT_SECONDS = 300
 INTERRUPTED_SUFFIX = "\n\n_(ответ прерван)_"
@@ -58,6 +61,7 @@ class AgentRuntime:
         providers: LLMRegistry,
         memory: MemoryService,
         tools: ToolRegistry,
+        skills: SkillRegistry,
         summarizer: ConversationSummarizer,
         limits: RuntimeLimits,
     ) -> None:
@@ -67,6 +71,7 @@ class AgentRuntime:
         self._providers = providers
         self._memory = memory
         self._tools = tools
+        self._skills = skills
         self._summarizer = summarizer
         self._limits = limits
         self._session_locks: dict[str, asyncio.Lock] = {}
@@ -132,7 +137,12 @@ class AgentRuntime:
         )
         yield {"type": "user_message", "message": user_message}
 
-        executor = ToolExecutor.for_session(self._tools, agent, session, request_id)
+        skills = self._skills.all()
+        available = {tool.id for tool in ToolExecutor.allowed_tools(self._tools, agent, session)}
+        skill_tool = UseSkillTool(self._skills, {tool.id for tool in self._tools.all()}, available)
+        executor = ToolExecutor.for_session(
+            self._tools, agent, session, request_id, builtins=[skill_tool] if skills else (),
+        )
         definitions = executor.definitions()
         loaded_window = await context_length(provider, model)
         window = loaded_window or self._limits.default_context_tokens
@@ -141,7 +151,9 @@ class AgentRuntime:
         )
         memory_context = self._memory.context()
         context = build_context(
-            build_system_prompt(agent.system_prompt, memory_context, session.summary),
+            build_system_prompt(
+                agent.system_prompt, memory_context, session.summary, today=date.today(), skills=skills
+            ),
             history,
             max_messages=self._limits.max_context_messages,
             max_tokens=max(window - self._limits.response_reserve_tokens, 0),

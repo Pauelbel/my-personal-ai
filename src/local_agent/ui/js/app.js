@@ -1,13 +1,19 @@
 // Точка входа UI: отрисовывает экран по общему состоянию и связывает события с модулями.
 import { renderMessages } from "./chat.js";
 import {
-  attachStreamingBubble, handleMessageKeydown, loadCatalog, loadModels, saveConfig, sendMessage, stopStreaming,
+  attachStreamingBubble, chooseWorkspace, handleMessageKeydown, loadCatalog, loadModels, saveConfig, sendMessage,
+  stopStreaming,
 } from "./composer.js";
+import { initFolderPicker } from "./folder-picker.js";
 import { renderMemoryPanel, saveMemory, showMemory, updateMemory } from "./memory-panel.js";
+import { initProjectDialog, openProjectDialog } from "./projects.js";
 import { renderPromptPanel, savePrompt, showPrompt } from "./prompt-panel.js";
 import { createSession, deleteSession, loadSessions, renameSession, selectSession } from "./sessions.js";
-import { renderSessions } from "./sidebar.js";
-import { elements, render, selectedSession, setRenderer, state } from "./state.js";
+import { renderSkillsPanel, saveSkill, showSkills } from "./skills-panel.js";
+import { renderSidebar } from "./sidebar.js";
+import {
+  elements, render, selectedProject, selectedSession, setRenderer, state, toggleProject,
+} from "./state.js";
 import { initTheme } from "./theme.js";
 import { showTools } from "./tools-dialog.js";
 
@@ -24,24 +30,33 @@ function estimateTranscriptTokens(history) {
 function renderApp() {
   const selected = selectedSession();
   const filter = state.sessionFilter.trim().toLocaleLowerCase("ru-RU");
-  const visibleSessions = filter
-    ? state.sessions.filter((session) => session.title.toLocaleLowerCase("ru-RU").includes(filter))
-    : state.sessions;
   elements.count.textContent = String(state.sessions.length);
-  renderSessions(
-    elements.list, visibleSessions, state.selectedId, selectSession, deleteSession,
-    state.actionsDisabled, filter ? "Ничего не найдено" : "Пока нет сессий",
-  );
+  renderSidebar(elements.list, {
+    projects: state.projects,
+    sessions: state.sessions,
+    filter,
+    selectedId: state.selectedId,
+    collapsed: state.collapsedProjects,
+    actionsDisabled: state.actionsDisabled,
+    emptyText: filter ? "Ничего не найдено" : "Пока нет сессий",
+    onSelect: selectSession,
+    onDelete: deleteSession,
+    onCreate: (projectId) => createSession(projectId),
+    onEdit: openProjectDialog,
+    onToggle: toggleProject,
+  });
 
-  const { showingSettings, showingMemory, showingPrompt, editingTitle } = state;
-  const showingPanel = showingSettings || showingMemory || showingPrompt;
+  const { showingSettings, showingMemory, showingPrompt, showingSkills, editingTitle } = state;
+  const showingPanel = showingSettings || showingMemory || showingPrompt || showingSkills;
   elements.settingsPanel.hidden = !showingSettings;
   elements.memoryPanel.hidden = !showingMemory;
   elements.promptPanel.hidden = !showingPrompt;
+  elements.skillsPanel.hidden = !showingSkills;
   elements.sessionPanel.hidden = showingPanel;
   const headerTitle = showingSettings
     ? "Настройки"
-    : showingMemory ? "Память" : showingPrompt ? "Системный промпт" : (selected?.title || "Сессии");
+    : showingMemory ? "Память" : showingPrompt ? "Системный промпт" : showingSkills ? "Навыки"
+    : (selected?.title || "Сессии");
   elements.editTitle.textContent = headerTitle;
   elements.editTitle.title = selected && !showingPanel ? "Переименовать сессию" : headerTitle;
   elements.editTitle.disabled = !selected || showingPanel;
@@ -69,8 +84,13 @@ function renderApp() {
     if (document.activeElement !== elements.provider) elements.provider.value = selected.provider;
     if (document.activeElement !== elements.agent) elements.agent.value = selected.agent_id;
     if (document.activeElement !== elements.model) elements.model.value = selected.model || state.preferredModel;
-    if (document.activeElement !== elements.workspace) elements.workspace.value = selected.workspace || "";
   }
+  const project = selectedProject();
+  elements.workspaceLabel.textContent = project ? project.name : "Выбрать папку…";
+  elements.workspace.title = project
+    ? `Проект «${project.name}»: ${project.workspace}. Нажмите, чтобы открыть настройки проекта`
+    : "Сессия без проекта: файлы недоступны. Выберите папку — сессия перейдёт в проект этой папки";
+  elements.workspace.disabled = !selected || state.streaming;
   elements.saveMessage.textContent = state.streaming ? "■" : "↑";
   elements.saveMessage.title = state.streaming ? "Остановить ответ" : "Отправить";
   elements.saveMessage.setAttribute("aria-label", state.streaming ? "Остановить ответ" : "Отправить сообщение");
@@ -78,16 +98,20 @@ function renderApp() {
   elements.memoryUpdateChat.disabled = state.actionsDisabled || !selected;
   renderMemoryPanel();
   renderPromptPanel();
+  renderSkillsPanel();
 }
 
 setRenderer(renderApp);
 
-elements.newButton.addEventListener("click", createSession);
+elements.newButton.addEventListener("click", () => createSession());
+elements.newProjectButton.addEventListener("click", () => openProjectDialog());
+elements.workspace.addEventListener("click", () => { void chooseWorkspace(); });
 elements.toolsButton.addEventListener("click", showTools);
 elements.memoryButton.addEventListener("click", showMemory);
 elements.promptButton.addEventListener("click", showPrompt);
+elements.skillsButton.addEventListener("click", showSkills);
 elements.toolsClose.addEventListener("click", () => elements.toolsDialog.close());
-elements.emptyNewButton.addEventListener("click", createSession);
+elements.emptyNewButton.addEventListener("click", () => createSession());
 elements.search.addEventListener("input", () => {
   state.sessionFilter = elements.search.value;
   render();
@@ -102,13 +126,14 @@ elements.saveMessage.addEventListener("click", (event) => {
 elements.messageInput.addEventListener("keydown", handleMessageKeydown);
 elements.memorySave.addEventListener("click", saveMemory);
 elements.promptSave.addEventListener("click", savePrompt);
+elements.skillSave.addEventListener("click", saveSkill);
 elements.memoryUpdateChat.addEventListener("click", updateMemory);
-for (const field of [elements.agent, elements.provider, elements.model, elements.workspace]) {
+for (const field of [elements.agent, elements.provider, elements.model]) {
   field.addEventListener("change", () => { void saveConfig(); });
 }
 elements.provider.addEventListener("change", () => { void loadModels(); });
 elements.editTitle.addEventListener("click", () => {
-  if (!state.selectedId || state.showingSettings || state.showingMemory || state.showingPrompt) return;
+  if (!state.selectedId || state.showingSettings || state.showingMemory || state.showingPrompt || state.showingSkills) return;
   state.editingTitle = true;
   render();
   elements.titleInput.focus();
@@ -129,9 +154,12 @@ elements.settingsButton.addEventListener("click", () => {
   state.showingSettings = true;
   state.showingMemory = false;
   state.showingPrompt = false;
+  state.showingSkills = false;
   render();
 });
 
 initTheme();
+initFolderPicker();
+initProjectDialog();
 render();
 loadSessions().then(loadCatalog);

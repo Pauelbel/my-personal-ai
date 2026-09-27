@@ -1,8 +1,12 @@
 // Поле ввода: настройки сессии (агент, провайдер, модель, папка), отправка с потоковым ответом и «Стоп».
 import { catalogApi, sessionsApi, turnsApi } from "./api.js";
 import { StreamingMessage } from "./chat.js";
+import { pickFolder } from "./folder-picker.js";
+import { openProjectDialog } from "./projects.js";
 import { loadSessions } from "./sessions.js";
-import { clearError, elements, render, setMessages, showError, state } from "./state.js";
+import {
+  clearError, elements, render, selectedProject, setMessages, showError, state,
+} from "./state.js";
 
 let pendingConfigSave = Promise.resolve();
 let controller = null;
@@ -67,7 +71,8 @@ export function saveConfig() {
   const config = {
     provider: elements.provider.value,
     model,
-    workspace: elements.workspace.value.trim() || null,
+    // Папка задаётся проектом; сессия меняет её только через chooseWorkspace.
+    workspace: null,
     agent_id: elements.agent.value || null,
   };
   const operation = pendingConfigSave.then(async () => {
@@ -75,14 +80,13 @@ export function saveConfig() {
     if (!current) return false;
     if (
       current.provider === config.provider && current.model === config.model
-      && current.workspace === config.workspace && (!config.agent_id || current.agent_id === config.agent_id)
+      && (!config.agent_id || current.agent_id === config.agent_id)
     ) {
       return true;
     }
     try {
       const updated = await sessionsApi.configure(sessionId, config);
       state.sessions = state.sessions.map((session) => session.id === sessionId ? updated : session);
-      if (state.selectedId === sessionId) elements.workspace.value = updated.workspace ?? "";
       clearError();
       render();
       return true;
@@ -93,6 +97,31 @@ export function saveConfig() {
   });
   pendingConfigSave = operation.then(() => undefined);
   return operation;
+}
+
+// Кнопка папки: в проекте открывает его настройки, без проекта — выбор папки,
+// после которого сессия переходит в проект этой папки.
+export async function chooseWorkspace() {
+  const sessionId = state.selectedId;
+  if (!sessionId || state.streaming) return;
+  const project = selectedProject();
+  if (project) {
+    openProjectDialog(project);
+    return;
+  }
+  const folder = await pickFolder();
+  if (!folder || state.selectedId !== sessionId) return;
+  try {
+    await sessionsApi.configure(sessionId, {
+      provider: elements.provider.value,
+      model: elements.model.value.trim() || state.preferredModel,
+      workspace: folder,
+      agent_id: elements.agent.value || null,
+    });
+    await loadSessions();
+  } catch (error) {
+    showError(error);
+  }
 }
 
 export async function sendMessage(event) {

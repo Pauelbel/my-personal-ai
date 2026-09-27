@@ -24,7 +24,10 @@ const sessionPath = (sessionId) => `/sessions/${encodeURIComponent(sessionId)}`;
 
 export const sessionsApi = {
   list: () => request("/sessions"),
-  create: (model) => request("/sessions", { method: "POST", body: JSON.stringify({ model }) }),
+  create: (model, projectId = null) => request(
+    "/sessions",
+    { method: "POST", body: JSON.stringify({ model, project_id: projectId }) },
+  ),
   configure: (sessionId, config) => request(
     `${sessionPath(sessionId)}/config`,
     { method: "PUT", body: JSON.stringify(config) },
@@ -36,6 +39,20 @@ export const sessionsApi = {
   delete: (sessionId) => request(sessionPath(sessionId), { method: "DELETE" }),
 };
 
+export const projectsApi = {
+  list: () => request("/projects"),
+  create: (project) => request("/projects", { method: "POST", body: JSON.stringify(project) }),
+  update: (projectId, project) => request(
+    `/projects/${encodeURIComponent(projectId)}`,
+    { method: "PUT", body: JSON.stringify(project) },
+  ),
+  delete: (projectId) => request(`/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" }),
+};
+
+export const foldersApi = {
+  list: (path) => request(path ? `/folders?path=${encodeURIComponent(path)}` : "/folders"),
+};
+
 export const messagesApi = {
   list: (sessionId) => request(`${sessionPath(sessionId)}/messages`),
 };
@@ -44,6 +61,15 @@ export const catalogApi = {
   models: (provider) => request(`/models?provider=${encodeURIComponent(provider)}`),
   providers: () => request("/providers"),
   agents: () => request("/agents"),
+};
+
+export const skillsApi = {
+  list: () => request("/skills"),
+  read: (skillId) => request(`/skills/${encodeURIComponent(skillId)}`),
+  save: (skillId, instructions) => request(
+    `/skills/${encodeURIComponent(skillId)}`,
+    { method: "PUT", body: JSON.stringify({ instructions }) },
+  ),
 };
 
 export const agentsApi = {

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 
 from local_agent.agent.models import Agent
@@ -14,23 +15,36 @@ logger = logging.getLogger(__name__)
 
 
 class ToolExecutor:
-    def __init__(self, tools: list[Tool], workspace: Path | None, request_id: str) -> None:
-        self._tools = {tool.id: tool for tool in tools}
+    def __init__(
+        self, tools: list[Tool], workspace: Path | None, request_id: str, builtins: Sequence[Tool] = ()
+    ) -> None:
+        self._tools = {tool.id: tool for tool in [*tools, *builtins]}
+        # Встроенным инструментам (навыки) не нужны ни рабочая папка, ни включение в сессии.
+        self._builtins = {tool.id for tool in builtins}
         self._workspace = workspace
         self._request_id = request_id
 
     @classmethod
     def for_session(
-        cls, registry: ToolRegistry, agent: Agent, session: Session, request_id: str
+        cls,
+        registry: ToolRegistry,
+        agent: Agent,
+        session: Session,
+        request_id: str,
+        builtins: Sequence[Tool] = (),
     ) -> "ToolExecutor":
-        # Инструмент доступен, только если его разрешает агент, он включён в сессии и выбрана рабочая папка.
+        tools = cls.allowed_tools(registry, agent, session)
+        return cls(tools, Path(session.workspace) if session.workspace else None, request_id, builtins)
+
+    @staticmethod
+    def allowed_tools(registry: ToolRegistry, agent: Agent, session: Session) -> list[Tool]:
+        """Инструмент доступен, только если его разрешает агент, он включён в сессии и выбрана рабочая папка."""
         if not session.workspace:
-            return cls([], None, request_id)
-        tools = [
+            return []
+        return [
             tool for tool in registry.all()
             if tool.id in agent.tools and tool.id in session.enabled_tools
         ]
-        return cls(tools, Path(session.workspace), request_id)
 
     def definitions(self) -> list[dict[str, object]]:
         return [
@@ -58,7 +72,7 @@ class ToolExecutor:
 
     async def execute(self, call: ToolCall) -> ToolResult:
         tool = self._tools.get(call.name)
-        if tool is None or self._workspace is None:
+        if tool is None or (self._workspace is None and call.name not in self._builtins):
             return ToolResult("Инструмент не разрешён для этой сессии", is_error=True)
         arguments = self.parse_arguments(call)
         if arguments is None:

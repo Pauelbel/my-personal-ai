@@ -23,7 +23,9 @@ class Settings(BaseSettings):
     llm_providers: list[ProviderConfig] = Field(default_factory=list)
     default_model: str = ""
     agents_path: Path = Path("data/agents")
+    skills_path: Path = Path("data/skills")
     sessions_path: Path = Path("data/sessions")
+    projects_path: Path = Path("data/projects")
     conversations_path: Path = Path("data/conversations")
     memory_path: Path = Path("data/memory")
     memory_model: str = ""

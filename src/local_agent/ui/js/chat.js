@@ -145,16 +145,23 @@ export class StreamingMessage {
     card.className = "approval-card";
     const title = document.createElement("strong");
     const args = parseArguments(event.call.arguments);
+    const editing = event.call.name === "edit_file" && typeof args.old_text === "string";
     title.textContent = event.call.name === "write_file" && args.path
       ? `Модель хочет записать файл ${args.path} (${(args.content || "").length} символов)`
-      : `Модель хочет выполнить «${event.tool_name}»`;
+      : editing ? `Модель хочет изменить файл ${args.path}` : `Модель хочет выполнить «${event.tool_name}»`;
     const preview = document.createElement("details");
+    // Правку показываем сразу: по ней видно, что именно заменится.
+    preview.open = editing;
     const summary = document.createElement("summary");
-    summary.textContent = "Показать содержимое";
+    summary.textContent = editing ? "Что заменится" : "Показать содержимое";
     const body = document.createElement("pre");
-    body.textContent = event.call.name === "write_file" && typeof args.content === "string"
-      ? args.content
-      : JSON.stringify(args, null, 2);
+    if (editing) {
+      body.append(diffBlock("removed", args.old_text), diffBlock("added", args.new_text ?? ""));
+    } else {
+      body.textContent = event.call.name === "write_file" && typeof args.content === "string"
+        ? args.content
+        : JSON.stringify(args, null, 2);
+    }
     preview.append(summary, body);
     const actions = document.createElement("div");
     actions.className = "approval-actions";
@@ -225,12 +232,20 @@ function toolCallNode(call, result) {
   details.classList.toggle("failed", Boolean(result?.is_error));
   const summary = document.createElement("summary");
   const args = parseArguments(call.arguments);
-  const target = args.path || args.query || "";
+  const target = args.path || args.query || args.commit || args.name || "";
   summary.textContent = `⚒ ${call.name}${target ? ` · ${target}` : ""}${result ? "" : " · нет результата"}`;
   const body = document.createElement("pre");
   body.textContent = result ? result.content : "Вызов не был выполнен";
   details.append(summary, body);
   return details;
+}
+
+function diffBlock(kind, text) {
+  const block = document.createElement("span");
+  block.className = `diff-${kind}`;
+  const sign = kind === "removed" ? "− " : "+ ";
+  block.textContent = text ? text.split("\n").map((line) => sign + line).join("\n") + "\n" : `${sign}(пусто)\n`;
+  return block;
 }
 
 function parseArguments(raw) {

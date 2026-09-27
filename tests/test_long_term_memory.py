@@ -164,6 +164,56 @@ def test_invalid_model_response_does_not_advance_checkpoint(tmp_path) -> None:
     assert provider.calls[0][0] == "chat-model"
 
 
+class PartlyInvalidProvider(MemoryProvider):
+    """Две корректные операции и третья в чужой файл: patch должен быть отклонён целиком."""
+
+    async def chat(self, model: str, messages: list[ChatMessage], **options) -> ChatResult:
+        self.calls.append((model, messages))
+        payload = json.loads(messages[-1].content or "{}")
+        source = [item["id"] for item in payload["new_messages"] if item["role"] == "user"]
+        return ChatResult(content=json.dumps({
+            "version": 1,
+            "operations": [
+                {"op": "add", "file": "preferences.md", "section": "Общение",
+                 "content": "Любит короткие ответы.", "source_message_ids": source},
+                {"op": "add", "file": "projects.md", "section": "Текущие",
+                 "content": "Делает Meepo.", "source_message_ids": source},
+                {"op": "add", "file": "notes.md", "section": "Разное",
+                 "content": "Что-то ещё.", "source_message_ids": source},
+            ],
+        }))
+
+
+def test_rejected_patch_changes_nothing_and_keeps_checkpoint(tmp_path) -> None:
+    provider = PartlyInvalidProvider()
+    settings = Settings(
+        agents_path=tmp_path / "agents",
+        sessions_path=tmp_path / "sessions",
+        conversations_path=tmp_path / "conversations",
+        memory_path=tmp_path / "memory",
+        _env_file=None,
+    )
+
+    with TestClient(create_app(settings, llm_provider=provider)) as client:
+        before = {item["name"]: client.get(f"/api/memory/{item['name']}").json()["content"]
+                  for item in client.get("/api/memory").json()}
+        session = client.post("/api/sessions", json={"model": "chat-model"}).json()
+        client.post(f"/api/sessions/{session['id']}/messages", json={"content": "Отвечай коротко"})
+        first = client.post(f"/api/sessions/{session['id']}/memory/update")
+        second = client.post(f"/api/sessions/{session['id']}/memory/update")
+        after = {item["name"]: client.get(f"/api/memory/{item['name']}").json()["content"]
+                 for item in client.get("/api/memory").json()}
+
+    assert first.status_code == 422
+    assert "операция 2" in first.json()["detail"]
+    assert after == before
+    assert not (tmp_path / "memory" / "notes.md").exists()
+    # Checkpoint не сдвинулся: второй запуск снова отправляет модели то же сообщение.
+    assert second.status_code == 422
+    assert len(provider.calls) == 2
+    assert provider.calls[0][1][-1].content == provider.calls[1][1][-1].content
+
+
 def test_update_requires_memory_or_session_model(tmp_path) -> None:
     provider = MemoryProvider()
     settings = Settings(

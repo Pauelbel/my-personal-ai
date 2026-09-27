@@ -20,6 +20,7 @@
           <button class="tools-button" id="show-tools" type="button">⚒ Инструменты</button>
           <button class="tools-button" id="show-memory" type="button">◇ Память</button>
           <button class="tools-button" id="show-prompt" type="button">✎ Системный промпт</button>
+          <button class="tools-button" id="show-skills" type="button">✦ Навыки</button>
         </div>
 
         <button class="new-session" id="new-session" type="button">
@@ -28,7 +29,10 @@
 
         <div class="sidebar-section-heading">
           <span>Сессии</span>
-          <span id="session-count" aria-label="Количество сессий">0</span>
+          <span class="heading-actions">
+            <button class="heading-button" id="new-project" type="button" title="Новый проект с рабочей папкой">＋ Проект</button>
+            <span id="session-count" aria-label="Количество сессий">0</span>
+          </span>
         </div>
         <label class="visually-hidden" for="session-search">Поиск по сессиям</label>
         <input class="session-search" id="session-search" type="search" placeholder="Найти сессию" autocomplete="off" />
@@ -78,7 +82,7 @@
                   <span class="config-divider" aria-hidden="true"></span>
                   <label class="config-field model-field" for="session-model"><span class="visually-hidden">Модель</span><input id="session-model" list="available-models" placeholder="Выберите модель" required /><datalist id="available-models"></datalist></label>
                   <span class="config-divider" aria-hidden="true"></span>
-                  <label class="config-field workspace-field" for="session-workspace"><span aria-hidden="true">⌂</span><span class="visually-hidden">Рабочая папка</span><input id="session-workspace" placeholder="Рабочая папка не выбрана" /></label>
+                  <button class="config-field workspace-field workspace-button" id="session-workspace" type="button"><span aria-hidden="true">⌂</span><span id="workspace-label">Выбрать папку…</span></button>
                   <button class="composer-memory" id="update-memory-chat" type="button" title="Обработать новые сообщения этой сессии">Обновить память</button>
                   <button class="composer-send" id="save-message" type="submit" form="message-form" aria-label="Отправить сообщение" title="Отправить">↑</button>
                 </div>
@@ -93,8 +97,9 @@
           <p>Выберите оформление, в котором удобно работать. Оно сохранится в этом браузере.</p>
           <fieldset class="theme-settings">
             <legend>Тема интерфейса</legend>
-            <label class="theme-option"><input type="radio" name="theme" value="light" /><span><strong>Светлая</strong><small>Мягкий серо-голубой фон</small></span></label>
+            <label class="theme-option"><input type="radio" name="theme" value="light" /><span><strong>Светлая</strong><small>Мятно-бирюзовая палитра</small></span></label>
             <label class="theme-option"><input type="radio" name="theme" value="dark" /><span><strong>Тёмная</strong><small>Спокойные тёмные оттенки</small></span></label>
+            <label class="theme-option"><input type="radio" name="theme" value="sunset" /><span><strong>Закат</strong><small>Тёмно-синий с персиковым и малиновым</small></span></label>
           </fieldset>
           <p class="settings-note">Параметры сервера пока задаются в локальном файле конфигурации.</p>
         </section>
@@ -136,6 +141,26 @@
             </div>
           </div>
         </section>
+
+        <section class="content-panel memory-panel" id="skills-panel" aria-labelledby="skills-title" hidden>
+          <div class="memory-header">
+            <div>
+              <span class="section-label" id="skills-title">НАВЫКИ</span>
+              <p>Готовые инструкции для типовых задач. Модель видит только список с описаниями и сама подгружает нужный навык, когда задача под него подходит. Новый навык — это файл <code>&lt;id&gt;.md</code> с полями name и description в папке навыков; он появится после перезапуска.</p>
+            </div>
+          </div>
+          <p class="memory-status" id="skills-status" role="status"></p>
+          <p class="memory-status" id="skills-empty" hidden>Навыков пока нет.</p>
+          <div class="memory-workspace">
+            <nav class="memory-files" id="skills-list" aria-label="Навыки"></nav>
+            <div class="memory-editor">
+              <label for="skill-content" id="skill-title">Выберите навык</label>
+              <p class="memory-document-description" id="skill-description"></p>
+              <textarea id="skill-content" spellcheck="true" disabled></textarea>
+              <button class="primary-button" id="save-skill" type="button" disabled>Сохранить</button>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
     <dialog class="tools-dialog" id="tools-dialog" aria-labelledby="tools-title">
@@ -145,6 +170,46 @@
       </div>
       <p id="tools-intro"></p>
       <div class="tools-list" id="tools-list"></div>
+    </dialog>
+    <dialog class="tools-dialog project-dialog" id="project-dialog" aria-labelledby="project-dialog-title">
+      <form id="project-form">
+        <div class="tools-dialog-header">
+          <h2 id="project-dialog-title">Новый проект</h2>
+          <button class="tools-close" id="project-close" type="button" aria-label="Закрыть">×</button>
+        </div>
+        <p>Проект — рабочая папка с общими настройками. Инструменты включаются один раз для всех его сессий, а агент и модель запоминаются по последнему выбору.</p>
+        <label class="dialog-field">Название<input id="project-name" maxlength="100" autocomplete="off" required /></label>
+        <div class="dialog-field">
+          <span>Папка</span>
+          <div class="folder-row">
+            <span class="folder-path" id="project-folder">Не выбрана</span>
+            <button class="secondary-button" id="project-choose-folder" type="button">Выбрать…</button>
+          </div>
+        </div>
+        <p class="dialog-error" id="project-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button class="danger-button" id="project-delete" type="button" hidden>Удалить проект</button>
+          <button class="secondary-button" id="project-cancel" type="button">Отмена</button>
+          <button class="primary-button" id="project-save" type="submit">Создать</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog class="tools-dialog folder-dialog" id="folder-dialog" aria-labelledby="folder-dialog-title">
+      <div class="tools-dialog-header">
+        <h2 id="folder-dialog-title">Выбор папки</h2>
+        <button class="tools-close" id="folder-close" type="button" aria-label="Закрыть">×</button>
+      </div>
+      <form class="folder-path-form" id="folder-path-form">
+        <button class="secondary-button" id="folder-up" type="button" title="На уровень выше" aria-label="На уровень выше">↑</button>
+        <input id="folder-path" placeholder="Вставьте путь или выберите ниже" aria-label="Путь к папке" autocomplete="off" />
+        <button class="secondary-button" type="submit">Перейти</button>
+      </form>
+      <div class="folder-list" id="folder-list"></div>
+      <p class="dialog-error" id="folder-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="secondary-button" id="folder-cancel" type="button">Отмена</button>
+        <button class="primary-button" id="folder-select" type="button" disabled>Выбрать эту папку</button>
+      </div>
     </dialog>
   </body>
 </html>

@@ -1,8 +1,11 @@
-"""Модели операций ограничивают точечные изменения долговременной памяти."""
+"""Модели операций памяти. Полный контракт: docs/memory-contract.md."""
 
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+PATCH_VERSION = 1
+MAX_OPERATIONS = 100
 
 
 class _Operation(BaseModel):
@@ -20,6 +23,8 @@ class _Operation(BaseModel):
 
 
 class AddOperation(_Operation):
+    """Новая запись; entry_id для неё создаёт хранилище, а не модель."""
+
     op: Literal["add"]
     section: str = Field(min_length=1, max_length=100)
     content: str = Field(min_length=1, max_length=2000)
@@ -33,6 +38,8 @@ class AddOperation(_Operation):
 
 
 class UpdateOperation(_Operation):
+    """Новый текст существующей управляемой записи."""
+
     op: Literal["update"]
     entry_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     content: str = Field(min_length=1, max_length=2000)
@@ -46,6 +53,8 @@ class UpdateOperation(_Operation):
 
 
 class DeleteOperation(_Operation):
+    """Удаление существующей управляемой записи."""
+
     op: Literal["delete"]
     entry_id: str = Field(pattern=r"^[a-f0-9]{32}$")
 
@@ -57,7 +66,9 @@ MemoryOperation = Annotated[
 
 
 class MemoryPatch(BaseModel):
+    """Проверенный набор операций, который применяется целиком или не применяется вовсе."""
+
     model_config = ConfigDict(extra="forbid")
 
     version: Literal[1]
-    operations: list[MemoryOperation] = Field(max_length=100)
+    operations: list[MemoryOperation] = Field(max_length=MAX_OPERATIONS)

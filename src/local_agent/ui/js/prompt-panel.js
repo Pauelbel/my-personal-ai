@@ -24,6 +24,7 @@ export async function showPrompt() {
   state.showingSettings = false;
   state.showingMemory = false;
   state.showingPrompt = true;
+  state.showingSkills = false;
   state.editingTitle = false;
   elements.promptStatus.textContent = "";
   render();

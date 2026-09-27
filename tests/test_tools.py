@@ -2,12 +2,13 @@
 
 import asyncio
 
+import pytest
 from fastapi.testclient import TestClient
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
 from local_agent.llm.models import ChatResult, ToolCall
-from local_agent.tools.filesystem import ListFilesTool, ReadFileTool
+from local_agent.tools.filesystem import EditFileTool, ListFilesTool, ReadFileTool
 
 
 class ToolCallingProvider:
@@ -37,7 +38,7 @@ def test_session_tools_persist(tmp_path):
         other = client.post("/api/sessions", json={}).json()
         tools = client.get(f"/api/sessions/{session['id']}/tools").json()
         assert [tool["id"] for tool in tools] == [
-            "list_files", "read_file", "search_files", "write_file"
+            "list_files", "read_file", "search_files", "write_file", "edit_file", "git_log", "git_show"
         ]
         assert not any(tool["enabled"] for tool in tools)
         updated = client.put(
@@ -51,7 +52,7 @@ def test_session_tools_persist(tmp_path):
         ).status_code == 404
     with TestClient(create_app(settings)) as client:
         tools = client.get(f"/api/sessions/{session['id']}/tools").json()
-        assert [tool["enabled"] for tool in tools] == [False, True, False, False]
+        assert [tool["enabled"] for tool in tools] == [False, True, False, False, False, False, False]
         other_tools = client.get(f"/api/sessions/{other['id']}/tools").json()
         assert not any(tool["enabled"] for tool in other_tools)
 
@@ -85,6 +86,11 @@ def test_model_only_receives_enabled_tools_and_result(tmp_path):
             "/api/sessions",
             json={"model": "test-model", "workspace": str(workspace)},
         ).json()
+        # Новый проект начинает с инструментов чтения; выключаем их, чтобы проверить путь с нуля.
+        defaults = [tool["id"] for tool in client.get(f"/api/sessions/{session['id']}/tools").json() if tool["enabled"]]
+        assert defaults == ["list_files", "read_file", "search_files", "git_log", "git_show"]
+        for tool_id in defaults:
+            client.put(f"/api/sessions/{session['id']}/tools/{tool_id}", json={"enabled": False})
         first = client.post(f"/api/sessions/{session['id']}/turns", json={"content": "Привет"})
         assert first.status_code == 200
         assert provider.calls[0][1] is None
@@ -106,3 +112,55 @@ def test_model_only_receives_enabled_tools_and_result(tmp_path):
             f"/api/sessions/{session['id']}/turns", json={"content": "Прочитай ещё раз"}
         ).status_code == 200
         assert provider.calls[4][1] is None
+
+
+def edit(workspace, **arguments):
+    return asyncio.run(EditFileTool().execute(arguments, workspace))
+
+
+def test_edit_file_replaces_unique_fragment(tmp_path):
+    (tmp_path / "app.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+
+    result = edit(tmp_path, path="app.py", old_text="b = 2", new_text="b = 3")
+
+    assert not result.is_error
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "a = 1\nb = 3\n"
+    assert EditFileTool.requires_approval is True
+
+
+def test_edit_file_keeps_crlf(tmp_path):
+    (tmp_path / "win.txt").write_bytes(b"one\r\ntwo\r\nthree\r\n")
+
+    result = edit(tmp_path, path="win.txt", old_text="one\ntwo", new_text="one\n2\nextra")
+
+    assert not result.is_error
+    assert (tmp_path / "win.txt").read_bytes() == b"one\r\n2\r\nextra\r\nthree\r\n"
+
+
+@pytest.mark.parametrize(("old_text", "message"), [("missing", "не найден"), ("x", "встречается 2")])
+def test_edit_file_requires_exactly_one_match(tmp_path, old_text, message):
+    (tmp_path / "file.txt").write_text("x\nx\n", encoding="utf-8")
+
+    result = edit(tmp_path, path="file.txt", old_text=old_text, new_text="y")
+
+    assert result.is_error and message in result.content
+    assert (tmp_path / "file.txt").read_text(encoding="utf-8") == "x\nx\n"
+
+
+@pytest.mark.parametrize("path", ["../outside.txt", "/abs.txt", "missing.txt", "."])
+def test_edit_file_stays_inside_workspace(tmp_path, path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (tmp_path / "outside.txt").write_text("secret", encoding="utf-8")
+
+    result = edit(workspace, path=path, old_text="secret", new_text="changed")
+
+    assert result.is_error
+    assert (tmp_path / "outside.txt").read_text(encoding="utf-8") == "secret"
+
+
+@pytest.mark.parametrize("arguments", [{"old_text": "", "new_text": "y"}, {"old_text": "x", "new_text": None}])
+def test_edit_file_validates_arguments(tmp_path, arguments):
+    (tmp_path / "file.txt").write_text("x\n", encoding="utf-8")
+
+    assert edit(tmp_path, path="file.txt", **arguments).is_error

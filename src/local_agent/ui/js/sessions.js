@@ -1,5 +1,5 @@
 // Действия со списком сессий: загрузка, выбор, создание, переименование и удаление.
-import { messagesApi, sessionsApi } from "./api.js";
+import { messagesApi, projectsApi, sessionsApi } from "./api.js";
 import { clearError, elements, render, setMessages, showError, state } from "./state.js";
 
 export function selectSession(id) {
@@ -11,6 +11,7 @@ export function selectSession(id) {
   state.showingSettings = false;
   state.showingMemory = false;
   state.showingPrompt = false;
+  state.showingSkills = false;
   render();
   loadMessages(id);
 }
@@ -29,7 +30,7 @@ export async function loadMessages(sessionId) {
 
 export async function loadSessions() {
   try {
-    state.sessions = await sessionsApi.list();
+    [state.sessions, state.projects] = await Promise.all([sessionsApi.list(), projectsApi.list()]);
     const previousId = state.selectedId;
     state.selectedId = state.sessions.some((session) => session.id === state.selectedId)
       ? state.selectedId
@@ -43,12 +44,12 @@ export async function loadSessions() {
   }
 }
 
-export async function createSession() {
+export async function createSession(projectId = null) {
   elements.toolsDialog.close();
   elements.newButton.disabled = true;
   elements.emptyNewButton.disabled = true;
   try {
-    const session = await sessionsApi.create(state.preferredModel);
+    const session = await sessionsApi.create(state.preferredModel, projectId);
     state.selectedId = session.id;
     state.editingTitle = false;
     setMessages([], null);
@@ -56,6 +57,7 @@ export async function createSession() {
     state.showingSettings = false;
     state.showingMemory = false;
     state.showingPrompt = false;
+    state.showingSkills = false;
     await loadSessions();
   } catch (error) {
     showError(error);

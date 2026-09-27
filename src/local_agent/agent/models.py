@@ -1,4 +1,4 @@
-"""Сущность агента хранит его идентичность и постоянные параметры поведения."""
+"""Сущности агента и навыка: идентичность, постоянные параметры поведения и инструкции."""
 
 from dataclasses import dataclass
 
@@ -11,3 +11,13 @@ class Agent:
     llm_provider: str
     model: str
     tools: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Skill:
+    """Навык: инструкции для типовой задачи, которые модель подгружает по id, когда они нужны."""
+
+    id: str
+    name: str
+    description: str
+    instructions: str

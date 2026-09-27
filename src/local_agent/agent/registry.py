@@ -1,6 +1,6 @@
-"""Реестр хранит агентов, загруженных из папки агентов."""
+"""Реестры хранят агентов и навыки, загруженные из их папок."""
 
-from local_agent.agent.models import Agent
+from local_agent.agent.models import Agent, Skill
 
 
 class AgentRegistry:
@@ -16,3 +16,17 @@ class AgentRegistry:
     def replace(self, agent: Agent) -> None:
         """Агент перечитан из файла: следующий ход возьмёт уже новую версию."""
         self._agents[agent.id] = agent
+
+
+class SkillRegistry:
+    def __init__(self, skills: list[Skill]) -> None:
+        self._skills = {skill.id: skill for skill in skills}
+
+    def get(self, skill_id: object) -> Skill | None:
+        return self._skills.get(skill_id) if isinstance(skill_id, str) else None
+
+    def all(self) -> list[Skill]:
+        return list(self._skills.values())
+
+    def replace(self, skill: Skill) -> None:
+        self._skills[skill.id] = skill

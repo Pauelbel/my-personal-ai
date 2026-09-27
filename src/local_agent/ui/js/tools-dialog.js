@@ -1,11 +1,14 @@
 // Диалог инструментов включает и выключает инструменты текущей сессии.
 import { toolsApi } from "./api.js";
-import { clearError, elements, showError, state } from "./state.js";
+import { clearError, elements, selectedProject, showError, state } from "./state.js";
 
 let availableTools = [];
 
 function renderToolDialog() {
-  elements.toolsIntro.textContent = "Настройка действует только для текущей сессии. Файловые инструменты работают только внутри её рабочей папки; запись файла каждый раз подтверждается.";
+  const project = selectedProject();
+  elements.toolsIntro.textContent = project
+    ? `Настройка действует во всех сессиях проекта «${project.name}». Инструменты работают только внутри папки проекта; запись и правка файлов каждый раз подтверждаются.`
+    : "Сессия без проекта: файлов у неё нет, поэтому инструменты модели не предлагаются. Выберите папку под полем ввода — сессия перейдёт в проект этой папки.";
   elements.toolsList.replaceChildren();
   for (const tool of availableTools) {
     const label = document.createElement("label");

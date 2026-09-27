@@ -12,7 +12,7 @@ class FakeProvider:
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[ChatMessage]]] = []
 
-    async def chat(self, model: str, messages: list[ChatMessage]) -> ChatResult:
+    async def chat(self, model: str, messages: list[ChatMessage], tools=None) -> ChatResult:
         self.calls.append((model, messages))
         return ChatResult(content="Ответ модели", input_tokens=12, output_tokens=3)
 

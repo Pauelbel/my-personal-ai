@@ -220,3 +220,60 @@ class WriteFileTool:
             return ToolResult(f"Файл {target.relative_to(root).as_posix()} {action}, {len(data)} байт")
         except (OSError, ValueError) as exc:
             return ToolResult(str(exc), is_error=True)
+
+
+class EditFileTool:
+    id = "edit_file"
+    name = "Правка файла"
+    description = (
+        "Заменить фрагмент текста в существующем файле рабочей папки. old_text должен встречаться "
+        "в файле ровно один раз — добавьте соседние строки, чтобы фрагмент стал уникальным. "
+        "Пользователь подтверждает каждую правку."
+    )
+    requires_approval = True
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Относительный путь к файлу"},
+            "old_text": {"type": "string", "description": "Точный фрагмент, который нужно заменить"},
+            "new_text": {"type": "string", "description": "Новый текст вместо фрагмента; пустая строка удаляет его"},
+        },
+        "required": ["path", "old_text", "new_text"],
+        "additionalProperties": False,
+    }
+
+    async def execute(self, arguments: dict[str, object], workspace: Path) -> ToolResult:
+        return await asyncio.to_thread(self._run, arguments, workspace)
+
+    @staticmethod
+    def _run(arguments: dict[str, object], workspace: Path) -> ToolResult:
+        try:
+            old_text, new_text = arguments.get("old_text"), arguments.get("new_text")
+            if not isinstance(old_text, str) or not old_text:
+                raise ValueError("old_text должен быть непустой строкой")
+            if not isinstance(new_text, str):
+                raise ValueError("new_text должен быть строкой")
+            root = _workspace_root(workspace)
+            target = _inside_workspace(workspace, arguments.get("path"))
+            if not target.is_file():
+                raise ValueError("Это не файл")
+            if target.stat().st_size > MAX_WRITE_BYTES:
+                raise ValueError("Файл больше 256 КБ")
+            content = target.read_bytes().decode("utf-8")
+            # Модель пишет переводы строк как \n; в файле с CRLF ищем и вставляем в его формате.
+            newline = "\r\n" if "\r\n" in content else "\n"
+            old_text, new_text = (
+                text.replace("\r\n", "\n").replace("\n", newline) for text in (old_text, new_text)
+            )
+            count = content.count(old_text)
+            if count == 0:
+                raise ValueError("Фрагмент old_text не найден в файле; сверьтесь с read_file")
+            if count > 1:
+                raise ValueError(f"Фрагмент old_text встречается {count} раз(а); добавьте соседние строки")
+            data = content.replace(old_text, new_text, 1).encode("utf-8")
+            if len(data) > MAX_WRITE_BYTES:
+                raise ValueError("После правки файл больше 256 КБ")
+            target.write_bytes(data)
+            return ToolResult(f"Файл {target.relative_to(root).as_posix()} изменён, {len(data)} байт")
+        except (OSError, UnicodeError, ValueError) as exc:
+            return ToolResult(str(exc), is_error=True)

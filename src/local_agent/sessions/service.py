@@ -1,25 +1,41 @@
-"""Сервис создаёт сессии и предоставляет их API без знания формата хранения."""
+"""Сервис создаёт сессии и предоставляет их API без знания формата хранения.
+
+Сессия проекта берёт рабочую папку и инструменты из проекта: сервис всегда отдаёт её
+уже с этими значениями, поэтому runtime и инструменты о проектах не знают.
+"""
 
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from local_agent.projects.models import Project
 from local_agent.sessions.models import Session
 from local_agent.sessions.repository import SessionRepository
+from local_agent.storage.json.projects import JsonProjectRepository
 
 
 class InvalidWorkspaceError(ValueError):
     """Рабочая папка сессии не существует или указана относительным путём."""
 
 
+def validate_workspace(workspace: str) -> str:
+    path = Path(workspace).expanduser()
+    if not path.is_absolute() or not path.is_dir():
+        raise InvalidWorkspaceError("Рабочая папка должна быть существующей папкой с абсолютным путём")
+    return str(path.resolve())
+
+
 class SessionService:
     def __init__(
         self,
         repository: SessionRepository,
+        *,
+        projects: JsonProjectRepository | None = None,
         on_deleted: Iterable[Callable[[str], None]] = (),
     ) -> None:
         self._repository = repository
+        self._projects = projects
         # Кто хранит данные сессии отдельно (история, checkpoint памяти), чистит их при удалении.
         self._on_deleted = list(on_deleted)
 
@@ -31,8 +47,10 @@ class SessionService:
         model: str,
         provider: str,
         workspace: str | None,
+        project_id: str | None = None,
     ) -> Session:
-        workspace = self._validate_workspace(workspace)
+        # У сессии проекта своей папки нет: её задаёт проект.
+        workspace = None if project_id else self._validate_workspace(workspace)
         now = datetime.now(UTC)
         session = Session(
             id=uuid4().hex,
@@ -43,11 +61,12 @@ class SessionService:
             model=model,
             provider=provider,
             workspace=workspace,
+            project_id=project_id,
         )
-        return self._repository.save(session)
+        return self._effective(self._repository.save(session))
 
     def get(self, session_id: str) -> Session | None:
-        return self._repository.get(session_id)
+        return self._effective(self._repository.get(session_id))
 
     def configure(
         self,
@@ -61,30 +80,34 @@ class SessionService:
         session = self._repository.get(session_id)
         if session is None:
             return None
-        workspace = self._validate_workspace(workspace)
+        project = self._project(session)
         updates: dict[str, object] = {
             "provider": provider,
             "model": model,
-            "workspace": workspace,
             "updated_at": datetime.now(UTC),
         }
+        # Папку сессии проекта меняют в настройках проекта, а не в сессии.
+        if project is None:
+            updates["workspace"] = self._validate_workspace(workspace)
         if (provider, model) != (session.provider, session.model):
             updates["context_tokens"] = None
         if agent_id is not None:
             updates["agent_id"] = agent_id
-        return self._repository.patch(session_id, updates)
+        updated = self._repository.patch(session_id, updates)
+        if project is not None and updated is not None:
+            # Следующая новая сессия проекта начнёт с того же агента и модели.
+            self._projects.patch(project.id, {
+                "agent_id": updated.agent_id, "provider": provider, "model": model,
+                "updated_at": datetime.now(UTC),
+            })
+        return self._effective(updated)
 
     @staticmethod
     def _validate_workspace(workspace: str | None) -> str | None:
-        if not workspace:
-            return None
-        path = Path(workspace).expanduser()
-        if not path.is_absolute() or not path.is_dir():
-            raise InvalidWorkspaceError("Рабочая папка должна быть существующей папкой с абсолютным путём")
-        return str(path.resolve())
+        return validate_workspace(workspace) if workspace else None
 
     def set_tool_enabled(self, session_id: str, tool_id: str, enabled: bool) -> Session | None:
-        session = self._repository.get(session_id)
+        session = self.get(session_id)
         if session is None:
             return None
         tools = set(session.enabled_tools)
@@ -92,7 +115,30 @@ class SessionService:
             tools.add(tool_id)
         else:
             tools.discard(tool_id)
+        # В проекте переключатель общий для всех его сессий.
+        if project := self._project(session):
+            self._projects.patch(project.id, {"enabled_tools": sorted(tools)})
+            return self.get(session_id)
         return self._repository.patch(session_id, {"enabled_tools": sorted(tools)})
+
+    def assign_project(self, session_id: str, project_id: str | None) -> Session | None:
+        """Своя папка сессии сбрасывается в обе стороны: в проекте её задаёт проект, а без
+        проекта доступ к файлам нужно выдать заново, а не унаследовать молча."""
+        return self._effective(
+            self._repository.patch(session_id, {"project_id": project_id, "workspace": None})
+        )
+
+    def _project(self, session: Session) -> Project | None:
+        if not session.project_id or self._projects is None:
+            return None
+        return self._projects.get(session.project_id)
+
+    def _effective(self, session: Session | None) -> Session | None:
+        if session is None or (project := self._project(session)) is None:
+            return session
+        return session.model_copy(
+            update={"workspace": project.workspace, "enabled_tools": list(project.enabled_tools)}
+        )
 
     def set_summary(self, session_id: str, summary: str, until_message_id: str) -> None:
         self._repository.patch(
@@ -100,7 +146,7 @@ class SessionService:
         )
 
     def rename(self, session_id: str, title: str) -> Session | None:
-        return self._repository.rename(session_id, title, only_if_default=False)
+        return self._effective(self._repository.rename(session_id, title, only_if_default=False))
 
     def delete(self, session_id: str) -> bool:
         deleted = self._repository.delete(session_id)
@@ -126,4 +172,4 @@ class SessionService:
         return self._repository.rename(session_id, title, only_if_default=True)
 
     def list(self) -> list[Session]:
-        return self._repository.list()
+        return [self._effective(session) for session in self._repository.list()]

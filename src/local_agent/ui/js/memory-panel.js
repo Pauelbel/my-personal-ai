@@ -14,6 +14,7 @@ export async function showMemory() {
   state.showingSettings = false;
   state.showingMemory = true;
   state.showingPrompt = false;
+  state.showingSkills = false;
   state.editingTitle = false;
   render();
   try {

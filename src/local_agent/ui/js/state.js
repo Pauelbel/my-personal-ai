@@ -37,6 +37,15 @@ export const elements = {
   promptContent: $("#prompt-content"),
   promptSave: $("#save-prompt"),
   promptStatus: $("#prompt-status"),
+  skillsButton: $("#show-skills"),
+  skillsPanel: $("#skills-panel"),
+  skillsList: $("#skills-list"),
+  skillsEmpty: $("#skills-empty"),
+  skillsStatus: $("#skills-status"),
+  skillTitle: $("#skill-title"),
+  skillDescription: $("#skill-description"),
+  skillContent: $("#skill-content"),
+  skillSave: $("#save-skill"),
   emptyState: $("#empty-state"),
   detail: $("#session-detail"),
   editTitle: $("#edit-title"),
@@ -47,6 +56,28 @@ export const elements = {
   model: $("#session-model"),
   modelOptions: $("#available-models"),
   workspace: $("#session-workspace"),
+  workspaceLabel: $("#workspace-label"),
+  newProjectButton: $("#new-project"),
+  projectDialog: $("#project-dialog"),
+  projectForm: $("#project-form"),
+  projectDialogTitle: $("#project-dialog-title"),
+  projectName: $("#project-name"),
+  projectFolder: $("#project-folder"),
+  projectChooseFolder: $("#project-choose-folder"),
+  projectError: $("#project-error"),
+  projectDelete: $("#project-delete"),
+  projectCancel: $("#project-cancel"),
+  projectClose: $("#project-close"),
+  projectSave: $("#project-save"),
+  folderDialog: $("#folder-dialog"),
+  folderPathForm: $("#folder-path-form"),
+  folderPath: $("#folder-path"),
+  folderUp: $("#folder-up"),
+  folderList: $("#folder-list"),
+  folderError: $("#folder-error"),
+  folderSelect: $("#folder-select"),
+  folderCancel: $("#folder-cancel"),
+  folderClose: $("#folder-close"),
   messageList: $("#message-list"),
   messageForm: $("#message-form"),
   messageInput: $("#message-input"),
@@ -55,6 +86,9 @@ export const elements = {
 
 export const state = {
   sessions: [],
+  projects: [],
+  // Свёрнутые в сайдбаре проекты; запоминаются в этом браузере.
+  collapsedProjects: loadCollapsed(),
   messages: [],
   messagesSessionId: null,
   preferredModel: "",
@@ -62,6 +96,7 @@ export const state = {
   showingSettings: false,
   showingMemory: false,
   showingPrompt: false,
+  showingSkills: false,
   editingTitle: false,
   actionsDisabled: false,
   sessionFilter: "",
@@ -70,6 +105,30 @@ export const state = {
   // Растёт при каждой замене списка сообщений: чат перерисовывается только тогда, а не на каждый токен.
   messagesVersion: 0,
 };
+
+function loadCollapsed() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem("collapsed-projects") || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+export function toggleProject(projectId) {
+  if (state.collapsedProjects.has(projectId)) state.collapsedProjects.delete(projectId);
+  else state.collapsedProjects.add(projectId);
+  try {
+    localStorage.setItem("collapsed-projects", JSON.stringify([...state.collapsedProjects]));
+  } catch {
+    // Без хранилища сворачивание просто не запомнится.
+  }
+  render();
+}
+
+export function selectedProject() {
+  const session = selectedSession();
+  return session?.project_id ? state.projects.find((project) => project.id === session.project_id) : undefined;
+}
 
 export function setMessages(messages, sessionId = state.messagesSessionId) {
   state.messages = messages;

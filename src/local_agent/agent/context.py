@@ -2,11 +2,19 @@
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 
+from local_agent.agent.models import Skill
 from local_agent.llm.models import ChatMessage, ToolCall
 from local_agent.memory.models import Message
 
+WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
+MONTHS = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
 MESSAGE_OVERHEAD_TOKENS = 4
 # Результаты инструментов из прошлых ходов обрезаются: целиком нужен только текущий ход.
 OLD_TOOL_RESULT_CHARS = 2000
@@ -29,12 +37,31 @@ class Context:
     included_count: int
 
 
-def build_system_prompt(system_prompt: str, memory_context: str = "", summary: str = "") -> str:
+def build_system_prompt(
+    system_prompt: str,
+    memory_context: str = "",
+    summary: str = "",
+    *,
+    today: date | None = None,
+    skills: Sequence[Skill] = (),
+) -> str:
+    # Части идут от редко меняющихся к частым: LM Studio переиспользует кэш общего начала промпта.
+    if skills:
+        system_prompt += (
+            "\n\nНавыки — готовые инструкции для типовых задач. Если просьба пользователя подходит "
+            "под навык из списка, твоим первым действием должен быть вызов use_skill с id навыка — "
+            "до любых других инструментов и до ответа. Затем выполняй задачу строго по его инструкциям.\n"
+            "Навыки:\n"
+            + "\n".join(f"- {skill.id}: {skill.description}" for skill in skills)
+        )
     if memory_context:
         system_prompt += (
             "\n\nДолговременная память пользователя. Используй её как контекст, "
             "но более новые слова пользователя имеют приоритет:\n" + memory_context
         )
+    if today:
+        # Только дата: время до минуты меняло бы промпт на каждом ходе и сбрасывало кэш.
+        system_prompt += f"\n\nСегодня {WEEKDAYS[today.weekday()]}, {today.day} {MONTHS[today.month - 1]} {today.year} года."
     if summary:
         system_prompt += "\n\nКраткое содержание более ранней части этого разговора:\n" + summary
     return system_prompt

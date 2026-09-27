@@ -15,7 +15,9 @@ class Session(BaseModel):
     agent_id: str
     model: str
     provider: str
+    # Своя папка — только у сессии без проекта; у сессии проекта её задаёт проект.
     workspace: str | None
+    project_id: str | None = None
     context_tokens: int | None = None
     # Инструменты включаются для каждой сессии отдельно; новая сессия начинает без доступа к файлам.
     enabled_tools: list[str] = Field(default_factory=list)
