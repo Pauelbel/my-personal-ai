@@ -15,7 +15,7 @@ class _Operation(BaseModel):
     @classmethod
     def unique_sources(cls, value: list[str]) -> list[str]:
         if any(not item.strip() for item in value) or len(value) != len(set(value)):
-            raise ValueError("source_message_ids must be non-empty and unique")
+            raise ValueError("source_message_ids должны быть непустыми и уникальными")
         return value
 
 
@@ -28,7 +28,7 @@ class AddOperation(_Operation):
     @classmethod
     def single_line(cls, value: str) -> str:
         if "\n" in value or "\r" in value:
-            raise ValueError("memory entries and section names must use one line")
+            raise ValueError("запись памяти и название раздела должны занимать одну строку")
         return value
 
 
@@ -41,7 +41,7 @@ class UpdateOperation(_Operation):
     @classmethod
     def single_line(cls, value: str) -> str:
         if "\n" in value or "\r" in value:
-            raise ValueError("memory entries must use one line")
+            raise ValueError("запись памяти должна занимать одну строку")
         return value
 
 

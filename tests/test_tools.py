@@ -1,15 +1,12 @@
 """Проверки подтверждают общие разрешения и границы файловых инструментов."""
 
 import asyncio
-import sqlite3
 
 from fastapi.testclient import TestClient
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
 from local_agent.llm.models import ChatResult, ToolCall
-from local_agent.storage.database import SQLiteDatabase
-from local_agent.storage.sqlite.tool_settings import SQLiteToolSettings
 from local_agent.tools.filesystem import ListFilesTool, ReadFileTool
 
 
@@ -19,7 +16,7 @@ class ToolCallingProvider:
 
     async def chat(self, model, messages, tools=None):
         self.calls.append((messages, tools))
-        if tools:
+        if tools and messages[-1].role != "tool":
             return ChatResult(
                 content=None,
                 tool_calls=(ToolCall("call-1", "read_file", '{"path":"note.txt"}'),),
@@ -33,69 +30,30 @@ class ToolCallingProvider:
         pass
 
 
-def test_global_tools_persist(tmp_path):
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
+def test_session_tools_persist(tmp_path):
+    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
     with TestClient(create_app(settings)) as client:
-        client.post("/api/sessions", json={})
-        tools = client.get("/api/tools").json()
+        session = client.post("/api/sessions", json={}).json()
+        other = client.post("/api/sessions", json={}).json()
+        tools = client.get(f"/api/sessions/{session['id']}/tools").json()
         assert [tool["id"] for tool in tools] == [
-            "list_files", "read_file"
+            "list_files", "read_file", "search_files", "write_file"
         ]
         assert not any(tool["enabled"] for tool in tools)
         updated = client.put(
-            "/api/tools/read_file",
+            f"/api/sessions/{session['id']}/tools/read_file",
             json={"enabled": True},
         )
         assert updated.status_code == 200
         assert updated.json()["enabled"] is True
         assert client.put(
-            "/api/tools/unknown", json={"enabled": True}
+            f"/api/sessions/{session['id']}/tools/unknown", json={"enabled": True}
         ).status_code == 404
     with TestClient(create_app(settings)) as client:
-        tools = client.get("/api/tools").json()
-        assert [tool["enabled"] for tool in tools] == [False, True]
-        assert client.post("/api/sessions", json={}).status_code == 201
-
-
-def test_existing_database_migrates_to_json_settings(tmp_path):
-    database_path = tmp_path / "old.sqlite3"
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            "CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, agent_id TEXT NOT NULL, model TEXT NOT NULL, provider TEXT NOT NULL, workspace TEXT)"
-        )
-        connection.execute(
-            "INSERT INTO sessions VALUES ('old', 'Old', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 'default', '', 'lm_studio', NULL)"
-        )
-    settings = Settings(database_path=database_path, sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
-    with TestClient(create_app(settings)) as client:
-        response = client.get("/api/sessions/old")
-        assert response.status_code == 200
-        assert response.json()["context_tokens"] is None
-        assert client.get("/api/tools").status_code == 200
-        assert client.put("/api/tools/list_files", json={"enabled": True}).status_code == 200
-    assert settings.tool_settings_path.exists()
-    assert (settings.sessions_path / "old.json").exists()
-
-
-def test_enabled_tools_migrate_from_sqlite(tmp_path):
-    database_path = tmp_path / "agent.sqlite3"
-    database = SQLiteDatabase(database_path)
-    database.initialize()
-    SQLiteToolSettings(database).set_enabled("read_file", True)
-    settings = Settings(
-        database_path=database_path,
-        sessions_path=tmp_path / "sessions",
-        conversations_path=tmp_path / "conversations",
-        tool_settings_path=tmp_path / "settings" / "tools.json",
-        memory_path=tmp_path / "memory",
-        _env_file=None,
-    )
-
-    with TestClient(create_app(settings)) as client:
-        tools = client.get("/api/tools").json()
-
-    assert [tool["enabled"] for tool in tools] == [False, True]
-    assert settings.tool_settings_path.exists()
+        tools = client.get(f"/api/sessions/{session['id']}/tools").json()
+        assert [tool["enabled"] for tool in tools] == [False, True, False, False]
+        other_tools = client.get(f"/api/sessions/{other['id']}/tools").json()
+        assert not any(tool["enabled"] for tool in other_tools)
 
 
 def test_file_tools_stay_inside_workspace(tmp_path):
@@ -120,7 +78,7 @@ def test_model_only_receives_enabled_tools_and_result(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "note.txt").write_text("Содержимое", encoding="utf-8")
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
     provider = ToolCallingProvider()
     with TestClient(create_app(settings, llm_provider=provider)) as client:
         session = client.post(
@@ -130,7 +88,7 @@ def test_model_only_receives_enabled_tools_and_result(tmp_path):
         first = client.post(f"/api/sessions/{session['id']}/turns", json={"content": "Привет"})
         assert first.status_code == 200
         assert provider.calls[0][1] is None
-        client.put("/api/tools/read_file", json={"enabled": True})
+        client.put(f"/api/sessions/{session['id']}/tools/read_file", json={"enabled": True})
         second = client.post(f"/api/sessions/{session['id']}/turns", json={"content": "Прочитай файл"})
         assert second.status_code == 200
         assert second.json()["content"] == "Файл прочитан"
@@ -143,7 +101,7 @@ def test_model_only_receives_enabled_tools_and_result(tmp_path):
             f"/api/sessions/{no_workspace['id']}/turns", json={"content": "Прочитай файл"}
         ).status_code == 200
         assert provider.calls[3][1] is None
-        client.put("/api/tools/read_file", json={"enabled": False})
+        client.put(f"/api/sessions/{session['id']}/tools/read_file", json={"enabled": False})
         assert client.post(
             f"/api/sessions/{session['id']}/turns", json={"content": "Прочитай ещё раз"}
         ).status_code == 200

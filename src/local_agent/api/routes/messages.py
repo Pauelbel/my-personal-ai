@@ -25,7 +25,7 @@ def get_conversation_service(request: Request) -> ConversationService:
 
 def require_session(session_id: str, service: SessionService) -> None:
     if service.get(session_id) is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
 
 
 @router.get("", response_model=list[Message])

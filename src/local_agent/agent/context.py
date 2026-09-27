@@ -1,22 +1,115 @@
-"""Сборщик контекста ограничивает историю, передаваемую модели за один вызов."""
+"""Сборщик контекста укладывает историю в окно модели по бюджету токенов."""
 
-from local_agent.llm.models import ChatMessage
+import json
+import math
+from dataclasses import dataclass
+
+from local_agent.llm.models import ChatMessage, ToolCall
 from local_agent.memory.models import Message
 
+MESSAGE_OVERHEAD_TOKENS = 4
+# Результаты инструментов из прошлых ходов обрезаются: целиком нужен только текущий ход.
+OLD_TOOL_RESULT_CHARS = 2000
 
-def build_context(
-    system_prompt: str,
-    history: list[Message],
-    max_messages: int,
-    memory_context: str = "",
-) -> list[ChatMessage]:
-    recent = history[-max_messages:]
+
+def estimate_tokens(text: str | None) -> int:
+    """Грубая оценка: около 4 байт UTF-8 на токен, так же считает UI."""
+    return math.ceil(len((text or "").encode("utf-8")) / 4)
+
+
+def estimate_message_tokens(message: ChatMessage) -> int:
+    calls = sum(estimate_tokens(call.name + call.arguments) for call in message.tool_calls)
+    return MESSAGE_OVERHEAD_TOKENS + estimate_tokens(message.content) + calls
+
+
+@dataclass(frozen=True)
+class Context:
+    messages: list[ChatMessage]
+    # Сколько сообщений из конца истории попало в окно; всё, что раньше, покрывает резюме.
+    included_count: int
+
+
+def build_system_prompt(system_prompt: str, memory_context: str = "", summary: str = "") -> str:
     if memory_context:
         system_prompt += (
             "\n\nДолговременная память пользователя. Используй её как контекст, "
             "но более новые слова пользователя имеют приоритет:\n" + memory_context
         )
-    return [ChatMessage(role="system", content=system_prompt)] + [
-        ChatMessage(role=message.role, content=message.content)
-        for message in recent
-    ]
+    if summary:
+        system_prompt += "\n\nКраткое содержание более ранней части этого разговора:\n" + summary
+    return system_prompt
+
+
+def build_context(
+    system_prompt: str,
+    history: list[Message],
+    *,
+    max_messages: int,
+    max_tokens: int,
+    tools: list[dict[str, object]] | None = None,
+) -> Context:
+    groups = _groups(history)
+    budget = (
+        max_tokens
+        - MESSAGE_OVERHEAD_TOKENS
+        - estimate_tokens(system_prompt)
+        - estimate_tokens(json.dumps(tools, ensure_ascii=False) if tools else "")
+    )
+    last_user = max((index for index, group in enumerate(groups) if group[0].role == "user"), default=-1)
+
+    selected: list[list[ChatMessage]] = []
+    included = 0
+    dialogue = 0
+    for index in range(len(groups) - 1, -1, -1):
+        group = groups[index]
+        messages = _to_chat(group, truncate_tools=index < last_user)
+        cost = sum(estimate_message_tokens(message) for message in messages)
+        turns = sum(1 for message in group if message.role != "tool")
+        # Последнюю группу берём всегда: без неё модели нечего отвечать.
+        if selected and (cost > budget or dialogue + turns > max_messages):
+            break
+        selected.append(messages)
+        budget -= cost
+        dialogue += turns
+        included += len(group)
+
+    context = [ChatMessage(role="system", content=system_prompt)]
+    for messages in reversed(selected):
+        for message in messages:
+            previous = context[-1]
+            # После неудачного хода в истории остаётся user без ответа: склеиваем, чтобы роли чередовались.
+            if message.role == "user" and previous.role == "user":
+                context[-1] = ChatMessage(role="user", content=f"{previous.content}\n\n{message.content}")
+            else:
+                context.append(message)
+    return Context(messages=context, included_count=included)
+
+
+def _groups(history: list[Message]) -> list[list[Message]]:
+    """Assistant с вызовами инструментов и их результаты нельзя разрывать при обрезке."""
+    groups: list[list[Message]] = []
+    for message in history:
+        if message.role == "tool":
+            if groups and groups[-1][0].tool_calls:
+                groups[-1].append(message)
+            # Результат без своего вызова (обрезан окном) модели не нужен.
+            continue
+        groups.append([message])
+    return groups
+
+
+def _to_chat(group: list[Message], *, truncate_tools: bool) -> list[ChatMessage]:
+    head = group[0]
+    if not head.tool_calls:
+        return [ChatMessage(role=head.role, content=head.content)]
+    calls = tuple(ToolCall(id=call.id, name=call.name, arguments=call.arguments) for call in head.tool_calls)
+    results = {message.tool_call_id: message for message in group[1:]}
+    messages = [ChatMessage(role="assistant", content=head.content or None, tool_calls=calls)]
+    for call in calls:
+        result = results.get(call.id)
+        # Ход могли прервать посреди раунда: у каждого вызова всё равно должен быть ответ.
+        content = result.content if result else "Вызов инструмента был прерван"
+        if truncate_tools and len(content) > OLD_TOOL_RESULT_CHARS:
+            content = content[:OLD_TOOL_RESULT_CHARS] + "\n… (обрезано)"
+        messages.append(ChatMessage(role="tool", content=content, tool_call_id=call.id))
+    return messages

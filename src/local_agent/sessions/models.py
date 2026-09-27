@@ -1,10 +1,10 @@
-"""Модель сессии хранит настройки разговора независимо от HTTP и SQLite."""
+"""Модель сессии хранит настройки разговора независимо от HTTP и формата хранения."""
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-DEFAULT_SESSION_TITLE = "New Session"
+DEFAULT_SESSION_TITLE = "Новая сессия"
 
 
 class Session(BaseModel):
@@ -17,3 +17,8 @@ class Session(BaseModel):
     provider: str
     workspace: str | None
     context_tokens: int | None = None
+    # Инструменты включаются для каждой сессии отдельно; новая сессия начинает без доступа к файлам.
+    enabled_tools: list[str] = Field(default_factory=list)
+    # Резюме сообщений, которые уже не помещаются в окно модели, и последнее из них.
+    summary: str = ""
+    summary_until_message_id: str | None = None

@@ -1,4 +1,4 @@
-"""Реестр находит инструменты по ID и ограничивает набор разрешённым списком агента."""
+"""Реестр находит инструменты по ID."""
 
 from collections.abc import Iterable
 
@@ -13,7 +13,7 @@ class ToolRegistry:
 
     def register(self, tool: Tool) -> None:
         if tool.id in self._tools:
-            raise ValueError(f"Tool already registered: {tool.id}")
+            raise ValueError(f"Инструмент уже зарегистрирован: {tool.id}")
         self._tools[tool.id] = tool
 
     def get(self, tool_id: str) -> Tool | None:
@@ -21,6 +21,3 @@ class ToolRegistry:
 
     def all(self) -> list[Tool]:
         return list(self._tools.values())
-
-    def resolve(self, allowed_ids: Iterable[str]) -> list[Tool]:
-        return [self._tools[tool_id] for tool_id in allowed_ids]

@@ -16,10 +16,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10"]
+dev = ["pytest>=8,<10", "ruff>=0.6"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/local_agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Ошибки, порядок импортов, типичные баги и устаревший синтаксис; длину строк не проверяем.
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+ignore = ["B008"]

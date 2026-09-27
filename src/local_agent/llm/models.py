@@ -20,6 +20,13 @@ class ChatMessage:
 
 
 @dataclass(frozen=True)
+class ReasoningDelta:
+    """Кусок рассуждений, которые thinking-модель пишет до ответа."""
+
+    text: str
+
+
+@dataclass(frozen=True)
 class ChatResult:
     content: str | None
     input_tokens: int | None = None

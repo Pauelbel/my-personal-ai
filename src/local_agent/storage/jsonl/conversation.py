@@ -8,7 +8,6 @@ import re
 from collections import deque
 from pathlib import Path
 from threading import RLock
-from uuid import uuid4
 
 from local_agent.memory.models import Message
 
@@ -31,7 +30,7 @@ class JsonlConversationStore:
             self.initialize()
             self._ensure_index(message.session_id)
             if message.id in self._end_offsets[message.session_id]:
-                raise ValueError("Message already exists")
+                raise ValueError("Сообщение уже существует")
             with path.open("ab") as stream:
                 stream.write(payload)
                 stream.flush()
@@ -70,7 +69,7 @@ class JsonlConversationStore:
             self._ensure_index(session_id)
             end_offset = self._end_offsets[session_id].get(message_id)
             if end_offset is None:
-                raise ValueError("Memory checkpoint message was not found")
+                raise ValueError("Сообщение из checkpoint памяти не найдено")
             with path.open("rb") as stream:
                 stream.seek(end_offset)
                 return [self._parse(line) for line in stream if line.strip()]
@@ -80,25 +79,6 @@ class JsonlConversationStore:
         with self._lock:
             path.unlink(missing_ok=True)
             self._end_offsets.pop(session_id, None)
-
-    def replace(self, session_id: str, messages: list[Message]) -> None:
-        if any(message.session_id != session_id for message in messages):
-            raise ValueError("All messages must belong to the target session")
-        path = self._path(session_id)
-        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-        with self._lock:
-            self.initialize()
-            try:
-                with temporary.open("wb") as stream:
-                    for message in messages:
-                        stream.write(self._serialize(message))
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary, path)
-                self._end_offsets.pop(session_id, None)
-                self._ensure_index(session_id)
-            finally:
-                temporary.unlink(missing_ok=True)
 
     def _ensure_index(self, session_id: str) -> None:
         if session_id in self._end_offsets:
@@ -112,13 +92,13 @@ class JsonlConversationStore:
                         continue
                     message = self._parse(line)
                     if message.id in offsets:
-                        raise ValueError("Duplicate message id in conversation archive")
+                        raise ValueError("В архиве диалога повторяется ID сообщения")
                     offsets[message.id] = stream.tell()
         self._end_offsets[session_id] = offsets
 
     def _path(self, session_id: str) -> Path:
         if not SAFE_SESSION_ID.fullmatch(session_id):
-            raise ValueError("Invalid session id")
+            raise ValueError("Недопустимый ID сессии")
         return self.root / f"{session_id}.jsonl"
 
     @staticmethod
@@ -130,6 +110,13 @@ class JsonlConversationStore:
             "content": message.content,
             "timestamp": message.created_at.isoformat(),
         }
+        if message.tool_calls:
+            data["tool_calls"] = [call.model_dump() for call in message.tool_calls]
+        if message.tool_call_id:
+            data["tool_call_id"] = message.tool_call_id
+            data["tool_name"] = message.tool_name
+        if message.is_error:
+            data["is_error"] = True
         return (json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
     @staticmethod

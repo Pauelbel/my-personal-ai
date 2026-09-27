@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from collections.abc import Callable
+from datetime import UTC, datetime
 from uuid import uuid4
 
+from local_agent.llm.models import ToolCall
 from local_agent.memory.base import ConversationStore
-from local_agent.memory.models import Message
+from local_agent.memory.models import Message, StoredToolCall
 
 
 class ConversationService:
@@ -20,18 +21,39 @@ class ConversationService:
         self._on_saved = on_saved
 
     def add_user_message(self, session_id: str, content: str) -> Message:
-        return self._add_message(session_id, "user", content)
+        return self._add(session_id, role="user", content=content)
 
-    def add_assistant_message(self, session_id: str, content: str) -> Message:
-        return self._add_message(session_id, "assistant", content)
+    def add_assistant_message(
+        self, session_id: str, content: str, tool_calls: tuple[ToolCall, ...] = ()
+    ) -> Message:
+        return self._add(
+            session_id,
+            role="assistant",
+            content=content,
+            tool_calls=[
+                StoredToolCall(id=call.id, name=call.name, arguments=call.arguments)
+                for call in tool_calls
+            ],
+        )
 
-    def _add_message(self, session_id: str, role: str, content: str) -> Message:
+    def add_tool_message(
+        self, session_id: str, *, call_id: str, name: str, content: str, is_error: bool
+    ) -> Message:
+        return self._add(
+            session_id,
+            role="tool",
+            content=content,
+            tool_call_id=call_id,
+            tool_name=name,
+            is_error=is_error,
+        )
+
+    def _add(self, session_id: str, **fields) -> Message:
         message = Message(
             id=uuid4().hex,
             session_id=session_id,
-            role=role,
-            content=content,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            **fields,
         )
         saved = self._store.save(message)
         if self._on_saved is not None:

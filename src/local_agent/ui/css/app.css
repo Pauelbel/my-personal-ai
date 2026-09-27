@@ -102,6 +102,7 @@ p { color: #9da7b6; line-height: 1.6; }
 .memory-document-description { min-height: 2.8em; margin: -2px 0 2px; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .memory-editor textarea { width: 100%; min-height: 430px; padding: 14px; resize: vertical; border: 1px solid var(--line); border-radius: 9px; background: #111823; color: #e6eaf1; font: 14px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .memory-editor .primary-button { justify-self: end; }
+.prompt-workspace.single { grid-template-columns: minmax(0, 1fr); }
 .notice { max-width: 850px; margin: 20px auto -20px; padding: 11px 14px; border: 1px solid #a66565; border-radius: 8px; background: #382329; color: #f2cbcb; font-size: 13px; }
 .conversation { margin-top: 34px; padding-top: 25px; border-top: 1px solid #303744; }
 .conversation h3 { margin: 0 0 18px; font-size: 16px; font-weight: 600; }
@@ -170,3 +171,36 @@ p { color: #9da7b6; line-height: 1.6; }
   .memory-workspace { grid-template-columns: 1fr; }
   .memory-editor textarea { min-height: 300px; }
 }
+
+/* Поиск сессий, вызовы инструментов, потоковый ответ и подтверждения. Цвета берутся из токенов темы. */
+.session-search { width: 100%; margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; font: inherit; font-size: 13px; }
+.session-search::placeholder { color: var(--muted); }
+.tool-call { margin-top: 8px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, currentColor 4%, transparent); font-size: 12px; }
+.tool-call summary { padding: 6px 10px; color: var(--muted); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-call.failed summary { color: #d98b8b; }
+.message-content .tool-call pre { max-height: 260px; margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; overflow: auto; white-space: pre-wrap; }
+.message.streaming .message-content:empty { display: none; }
+.message-status { display: block; margin: 0; padding: 0; border: 0; background: none; color: var(--muted); font-size: 12px; text-align: left; }
+.message-status:hover { color: inherit; }
+.message-status::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.message-status.idle::before { background: var(--line); animation: none; }
+.message-status::after { content: " ▸"; }
+.message-status[aria-expanded="true"]::after { content: " ▾"; }
+.message.streaming .message-content:not(:empty) { margin-top: 8px; }
+.thinking-log { max-height: 220px; margin-top: 8px; padding: 8px 10px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, currentColor 4%, transparent); color: var(--muted); font: 12px/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+.log-line + .log-line, .log-reasoning + .log-line, .log-line + .log-reasoning { margin-top: 3px; }
+.log-time { display: inline-block; min-width: 6ch; margin-right: 8px; opacity: .6; }
+.log-reasoning { padding-left: 8px; border-left: 2px solid var(--accent); font-style: italic; white-space: pre-wrap; }
+@keyframes pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .message-status::before { animation: none; } }
+.approval-card { display: grid; gap: 10px; margin-top: 10px; padding: 12px; border: 1px solid var(--accent); border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: 13px; }
+.approval-card summary { color: var(--muted); cursor: pointer; }
+.approval-card pre { max-height: 240px; margin: 8px 0 0; padding: 10px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+.approval-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.approval-actions button { margin: 0; padding: 7px 14px; border-radius: 7px; }
+.message-content pre.has-copy { position: relative; padding-top: 30px; }
+.code-copy { position: absolute; top: 5px; right: 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); font: 11px/1.4 Inter, "Segoe UI", Arial, sans-serif; opacity: .75; }
+.code-copy:hover { opacity: 1; color: inherit; }
+.assistant-text > :first-child { margin-top: 0; }
+.assistant-text > :last-child { margin-bottom: 0; }
+.assistant-text + .assistant-text, .tool-call + .assistant-text { margin-top: 10px; }

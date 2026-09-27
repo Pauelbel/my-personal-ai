@@ -8,10 +8,9 @@ from local_agent.config.settings import Settings
 
 def test_ui_files_are_served(tmp_path) -> None:
     settings = Settings(
-        database_path=tmp_path / "agent.sqlite3",
+        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
-        tool_settings_path=tmp_path / "settings" / "tools.json",
         memory_path=tmp_path / "memory",
         _env_file=None,
     )
@@ -27,9 +26,10 @@ def test_ui_files_are_served(tmp_path) -> None:
         logo = client.get("/ui/assets/meepo-logo.png")
         sidebar_script = client.get("/ui/js/sidebar.js")
         memory_script = client.get("/ui/js/memory.js")
+        tools_script = client.get("/ui/js/tools-dialog.js")
 
     assert page.status_code == 200
-    assert "New Session" in page.text
+    assert "Новая сессия" in page.text
     assert 'class="brand"' not in page.text
     assert "Локальный агент</small>" not in page.text
     assert "Локальный режим" not in page.text
@@ -76,9 +76,9 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert "border-radius: 50%" in styles.text
     assert "box-shadow: inset 3px" not in theme_styles.text
     assert script.status_code == 200
-    assert "toolsApi.configure" in script.text
+    assert "toolsApi.configure" in tools_script.text
     assert "selected?.context_tokens" in script.text
-    assert "estimateTranscriptTokens(messages)" in script.text
+    assert "estimateTranscriptTokens(state.messages)" in script.text
     assert 'field.addEventListener("change"' in script.text
     assert 'addEventListener("blur", renameSession)' in script.text
     assert 'addEventListener("keydown", handleMessageKeydown)' in script.text

@@ -74,22 +74,39 @@ class MarkdownMemoryStore:
         self._atomic_write(path, content)
         return self.read(name)
 
-    def context(self, max_chars: int) -> str:
-        parts: list[str] = []
-        remaining = max_chars
+    def context(self, max_chars: int | None, *, strip_ids: bool = True) -> str:
+        """Собирает все файлы памяти; обрезает только целыми строками, чтобы записи не рвались."""
         documents = {document.name: document for document in self.list_documents()}
-        for name in DEFAULT_DOCUMENTS:
-            if remaining <= 0:
-                break
+        order = [name for name in DEFAULT_DOCUMENTS if name in documents]
+        order += [name for name in documents if name not in DEFAULT_DOCUMENTS]
+        lines: list[str] = []
+        used = 0
+        for name in order:
             document = documents[name]
-            chunk = f"## {document.title}\n{document.content.strip()}\n"
-            parts.append(chunk[:remaining])
-            remaining -= len(parts[-1])
-        return "\n".join(parts).strip()
+            body = [
+                line for line in document.content.strip().splitlines()
+                if not line.startswith("# ")
+            ]
+            if not any(line.strip() for line in body):
+                continue
+            if strip_ids:
+                body = [ENTRY.sub(r"- \2", line) for line in body]
+            for line in [f"# {document.title}", *body, ""]:
+                if max_chars is not None and used + len(line) + 1 > max_chars:
+                    return "\n".join(lines).strip()
+                lines.append(line)
+                used += len(line) + 1
+        return "\n".join(lines).strip()
 
     def checkpoint(self, session_id: str) -> str | None:
         checkpoint = self._read_state().sessions.get(session_id)
         return checkpoint.last_processed_message_id if checkpoint else None
+
+    def forget(self, session_id: str) -> None:
+        """Удаляет checkpoint удалённой сессии; сами записи памяти остаются."""
+        state = self._read_state()
+        if state.sessions.pop(session_id, None) is not None:
+            self._write_state(state)
 
     def apply(
         self,
@@ -114,7 +131,7 @@ class MarkdownMemoryStore:
             elif isinstance(operation, DeleteOperation):
                 updated = self._delete(original, operation.entry_id)
             else:  # pragma: no cover - the discriminated model prevents this branch
-                raise ValueError("Unsupported memory operation")
+                raise ValueError("Неподдерживаемая операция памяти")
             documents[operation.file] = updated
             if updated != original:
                 changed.add(operation.file)
@@ -126,11 +143,14 @@ class MarkdownMemoryStore:
         state.sessions[session_id] = SessionCheckpoint(
             last_processed_message_id=last_processed_message_id
         )
+        self._write_state(state)
+        return len(patch.operations)
+
+    def _write_state(self, state: MemoryState) -> None:
         self._atomic_write(
             self.state_path,
             json.dumps(state.model_dump(), ensure_ascii=False, indent=2) + "\n",
         )
-        return len(patch.operations)
 
     def _read_state(self) -> MemoryState:
         if not self.state_path.exists():
@@ -139,7 +159,7 @@ class MarkdownMemoryStore:
 
     def _path(self, name: str) -> Path:
         if not SAFE_NAME.fullmatch(name):
-            raise ValueError("Invalid memory document name")
+            raise ValueError("Недопустимое имя файла памяти")
         return self.root / name
 
     @staticmethod
@@ -176,7 +196,7 @@ class MarkdownMemoryStore:
         lines = text.splitlines()
         matches = [index for index, line in enumerate(lines) if (match := ENTRY.match(line)) and match.group(1) == entry_id]
         if len(matches) != 1:
-            raise ValueError(f"Memory entry {entry_id} was not found exactly once")
+            raise ValueError(f"Запись памяти {entry_id} должна встречаться ровно один раз")
         lines[matches[0]] = f"- <!-- memory:id={entry_id} --> {content}"
         return "\n".join(lines).rstrip() + "\n"
 
@@ -185,7 +205,7 @@ class MarkdownMemoryStore:
         lines = text.splitlines()
         matches = [index for index, line in enumerate(lines) if (match := ENTRY.match(line)) and match.group(1) == entry_id]
         if len(matches) != 1:
-            raise ValueError(f"Memory entry {entry_id} was not found exactly once")
+            raise ValueError(f"Запись памяти {entry_id} должна встречаться ровно один раз")
         del lines[matches[0]]
         return "\n".join(lines).rstrip() + "\n"
 

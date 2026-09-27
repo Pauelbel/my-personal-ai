@@ -7,18 +7,18 @@ from local_agent.config.settings import Settings
 
 
 def test_session_persists_after_app_restart(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
         created = client.post(
             "/api/sessions",
-            json={"title": "Первый проект", "workspace": "C:\\projects\\example"},
+            json={"title": "Первый проект", "workspace": str(tmp_path)},
         )
         assert created.status_code == 201
         session = created.json()
         assert session["title"] == "Первый проект"
         assert session["agent_id"] == "default"
-        assert session["workspace"] == "C:\\projects\\example"
+        assert session["workspace"] == str(tmp_path.resolve())
 
     with TestClient(create_app(settings)) as client:
         fetched = client.get(f"/api/sessions/{session['id']}")
@@ -30,11 +30,10 @@ def test_session_persists_after_app_restart(tmp_path) -> None:
     assert listed.status_code == 200
     assert listed.json() == [session]
     assert missing.status_code == 404
-    assert not settings.database_path.exists()
 
 
 def test_session_can_be_renamed(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
         session = client.post("/api/sessions", json={}).json()
@@ -57,7 +56,7 @@ def test_session_can_be_renamed(tmp_path) -> None:
 
 
 def test_deleting_session_removes_only_its_messages(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
         first = client.post("/api/sessions", json={}).json()

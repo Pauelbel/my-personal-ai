@@ -16,7 +16,7 @@ class MemoryProvider:
         self.invalid = invalid
         self.calls: list[tuple[str, list[ChatMessage]]] = []
 
-    async def chat(self, model: str, messages: list[ChatMessage]) -> ChatResult:
+    async def chat(self, model: str, messages: list[ChatMessage], **options) -> ChatResult:
         self.calls.append((model, messages))
         if self.invalid:
             return ChatResult(content="not json")
@@ -107,10 +107,9 @@ def test_markdown_operations_preserve_manual_entries(tmp_path) -> None:
 def test_update_memory_uses_only_new_messages_and_memory_model(tmp_path) -> None:
     provider = MemoryProvider()
     settings = Settings(
-        database_path=tmp_path / "agent.sqlite3",
+        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
-        tool_settings_path=tmp_path / "settings" / "tools.json",
         memory_path=tmp_path / "memory",
         memory_model="memory-model",
         _env_file=None,
@@ -143,10 +142,9 @@ def test_update_memory_uses_only_new_messages_and_memory_model(tmp_path) -> None
 def test_invalid_model_response_does_not_advance_checkpoint(tmp_path) -> None:
     provider = MemoryProvider(invalid=True)
     settings = Settings(
-        database_path=tmp_path / "agent.sqlite3",
+        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
-        tool_settings_path=tmp_path / "settings" / "tools.json",
         memory_path=tmp_path / "memory",
         _env_file=None,
     )
@@ -169,10 +167,9 @@ def test_invalid_model_response_does_not_advance_checkpoint(tmp_path) -> None:
 def test_update_requires_memory_or_session_model(tmp_path) -> None:
     provider = MemoryProvider()
     settings = Settings(
-        database_path=tmp_path / "agent.sqlite3",
+        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
-        tool_settings_path=tmp_path / "settings" / "tools.json",
         memory_path=tmp_path / "memory",
         _env_file=None,
     )

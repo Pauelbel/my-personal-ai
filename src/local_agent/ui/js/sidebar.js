@@ -1,14 +1,14 @@
 // Боковая панель показывает сессии и прямую кнопку удаления при наведении.
 
 export function renderSessions(
-  container, sessions, selectedId, onSelect, onDelete, actionsDisabled = false
+  container, sessions, selectedId, onSelect, onDelete, actionsDisabled = false, emptyText = "Пока нет сессий"
 ) {
   container.replaceChildren();
 
   if (sessions.length === 0) {
     const empty = document.createElement("p");
     empty.className = "sidebar-empty";
-    empty.textContent = "Пока нет сессий";
+    empty.textContent = emptyText;
     container.append(empty);
     return;
   }

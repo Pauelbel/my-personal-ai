@@ -1,8 +1,7 @@
 """Контракт хранилища отделяет операции с сессиями от конкретной базы данных."""
 
-from typing import Protocol
-
 from datetime import datetime
+from typing import Protocol
 
 from local_agent.sessions.models import Session
 
@@ -13,6 +12,8 @@ class SessionRepository(Protocol):
     def update(self, session: Session) -> Session: ...
 
     def rename(self, session_id: str, title: str, only_if_default: bool) -> Session | None: ...
+
+    def patch(self, session_id: str, updates: dict[str, object]) -> Session | None: ...
 
     def delete(self, session_id: str) -> bool: ...
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
@@ -27,7 +27,7 @@ class JsonSessionRepository:
         with self._lock:
             self.initialize()
             if path.exists():
-                raise ValueError("Session already exists")
+                raise ValueError("Сессия уже существует")
             self._write(path, session)
         return session
 
@@ -42,9 +42,17 @@ class JsonSessionRepository:
         path = self._path(session.id)
         with self._lock:
             if not path.exists():
-                raise ValueError("Session not found")
+                raise ValueError("Сессия не найдена")
             self._write(path, session)
         return session
+
+    def patch(self, session_id: str, updates: dict[str, object]) -> Session | None:
+        """Читает и перезаписывает сессию под одной блокировкой, чтобы параллельные правки не терялись."""
+        with self._lock:
+            session = self.get(session_id)
+            if session is None:
+                return None
+            return self.update(session.model_copy(update=updates))
 
     def rename(
         self, session_id: str, title: str, only_if_default: bool
@@ -57,7 +65,7 @@ class JsonSessionRepository:
                 return session
             return self.update(session.model_copy(update={
                 "title": title,
-                "updated_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(UTC),
             }))
 
     def delete(self, session_id: str) -> bool:
@@ -75,7 +83,7 @@ class JsonSessionRepository:
                 return
             self.update(session.model_copy(update={
                 "context_tokens": count,
-                "updated_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(UTC),
             }))
 
     def touch(self, session_id: str, updated_at: datetime) -> None:
@@ -95,22 +103,9 @@ class JsonSessionRepository:
             ]
         return sorted(sessions, key=lambda item: (item.updated_at, item.id), reverse=True)
 
-    def replace_all(self, sessions: list[Session]) -> None:
-        with self._lock:
-            self.initialize()
-            existing = self.list()
-            if existing and existing != sorted(
-                sessions, key=lambda item: (item.updated_at, item.id), reverse=True
-            ):
-                raise ValueError("JSON sessions differ from SQLite")
-            if existing:
-                return
-            for session in sessions:
-                self._write(self._path(session.id), session)
-
     def _path(self, session_id: str) -> Path:
         if not SAFE_SESSION_ID.fullmatch(session_id):
-            raise ValueError("Invalid session id")
+            raise ValueError("Недопустимый ID сессии")
         return self.root / f"{session_id}.json"
 
     @staticmethod

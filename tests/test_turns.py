@@ -4,8 +4,8 @@ from fastapi.testclient import TestClient
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
-from local_agent.llm.models import ChatMessage, ChatResult
 from local_agent.llm.base import LLMProviderUnavailable
+from local_agent.llm.models import ChatMessage, ChatResult
 
 
 class FakeProvider:
@@ -25,15 +25,14 @@ class FakeProvider:
 
 class FailingProvider(FakeProvider):
     async def chat(self, model: str, messages: list[ChatMessage]) -> ChatResult:
-        raise LLMProviderUnavailable("Cannot connect to LM Studio")
+        raise LLMProviderUnavailable("Не удалось подключиться к LM Studio")
 
 
 def test_turn_uses_recent_messages_and_persists_reply(tmp_path) -> None:
     settings = Settings(
-        database_path=tmp_path / "agent.sqlite3",
+        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
-        tool_settings_path=tmp_path / "settings" / "tools.json",
         memory_path=tmp_path / "memory",
         max_context_messages=2,
         _env_file=None,
@@ -58,8 +57,8 @@ def test_turn_uses_recent_messages_and_persists_reply(tmp_path) -> None:
 
     model, context = provider.calls[0]
     assert model == "test-model"
-    assert [message.role for message in context] == ["system", "user", "user"]
-    assert [message.content for message in context[1:]] == ["Предыдущее", "Новое"]
+    assert [message.role for message in context] == ["system", "user"]
+    assert context[1].content == "Предыдущее\n\nНовое"
 
     with TestClient(create_app(settings, llm_provider=FakeProvider())) as client:
         history = client.get(f"/api/sessions/{session['id']}/messages").json()
@@ -74,7 +73,7 @@ def test_turn_uses_recent_messages_and_persists_reply(tmp_path) -> None:
 
 
 def test_session_model_can_be_selected_after_creation(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
     provider = FakeProvider()
 
     with TestClient(create_app(settings, llm_provider=provider)) as client:
@@ -84,12 +83,12 @@ def test_session_model_can_be_selected_after_creation(tmp_path) -> None:
             json={
                 "provider": "lm_studio",
                 "model": "test-model",
-                "workspace": "C:\\projects\\example",
+                "workspace": str(tmp_path),
             },
         )
         assert configured.status_code == 200
         assert configured.json()["model"] == "test-model"
-        assert configured.json()["workspace"] == "C:\\projects\\example"
+        assert configured.json()["workspace"] == str(tmp_path.resolve())
         response = client.post(
             f"/api/sessions/{session['id']}/turns", json={"content": "Привет"}
         )
@@ -102,7 +101,7 @@ def test_session_model_can_be_selected_after_creation(tmp_path) -> None:
 
 
 def test_failed_model_call_keeps_user_message(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings, llm_provider=FailingProvider())) as client:
         session = client.post("/api/sessions", json={"model": "test-model"}).json()

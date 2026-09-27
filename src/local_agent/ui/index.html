@@ -19,21 +19,24 @@
         <div class="sidebar-tools">
           <button class="tools-button" id="show-tools" type="button">⚒ Инструменты</button>
           <button class="tools-button" id="show-memory" type="button">◇ Память</button>
+          <button class="tools-button" id="show-prompt" type="button">✎ Системный промпт</button>
         </div>
 
         <button class="new-session" id="new-session" type="button">
-          <span aria-hidden="true">＋</span> New Session
+          <span aria-hidden="true">＋</span> Новая сессия
         </button>
 
         <div class="sidebar-section-heading">
           <span>Сессии</span>
           <span id="session-count" aria-label="Количество сессий">0</span>
         </div>
+        <label class="visually-hidden" for="session-search">Поиск по сессиям</label>
+        <input class="session-search" id="session-search" type="search" placeholder="Найти сессию" autocomplete="off" />
         <nav class="session-list" id="session-list" aria-label="Сессии"></nav>
 
         <div class="sidebar-footer">
           <button class="settings-button" id="show-settings" type="button">
-            <span aria-hidden="true">⚙</span> Settings
+            <span aria-hidden="true">⚙</span> Настройки
           </button>
         </div>
       </aside>
@@ -46,7 +49,7 @@
             <input class="header-title-input" id="title-input" aria-label="Название сессии" maxlength="100" hidden />
           </h1>
           <span class="header-tokens" id="header-tokens" hidden>
-            <span class="header-token-value" id="last-tokens" title="Входные токены последнего запроса по данным LM Studio" aria-label="Последний запрос: нет данных">—</span>
+            <span class="header-token-value" id="last-tokens" title="Входные токены последнего запроса по данным сервера модели" aria-label="Последний запрос: нет данных">—</span>
             <span class="header-token-value" id="total-tokens" title="Приблизительное число токенов во всей сохранённой переписке; не размер текущего окна модели" aria-label="Вся переписка: нет данных">—</span>
           </span>
         </header>
@@ -70,11 +73,12 @@
                   <textarea id="message-input" rows="3" placeholder="Спросите о проекте или попросите внести изменения..." title="Enter — отправить, Ctrl+Enter — новая строка" required></textarea>
                 </form>
                 <div class="composer-config">
+                  <label class="config-field" id="agent-field" for="session-agent" hidden><span class="visually-hidden">Агент</span><select id="session-agent"><option value="default">Основной агент</option></select></label>
                   <label class="config-field" for="session-provider"><span class="visually-hidden">Провайдер</span><select id="session-provider"><option value="lm_studio">LM Studio</option></select></label>
                   <span class="config-divider" aria-hidden="true"></span>
                   <label class="config-field model-field" for="session-model"><span class="visually-hidden">Модель</span><input id="session-model" list="available-models" placeholder="Выберите модель" required /><datalist id="available-models"></datalist></label>
                   <span class="config-divider" aria-hidden="true"></span>
-                  <label class="config-field workspace-field" for="session-workspace"><span aria-hidden="true">⌂</span><span class="visually-hidden">Workspace</span><input id="session-workspace" placeholder="Рабочая папка не выбрана" /></label>
+                  <label class="config-field workspace-field" for="session-workspace"><span aria-hidden="true">⌂</span><span class="visually-hidden">Рабочая папка</span><input id="session-workspace" placeholder="Рабочая папка не выбрана" /></label>
                   <button class="composer-memory" id="update-memory-chat" type="button" title="Обработать новые сообщения этой сессии">Обновить память</button>
                   <button class="composer-send" id="save-message" type="submit" form="message-form" aria-label="Отправить сообщение" title="Отправить">↑</button>
                 </div>
@@ -85,7 +89,7 @@
 
         <section class="content-panel settings-panel" id="settings-panel" aria-labelledby="settings-title" hidden>
           <span class="section-label">ПРИЛОЖЕНИЕ</span>
-          <h2 id="settings-title">Settings</h2>
+          <h2 id="settings-title">Настройки</h2>
           <p>Выберите оформление, в котором удобно работать. Оно сохранится в этом браузере.</p>
           <fieldset class="theme-settings">
             <legend>Тема интерфейса</legend>
@@ -110,6 +114,25 @@
               <p class="memory-document-description" id="memory-document-description">Выберите категорию, чтобы увидеть её назначение.</p>
               <textarea id="memory-content" spellcheck="true" disabled></textarea>
               <button class="primary-button" id="save-memory" type="button" disabled>Сохранить</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="content-panel memory-panel" id="prompt-panel" aria-labelledby="prompt-title" hidden>
+          <div class="memory-header">
+            <div>
+              <span class="section-label" id="prompt-title">СИСТЕМНЫЙ ПРОМПТ</span>
+              <p>С этого текста начинается каждый запрос к модели. К нему автоматически добавляются долговременная память и краткое содержание разговора. Изменения действуют со следующего сообщения.</p>
+            </div>
+          </div>
+          <p class="memory-status" id="prompt-status" role="status"></p>
+          <div class="memory-workspace prompt-workspace">
+            <nav class="memory-files" id="prompt-agents" aria-label="Агенты"></nav>
+            <div class="memory-editor">
+              <label for="prompt-content" id="prompt-agent-title">Агент</label>
+              <p class="memory-document-description" id="prompt-agent-file"></p>
+              <textarea id="prompt-content" spellcheck="true" disabled></textarea>
+              <button class="primary-button" id="save-prompt" type="button" disabled>Сохранить</button>
             </div>
           </div>
         </section>
