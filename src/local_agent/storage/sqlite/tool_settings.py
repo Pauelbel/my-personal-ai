@@ -1,5 +1,7 @@
 """Хранилище сохраняет общие переключатели инструментов между запусками."""
 
+import sqlite3
+
 from local_agent.storage.database import SQLiteDatabase
 
 
@@ -8,10 +10,13 @@ class SQLiteToolSettings:
         self._database = database
 
     def enabled_ids(self) -> set[str]:
-        with self._database.connect() as connection:
-            rows = connection.execute(
-                "SELECT tool_id FROM tool_settings WHERE enabled = 1"
-            ).fetchall()
+        try:
+            with self._database.connect() as connection:
+                rows = connection.execute(
+                    "SELECT tool_id FROM tool_settings WHERE enabled = 1"
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return set()
         return {row[0] for row in rows}
 
     def set_enabled(self, tool_id: str, enabled: bool) -> None:

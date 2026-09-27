@@ -31,6 +31,10 @@ class FailingProvider(FakeProvider):
 def test_turn_uses_recent_messages_and_persists_reply(tmp_path) -> None:
     settings = Settings(
         database_path=tmp_path / "agent.sqlite3",
+        sessions_path=tmp_path / "sessions",
+        conversations_path=tmp_path / "conversations",
+        tool_settings_path=tmp_path / "settings" / "tools.json",
+        memory_path=tmp_path / "memory",
         max_context_messages=2,
         _env_file=None,
     )
@@ -70,7 +74,7 @@ def test_turn_uses_recent_messages_and_persists_reply(tmp_path) -> None:
 
 
 def test_session_model_can_be_selected_after_creation(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", _env_file=None)
+    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
     provider = FakeProvider()
 
     with TestClient(create_app(settings, llm_provider=provider)) as client:
@@ -98,7 +102,7 @@ def test_session_model_can_be_selected_after_creation(tmp_path) -> None:
 
 
 def test_failed_model_call_keeps_user_message(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", _env_file=None)
+    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings, llm_provider=FailingProvider())) as client:
         session = client.post("/api/sessions", json={"model": "test-model"}).json()

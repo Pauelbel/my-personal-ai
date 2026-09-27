@@ -1,7 +1,5 @@
 """Проверка сессий подтверждает API и сохранение данных между запусками."""
 
-import sqlite3
-
 from fastapi.testclient import TestClient
 
 from local_agent.api.app import create_app
@@ -9,7 +7,7 @@ from local_agent.config.settings import Settings
 
 
 def test_session_persists_after_app_restart(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", _env_file=None)
+    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
         created = client.post(
@@ -32,10 +30,11 @@ def test_session_persists_after_app_restart(tmp_path) -> None:
     assert listed.status_code == 200
     assert listed.json() == [session]
     assert missing.status_code == 404
+    assert not settings.database_path.exists()
 
 
 def test_session_can_be_renamed(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", _env_file=None)
+    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
         session = client.post("/api/sessions", json={}).json()
@@ -58,7 +57,7 @@ def test_session_can_be_renamed(tmp_path) -> None:
 
 
 def test_deleting_session_removes_only_its_messages(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", _env_file=None)
+    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
         first = client.post("/api/sessions", json={}).json()
@@ -76,10 +75,7 @@ def test_deleting_session_removes_only_its_messages(tmp_path) -> None:
         assert client.delete(f"/api/sessions/{first['id']}").status_code == 404
         assert client.get(f"/api/sessions/{second['id']}/messages").status_code == 200
 
-    with sqlite3.connect(settings.database_path) as connection:
-        session_ids = [row[0] for row in connection.execute("SELECT id FROM sessions")]
-        message_session_ids = [
-            row[0] for row in connection.execute("SELECT session_id FROM messages")
-        ]
-    assert session_ids == [second["id"]]
-    assert message_session_ids == [second["id"]]
+    session_files = sorted(settings.sessions_path.glob("*.json"))
+    assert [path.stem for path in session_files] == [second["id"]]
+    assert not (settings.conversations_path / f"{first['id']}.jsonl").exists()
+    assert (settings.conversations_path / f"{second['id']}.jsonl").exists()

@@ -6,8 +6,15 @@ from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
 
 
-def test_health() -> None:
-    client = TestClient(create_app(Settings(_env_file=None)))
+def test_health(tmp_path) -> None:
+    client = TestClient(create_app(Settings(
+        database_path=tmp_path / "agent.sqlite3",
+        sessions_path=tmp_path / "sessions",
+        conversations_path=tmp_path / "conversations",
+        tool_settings_path=tmp_path / "settings" / "tools.json",
+        memory_path=tmp_path / "memory",
+        _env_file=None,
+    )))
 
     response = client.get("/api/health")
 

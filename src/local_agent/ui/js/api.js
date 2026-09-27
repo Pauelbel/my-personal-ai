@@ -57,3 +57,16 @@ export const toolsApi = {
     { method: "PUT", body: JSON.stringify({ enabled }) },
   ),
 };
+
+export const memoryApi = {
+  list: () => request("/memory"),
+  read: (name) => request(`/memory/${encodeURIComponent(name)}`),
+  save: (name, content) => request(
+    `/memory/${encodeURIComponent(name)}`,
+    { method: "PUT", body: JSON.stringify({ content }) },
+  ),
+  update: (sessionId) => request(
+    `/sessions/${encodeURIComponent(sessionId)}/memory/update`,
+    { method: "POST" },
+  ),
+};

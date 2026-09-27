@@ -88,6 +88,20 @@ p { color: #9da7b6; line-height: 1.6; }
 .secondary-button:hover { background: #34445f; }
 .secondary-button:disabled { opacity: .6; cursor: wait; }
 .settings-panel { min-height: 0; }
+.memory-panel { padding: clamp(21px, 3vw, 34px); border: 1px solid var(--line); border-radius: 17px; background: linear-gradient(155deg, #1b2533, #171d27 62%); box-shadow: 0 18px 48px #060a1266; }
+.memory-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; }
+.memory-header h2 { margin: 10px 0; }
+.memory-header p { margin-bottom: 0; }
+.memory-status { min-height: 1.5em; color: var(--muted); }
+.memory-workspace { display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); gap: 18px; margin-top: 18px; }
+.memory-files { display: grid; align-content: start; gap: 7px; }
+.memory-file-button { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; text-align: left; }
+.memory-file-button.active { border-color: #8398ef; background: #8398ef22; }
+.memory-editor { display: grid; gap: 10px; }
+.memory-editor label { font-weight: 650; }
+.memory-document-description { min-height: 2.8em; margin: -2px 0 2px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.memory-editor textarea { width: 100%; min-height: 430px; padding: 14px; resize: vertical; border: 1px solid var(--line); border-radius: 9px; background: #111823; color: #e6eaf1; font: 14px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.memory-editor .primary-button { justify-self: end; }
 .notice { max-width: 850px; margin: 20px auto -20px; padding: 11px 14px; border: 1px solid #a66565; border-radius: 8px; background: #382329; color: #f2cbcb; font-size: 13px; }
 .conversation { margin-top: 34px; padding-top: 25px; border-top: 1px solid #303744; }
 .conversation h3 { margin: 0 0 18px; font-size: 16px; font-weight: 600; }
@@ -123,6 +137,9 @@ p { color: #9da7b6; line-height: 1.6; }
 .composer textarea { width: 100%; min-height: 85px; padding: 12px; resize: vertical; border: 1px solid #3a465c; border-radius: 9px; outline: none; background: #111823; color: #e6eaf1; font: inherit; }
 .composer textarea:focus { border-color: #8398ef; }
 .composer .primary-button { justify-self: end; }
+.composer-memory { flex: 0 0 auto; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; font-size: 12px; white-space: nowrap; }
+.composer-memory:hover { border-color: #8398ef; }
+.composer-memory:disabled { opacity: .55; cursor: wait; }
 .tools-dialog { width: min(480px, calc(100vw - 28px)); padding: 24px; border: 1px solid #4b5c78; border-radius: 16px; background: linear-gradient(150deg, #222e40, #18212d); color: #e6eaf1; box-shadow: 0 25px 70px #000a; }
 .tools-dialog::backdrop { background: #05080dbb; }
 .tools-dialog-header { display: flex; align-items: center; justify-content: space-between; }
@@ -149,4 +166,7 @@ p { color: #9da7b6; line-height: 1.6; }
   .topbar { align-items: flex-start; }
   .version-badge { margin-top: 4px; }
   .message { max-width: 94%; }
+  .memory-header { display: grid; }
+  .memory-workspace { grid-template-columns: 1fr; }
+  .memory-editor textarea { min-height: 300px; }
 }

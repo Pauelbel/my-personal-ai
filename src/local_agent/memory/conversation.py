@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from collections.abc import Callable
 from uuid import uuid4
 
 from local_agent.memory.base import ConversationStore
@@ -10,8 +11,13 @@ from local_agent.memory.models import Message
 
 
 class ConversationService:
-    def __init__(self, store: ConversationStore) -> None:
+    def __init__(
+        self,
+        store: ConversationStore,
+        on_saved: Callable[[Message], None] | None = None,
+    ) -> None:
         self._store = store
+        self._on_saved = on_saved
 
     def add_user_message(self, session_id: str, content: str) -> Message:
         return self._add_message(session_id, "user", content)
@@ -27,7 +33,10 @@ class ConversationService:
             content=content,
             created_at=datetime.now(timezone.utc),
         )
-        return self._store.save(message)
+        saved = self._store.save(message)
+        if self._on_saved is not None:
+            self._on_saved(saved)
+        return saved
 
     def list(self, session_id: str) -> list[Message]:
         return self._store.list(session_id)
@@ -37,3 +46,6 @@ class ConversationService:
 
     def count(self, session_id: str) -> int:
         return self._store.count(session_id)
+
+    def after(self, session_id: str, message_id: str | None) -> list[Message]:
+        return self._store.after(session_id, message_id)

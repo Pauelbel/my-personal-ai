@@ -11,6 +11,7 @@ from local_agent.llm.registry import LLMRegistry
 from local_agent.llm.models import ChatMessage
 from local_agent.memory.conversation import ConversationService
 from local_agent.memory.models import Message
+from local_agent.memory.service import MemoryService
 from local_agent.sessions.service import SessionService
 from local_agent.tools.registry import ToolRegistry
 from local_agent.tools.settings import ToolSettings
@@ -34,6 +35,7 @@ class AgentRuntime:
         agents: AgentRegistry,
         providers: LLMRegistry,
         max_context_messages: int,
+        memory: MemoryService,
         tools: ToolRegistry,
         tool_settings: ToolSettings,
     ) -> None:
@@ -42,6 +44,7 @@ class AgentRuntime:
         self._agents = agents
         self._providers = providers
         self._max_context_messages = max_context_messages
+        self._memory = memory
         self._tools = tools
         self._tool_settings = tool_settings
 
@@ -68,6 +71,7 @@ class AgentRuntime:
             agent.system_prompt,
             self._conversation.recent(session_id, self._max_context_messages),
             self._max_context_messages,
+            self._memory.context(),
         )
         enabled_ids = self._tool_settings.enabled_ids()
         allowed = [

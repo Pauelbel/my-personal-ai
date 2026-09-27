@@ -2,6 +2,8 @@
 
 from typing import Protocol
 
+from datetime import datetime
+
 from local_agent.sessions.models import Session
 
 
@@ -15,6 +17,8 @@ class SessionRepository(Protocol):
     def delete(self, session_id: str) -> bool: ...
 
     def set_context_tokens(self, session_id: str, count: int | None) -> None: ...
+
+    def touch(self, session_id: str, updated_at: datetime) -> None: ...
 
     def get(self, session_id: str) -> Session | None: ...
 

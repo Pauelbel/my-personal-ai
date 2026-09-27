@@ -91,6 +91,14 @@ class SQLiteSessionRepository:
             )
             connection.commit()
 
+    def touch(self, session_id: str, updated_at: datetime) -> None:
+        with self._database.connect() as connection:
+            connection.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (updated_at.isoformat(), session_id),
+            )
+            connection.commit()
+
     def list(self) -> list[Session]:
         with self._database.connect() as connection:
             rows = connection.execute(

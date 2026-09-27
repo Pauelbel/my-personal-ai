@@ -7,7 +7,14 @@ from local_agent.config.settings import Settings
 
 
 def test_messages_persist_after_app_restart(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", _env_file=None)
+    settings = Settings(
+        database_path=tmp_path / "agent.sqlite3",
+        sessions_path=tmp_path / "sessions",
+        conversations_path=tmp_path / "conversations",
+        tool_settings_path=tmp_path / "settings" / "tools.json",
+        memory_path=tmp_path / "memory",
+        _env_file=None,
+    )
 
     with TestClient(create_app(settings)) as client:
         session = client.post("/api/sessions", json={}).json()

@@ -1,6 +1,7 @@
 // Этот модуль связывает части UI и хранит только текущее состояние экрана.
-import { messagesApi, modelsApi, sessionsApi, toolsApi, turnsApi } from "./api.js";
+import { memoryApi, messagesApi, modelsApi, sessionsApi, toolsApi, turnsApi } from "./api.js";
 import { renderMessages } from "./chat.js";
+import { memoryDocumentDescription, renderMemoryFiles } from "./memory.js";
 import { renderSessions } from "./sidebar.js";
 
 const elements = {
@@ -12,6 +13,7 @@ const elements = {
   toolsClose: document.querySelector("#close-tools"),
   toolsIntro: document.querySelector("#tools-intro"),
   toolsList: document.querySelector("#tools-list"),
+  memoryButton: document.querySelector("#show-memory"),
   emptyNewButton: document.querySelector("#empty-new-session"),
   settingsButton: document.querySelector("#show-settings"),
   notice: document.querySelector("#notice"),
@@ -20,6 +22,14 @@ const elements = {
   totalTokens: document.querySelector("#total-tokens"),
   sessionPanel: document.querySelector("#session-panel"),
   settingsPanel: document.querySelector("#settings-panel"),
+  memoryPanel: document.querySelector("#memory-panel"),
+  memoryFiles: document.querySelector("#memory-files"),
+  memoryDocumentTitle: document.querySelector("#memory-document-title"),
+  memoryDocumentDescription: document.querySelector("#memory-document-description"),
+  memoryContent: document.querySelector("#memory-content"),
+  memorySave: document.querySelector("#save-memory"),
+  memoryUpdateChat: document.querySelector("#update-memory-chat"),
+  memoryStatus: document.querySelector("#memory-status"),
   emptyState: document.querySelector("#empty-state"),
   detail: document.querySelector("#session-detail"),
   editTitle: document.querySelector("#edit-title"),
@@ -40,10 +50,13 @@ let messagesSessionId = null;
 let preferredModel = "";
 let selectedId = null;
 let showingSettings = false;
+let showingMemory = false;
 let editingTitle = false;
 let actionsDisabled = false;
 let availableTools = [];
 let pendingConfigSave = Promise.resolve();
+let memoryDocuments = [];
+let selectedMemoryName = null;
 
 function showError(error) {
   elements.notice.textContent = error.message || "Не удалось загрузить данные";
@@ -71,12 +84,15 @@ function render() {
   );
 
   elements.settingsPanel.hidden = !showingSettings;
-  elements.sessionPanel.hidden = showingSettings;
-  const headerTitle = showingSettings ? "Settings" : (selected?.title || "Сессии");
+  elements.memoryPanel.hidden = !showingMemory;
+  elements.sessionPanel.hidden = showingSettings || showingMemory;
+  const headerTitle = showingSettings
+    ? "Settings"
+    : (showingMemory ? "Память" : (selected?.title || "Сессии"));
   elements.editTitle.textContent = headerTitle;
   elements.editTitle.title = selected && !showingSettings ? "Переименовать сессию" : headerTitle;
-  elements.editTitle.disabled = !selected || showingSettings;
-  elements.tokenCount.hidden = !selected || showingSettings;
+  elements.editTitle.disabled = !selected || showingSettings || showingMemory;
+  elements.tokenCount.hidden = !selected || showingSettings || showingMemory;
   const lastCount = selected?.context_tokens;
   elements.lastTokens.textContent = lastCount == null ? "—" : lastCount.toLocaleString("ru-RU");
   elements.lastTokens.setAttribute("aria-label", `Последний запрос: ${elements.lastTokens.textContent} токенов`);
@@ -87,8 +103,8 @@ function render() {
   elements.totalTokens.setAttribute("aria-label", `Вся переписка, приблизительно: ${elements.totalTokens.textContent} токенов`);
   elements.emptyState.hidden = Boolean(selected);
   elements.detail.hidden = !selected;
-  elements.titleInput.hidden = !editingTitle || !selected || showingSettings;
-  elements.editTitle.hidden = editingTitle && Boolean(selected) && !showingSettings;
+  elements.titleInput.hidden = !editingTitle || !selected || showingSettings || showingMemory;
+  elements.editTitle.hidden = editingTitle && Boolean(selected) && !showingSettings && !showingMemory;
   renderMessages(elements.messageList, messages);
 
   if (selected) {
@@ -97,6 +113,8 @@ function render() {
     elements.model.value = selected.model || preferredModel;
     elements.workspace.value = selected.workspace || "";
   }
+  elements.memoryUpdateChat.disabled = actionsDisabled || !selected;
+  renderMemoryFiles(elements.memoryFiles, memoryDocuments, selectedMemoryName, selectMemoryFile);
 }
 
 function selectSession(id) {
@@ -107,6 +125,7 @@ function selectSession(id) {
   messagesSessionId = null;
   elements.messageInput.value = "";
   showingSettings = false;
+  showingMemory = false;
   render();
   loadMessages(id);
 }
@@ -172,6 +191,7 @@ async function createSession() {
     messagesSessionId = null;
     elements.messageInput.value = "";
     showingSettings = false;
+    showingMemory = false;
     await loadSessions();
   } catch (error) {
     showError(error);
@@ -277,6 +297,92 @@ async function showTools() {
   }
 }
 
+async function showMemory() {
+  showingSettings = false;
+  showingMemory = true;
+  editingTitle = false;
+  render();
+  try {
+    memoryDocuments = await memoryApi.list();
+    selectedMemoryName = memoryDocuments.some((item) => item.name === selectedMemoryName)
+      ? selectedMemoryName
+      : (memoryDocuments[0]?.name || null);
+    render();
+    if (selectedMemoryName) await selectMemoryFile(selectedMemoryName);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function selectMemoryFile(name) {
+  selectedMemoryName = name;
+  render();
+  try {
+    const document = await memoryApi.read(name);
+    if (selectedMemoryName !== name) return;
+    elements.memoryDocumentTitle.textContent = document.title;
+    elements.memoryDocumentDescription.textContent = memoryDocumentDescription(document.name);
+    elements.memoryContent.value = document.content;
+    elements.memoryContent.disabled = false;
+    elements.memorySave.disabled = false;
+    clearError();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function saveMemory() {
+  if (!selectedMemoryName || actionsDisabled) return;
+  elements.memorySave.disabled = true;
+  try {
+    const document = await memoryApi.save(selectedMemoryName, elements.memoryContent.value);
+    elements.memoryContent.value = document.content;
+    elements.memoryStatus.textContent = "Изменения сохранены.";
+    memoryDocuments = await memoryApi.list();
+    clearError();
+    render();
+  } catch (error) {
+    showError(error);
+  } finally {
+    elements.memorySave.disabled = false;
+  }
+}
+
+async function updateMemory() {
+  const sessionId = selectedId;
+  if (!sessionId || actionsDisabled) {
+    elements.memoryStatus.textContent = "Сначала выберите сессию.";
+    return;
+  }
+  actionsDisabled = true;
+  showMemoryUpdateStatus("Память обновляется для текущей сессии…");
+  render();
+  try {
+    const result = await memoryApi.update(sessionId);
+    const status = result.processed_messages === 0
+      ? "Новых сообщений для обработки нет."
+      : `Готово: обработано сообщений — ${result.processed_messages}, изменений — ${result.applied_operations}.`;
+    memoryDocuments = await memoryApi.list();
+    if (selectedMemoryName) await selectMemoryFile(selectedMemoryName);
+    clearError();
+    showMemoryUpdateStatus(status);
+  } catch (error) {
+    showMemoryUpdateStatus(`Ошибка обновления: ${error.message}`);
+    showError(error);
+  } finally {
+    actionsDisabled = false;
+    render();
+  }
+}
+
+function showMemoryUpdateStatus(message) {
+  elements.memoryStatus.textContent = message;
+  if (!showingMemory) {
+    elements.notice.textContent = message;
+    elements.notice.hidden = false;
+  }
+}
+
 function saveConfig() {
   const sessionId = selectedId;
   const model = elements.model.value.trim();
@@ -358,15 +464,18 @@ function handleMessageKeydown(event) {
 
 elements.newButton.addEventListener("click", createSession);
 elements.toolsButton.addEventListener("click", showTools);
+elements.memoryButton.addEventListener("click", showMemory);
 elements.toolsClose.addEventListener("click", () => elements.toolsDialog.close());
 elements.emptyNewButton.addEventListener("click", createSession);
 elements.messageForm.addEventListener("submit", saveMessage);
 elements.messageInput.addEventListener("keydown", handleMessageKeydown);
+elements.memorySave.addEventListener("click", saveMemory);
+elements.memoryUpdateChat.addEventListener("click", updateMemory);
 for (const field of [elements.provider, elements.model, elements.workspace]) {
   field.addEventListener("change", () => { void saveConfig(); });
 }
 elements.editTitle.addEventListener("click", () => {
-  if (!selectedId || showingSettings) return;
+  if (!selectedId || showingSettings || showingMemory) return;
   editingTitle = true;
   render();
   elements.titleInput.focus();
@@ -385,6 +494,7 @@ elements.titleInput.addEventListener("keydown", (event) => {
 });
 elements.settingsButton.addEventListener("click", () => {
   showingSettings = true;
+  showingMemory = false;
   render();
 });
 

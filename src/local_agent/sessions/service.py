@@ -1,6 +1,7 @@
 """Сервис создаёт сессии и предоставляет их API без знания формата хранения."""
 
 from datetime import datetime, timezone
+from collections.abc import Callable
 from uuid import uuid4
 
 from local_agent.sessions.models import Session
@@ -8,8 +9,13 @@ from local_agent.sessions.repository import SessionRepository
 
 
 class SessionService:
-    def __init__(self, repository: SessionRepository) -> None:
+    def __init__(
+        self,
+        repository: SessionRepository,
+        delete_history: Callable[[str], None] | None = None,
+    ) -> None:
         self._repository = repository
+        self._delete_history = delete_history
 
     def create(
         self,
@@ -57,10 +63,16 @@ class SessionService:
         return self._repository.rename(session_id, title, only_if_default=False)
 
     def delete(self, session_id: str) -> bool:
-        return self._repository.delete(session_id)
+        deleted = self._repository.delete(session_id)
+        if deleted and self._delete_history is not None:
+            self._delete_history(session_id)
+        return deleted
 
     def set_context_tokens(self, session_id: str, count: int | None) -> None:
         self._repository.set_context_tokens(session_id, count)
+
+    def touch(self, session_id: str, updated_at: datetime) -> None:
+        self._repository.touch(session_id, updated_at)
 
     def name_from_first_message(
         self, session_id: str, content: str, message_count: int

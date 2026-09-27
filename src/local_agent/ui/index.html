@@ -18,6 +18,7 @@
       <aside class="sidebar" aria-label="Навигация">
         <div class="sidebar-tools">
           <button class="tools-button" id="show-tools" type="button">⚒ Инструменты</button>
+          <button class="tools-button" id="show-memory" type="button">◇ Память</button>
         </div>
 
         <button class="new-session" id="new-session" type="button">
@@ -74,6 +75,7 @@
                   <label class="config-field model-field" for="session-model"><span class="visually-hidden">Модель</span><input id="session-model" list="available-models" placeholder="Выберите модель" required /><datalist id="available-models"></datalist></label>
                   <span class="config-divider" aria-hidden="true"></span>
                   <label class="config-field workspace-field" for="session-workspace"><span aria-hidden="true">⌂</span><span class="visually-hidden">Workspace</span><input id="session-workspace" placeholder="Рабочая папка не выбрана" /></label>
+                  <button class="composer-memory" id="update-memory-chat" type="button" title="Обработать новые сообщения этой сессии">Обновить память</button>
                   <button class="composer-send" id="save-message" type="submit" form="message-form" aria-label="Отправить сообщение" title="Отправить">↑</button>
                 </div>
               </div>
@@ -91,6 +93,25 @@
             <label class="theme-option"><input type="radio" name="theme" value="dark" /><span><strong>Тёмная</strong><small>Спокойные тёмные оттенки</small></span></label>
           </fieldset>
           <p class="settings-note">Параметры сервера пока задаются в локальном файле конфигурации.</p>
+        </section>
+
+        <section class="content-panel memory-panel" id="memory-panel" aria-labelledby="memory-title" hidden>
+          <div class="memory-header">
+            <div>
+              <span class="section-label" id="memory-title">ДОЛГОВРЕМЕННАЯ ПАМЯТЬ</span>
+              <p>Markdown-файлы можно редактировать здесь или обычным текстовым редактором. Обновление запускается из выбранной сессии.</p>
+            </div>
+          </div>
+          <p class="memory-status" id="memory-status" role="status"></p>
+          <div class="memory-workspace">
+            <nav class="memory-files" id="memory-files" aria-label="Файлы памяти"></nav>
+            <div class="memory-editor">
+              <label for="memory-content" id="memory-document-title">Выберите файл</label>
+              <p class="memory-document-description" id="memory-document-description">Выберите категорию, чтобы увидеть её назначение.</p>
+              <textarea id="memory-content" spellcheck="true" disabled></textarea>
+              <button class="primary-button" id="save-memory" type="button" disabled>Сохранить</button>
+            </div>
+          </div>
         </section>
       </main>
     </div>

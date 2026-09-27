@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
 from local_agent.llm.models import ChatResult, ToolCall
+from local_agent.storage.database import SQLiteDatabase
+from local_agent.storage.sqlite.tool_settings import SQLiteToolSettings
 from local_agent.tools.filesystem import ListFilesTool, ReadFileTool
 
 
@@ -32,7 +34,7 @@ class ToolCallingProvider:
 
 
 def test_global_tools_persist(tmp_path):
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", _env_file=None)
+    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
     with TestClient(create_app(settings)) as client:
         client.post("/api/sessions", json={})
         tools = client.get("/api/tools").json()
@@ -55,7 +57,7 @@ def test_global_tools_persist(tmp_path):
         assert client.post("/api/sessions", json={}).status_code == 201
 
 
-def test_existing_database_gets_tool_settings_table(tmp_path):
+def test_existing_database_migrates_to_json_settings(tmp_path):
     database_path = tmp_path / "old.sqlite3"
     with sqlite3.connect(database_path) as connection:
         connection.execute(
@@ -64,13 +66,36 @@ def test_existing_database_gets_tool_settings_table(tmp_path):
         connection.execute(
             "INSERT INTO sessions VALUES ('old', 'Old', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 'default', '', 'lm_studio', NULL)"
         )
-    settings = Settings(database_path=database_path, _env_file=None)
+    settings = Settings(database_path=database_path, sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
     with TestClient(create_app(settings)) as client:
         response = client.get("/api/sessions/old")
         assert response.status_code == 200
         assert response.json()["context_tokens"] is None
         assert client.get("/api/tools").status_code == 200
         assert client.put("/api/tools/list_files", json={"enabled": True}).status_code == 200
+    assert settings.tool_settings_path.exists()
+    assert (settings.sessions_path / "old.json").exists()
+
+
+def test_enabled_tools_migrate_from_sqlite(tmp_path):
+    database_path = tmp_path / "agent.sqlite3"
+    database = SQLiteDatabase(database_path)
+    database.initialize()
+    SQLiteToolSettings(database).set_enabled("read_file", True)
+    settings = Settings(
+        database_path=database_path,
+        sessions_path=tmp_path / "sessions",
+        conversations_path=tmp_path / "conversations",
+        tool_settings_path=tmp_path / "settings" / "tools.json",
+        memory_path=tmp_path / "memory",
+        _env_file=None,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        tools = client.get("/api/tools").json()
+
+    assert [tool["enabled"] for tool in tools] == [False, True]
+    assert settings.tool_settings_path.exists()
 
 
 def test_file_tools_stay_inside_workspace(tmp_path):
@@ -95,7 +120,7 @@ def test_model_only_receives_enabled_tools_and_result(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "note.txt").write_text("Содержимое", encoding="utf-8")
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", _env_file=None)
+    settings = Settings(database_path=tmp_path / "agent.sqlite3", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", tool_settings_path=tmp_path / "settings" / "tools.json", memory_path=tmp_path / "memory", _env_file=None)
     provider = ToolCallingProvider()
     with TestClient(create_app(settings, llm_provider=provider)) as client:
         session = client.post(

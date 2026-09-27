@@ -7,7 +7,14 @@ from local_agent.config.settings import Settings
 
 
 def test_ui_files_are_served(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "agent.sqlite3", _env_file=None)
+    settings = Settings(
+        database_path=tmp_path / "agent.sqlite3",
+        sessions_path=tmp_path / "sessions",
+        conversations_path=tmp_path / "conversations",
+        tool_settings_path=tmp_path / "settings" / "tools.json",
+        memory_path=tmp_path / "memory",
+        _env_file=None,
+    )
 
     with TestClient(create_app(settings)) as client:
         page = client.get("/")
@@ -19,6 +26,7 @@ def test_ui_files_are_served(tmp_path) -> None:
         mascot = client.get("/ui/assets/meepo-mascot.png")
         logo = client.get("/ui/assets/meepo-logo.png")
         sidebar_script = client.get("/ui/js/sidebar.js")
+        memory_script = client.get("/ui/js/memory.js")
 
     assert page.status_code == 200
     assert "New Session" in page.text
@@ -42,11 +50,18 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert 'class="session-context"' not in page.text
     assert page.text.index('id="show-tools"') < page.text.index('id="new-session"')
     assert 'id="tools-dialog"' in page.text
+    assert 'id="show-memory"' in page.text
+    assert 'id="memory-panel"' in page.text
+    assert '<h2 id="memory-title">Память</h2>' not in page.text
+    assert 'id="memory-document-description"' in page.text
+    assert 'id="update-memory"' not in page.text
     assert "Отправить" in page.text
     assert "Переименовать сессию" in page.text
     assert 'class="composer-config"' in page.text
     assert 'id="save-config"' not in page.text
     assert 'form="message-form"' in page.text
+    assert 'id="update-memory-chat"' in page.text
+    assert page.text.index('id="update-memory-chat"') < page.text.index('id="save-message"')
     assert 'id="message-form"' in page.text
     assert "Ctrl+Enter — новая строка" in page.text
     assert 'name="theme" value="light"' in page.text
@@ -77,3 +92,10 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert "session-delete-button" in sidebar_script.text
     assert "openMenuId" not in sidebar_script.text
     assert "⋯" not in sidebar_script.text
+    assert memory_script.status_code == 200
+    assert "renderMemoryFiles" in memory_script.text
+    assert "хранить историю диалогов в JSONL" in memory_script.text
+    assert "не удалять данные без подтверждения" in memory_script.text
+    assert "имя — Алексей" in memory_script.text
+    assert "отвечать по-русски" in memory_script.text
+    assert "разрабатывает Meepo Agent" in memory_script.text
