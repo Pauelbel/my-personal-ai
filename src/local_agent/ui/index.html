@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meepo Agent</title>
+    <link rel="icon" type="image/png" href="/ui/assets/meepo-mascot.png" />
+    <script>
+      try { document.documentElement.dataset.theme = localStorage.getItem("app-theme") || "light"; }
+      catch { document.documentElement.dataset.theme = "light"; }
+    </script>
+    <link rel="stylesheet" href="/ui/css/app.css" />
+    <link rel="stylesheet" href="/ui/css/theme.css" />
+    <script type="module" src="/ui/js/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Навигация">
+        <div class="sidebar-tools">
+          <button class="tools-button" id="show-tools" type="button">⚒ Инструменты</button>
+        </div>
+
+        <button class="new-session" id="new-session" type="button">
+          <span aria-hidden="true">＋</span> New Session
+        </button>
+
+        <div class="sidebar-section-heading">
+          <span>Сессии</span>
+          <span id="session-count" aria-label="Количество сессий">0</span>
+        </div>
+        <nav class="session-list" id="session-list" aria-label="Сессии"></nav>
+
+        <div class="sidebar-footer">
+          <button class="settings-button" id="show-settings" type="button">
+            <span aria-hidden="true">⚙</span> Settings
+          </button>
+        </div>
+      </aside>
+
+      <main class="main-area">
+        <header class="app-header">
+          <img class="header-mascot" src="/ui/assets/meepo-mascot.png" width="30" height="30" alt="" aria-hidden="true" />
+          <h1 id="page-title">
+            <button class="header-title-button" id="edit-title" type="button" aria-label="Переименовать сессию" title="Переименовать сессию">Сессии</button>
+            <input class="header-title-input" id="title-input" aria-label="Название сессии" maxlength="100" hidden />
+          </h1>
+          <span class="header-tokens" id="header-tokens" hidden>
+            <span class="header-token-value" id="last-tokens" title="Входные токены последнего запроса по данным LM Studio" aria-label="Последний запрос: нет данных">—</span>
+            <span class="header-token-value" id="total-tokens" title="Приблизительное число токенов во всей сохранённой переписке; не размер текущего окна модели" aria-label="Вся переписка: нет данных">—</span>
+          </span>
+        </header>
+
+        <div class="notice" id="notice" role="status" hidden></div>
+
+        <section class="content-panel" id="session-panel" aria-labelledby="page-title">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-icon" aria-hidden="true">✳</div>
+            <h2>Начните с новой сессии</h2>
+            <p>Создайте разговор, чтобы он появился в боковой панели и сохранился после перезапуска.</p>
+            <button class="primary-button" id="empty-new-session" type="button">Создать сессию</button>
+          </div>
+
+          <div class="session-detail" id="session-detail" hidden>
+            <div class="conversation">
+              <div class="message-list" id="message-list" aria-live="polite"></div>
+              <div class="composer-shell">
+                <form class="composer" id="message-form">
+                  <label class="visually-hidden" for="message-input">Сообщение</label>
+                  <textarea id="message-input" rows="3" placeholder="Спросите о проекте или попросите внести изменения..." title="Enter — отправить, Ctrl+Enter — новая строка" required></textarea>
+                </form>
+                <div class="composer-config">
+                  <label class="config-field" for="session-provider"><span class="visually-hidden">Провайдер</span><select id="session-provider"><option value="lm_studio">LM Studio</option></select></label>
+                  <span class="config-divider" aria-hidden="true"></span>
+                  <label class="config-field model-field" for="session-model"><span class="visually-hidden">Модель</span><input id="session-model" list="available-models" placeholder="Выберите модель" required /><datalist id="available-models"></datalist></label>
+                  <span class="config-divider" aria-hidden="true"></span>
+                  <label class="config-field workspace-field" for="session-workspace"><span aria-hidden="true">⌂</span><span class="visually-hidden">Workspace</span><input id="session-workspace" placeholder="Рабочая папка не выбрана" /></label>
+                  <button class="composer-send" id="save-message" type="submit" form="message-form" aria-label="Отправить сообщение" title="Отправить">↑</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="content-panel settings-panel" id="settings-panel" aria-labelledby="settings-title" hidden>
+          <span class="section-label">ПРИЛОЖЕНИЕ</span>
+          <h2 id="settings-title">Settings</h2>
+          <p>Выберите оформление, в котором удобно работать. Оно сохранится в этом браузере.</p>
+          <fieldset class="theme-settings">
+            <legend>Тема интерфейса</legend>
+            <label class="theme-option"><input type="radio" name="theme" value="light" /><span><strong>Светлая</strong><small>Мягкий серо-голубой фон</small></span></label>
+            <label class="theme-option"><input type="radio" name="theme" value="dark" /><span><strong>Тёмная</strong><small>Спокойные тёмные оттенки</small></span></label>
+          </fieldset>
+          <p class="settings-note">Параметры сервера пока задаются в локальном файле конфигурации.</p>
+        </section>
+      </main>
+    </div>
+    <dialog class="tools-dialog" id="tools-dialog" aria-labelledby="tools-title">
+      <div class="tools-dialog-header">
+        <h2 id="tools-title">Инструменты</h2>
+        <button class="tools-close" id="close-tools" type="button" aria-label="Закрыть">×</button>
+      </div>
+      <p id="tools-intro"></p>
+      <div class="tools-list" id="tools-list"></div>
+    </dialog>
+  </body>
+</html>

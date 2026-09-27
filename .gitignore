@@ -1,0 +1,24 @@
+.venv/
+.uv-cache/
+.env
+
+# Локальная база и рабочие данные
+data/
+
+# Кэш и байткод Python
+__pycache__/
+*.py[cod]
+
+# Служебные файлы сборки и editable-установки
+*.egg-info/
+build/
+dist/
+
+# Кэши инструментов разработки
+.pytest_cache/
+.pytest_tmp/
+.mypy_cache/
+.ruff_cache/
+
+# Локальная память пользователя, если выбран путь внутри репозитория
+/memory/

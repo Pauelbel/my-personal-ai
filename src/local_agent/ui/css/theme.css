@@ -1,0 +1,211 @@
+/* Этот слой оформляет компактный чат и две выбираемые пользователем темы. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.sidebar { padding-top: 11px; }
+.brand { padding-top: 0; padding-bottom: 22px; }
+.sidebar-footer .settings-button { text-align: right; }
+.main-area { padding-top: 0; }
+.main-area .content-panel { margin-top: 12px; }
+.main-area .notice { margin-top: 6px; }
+.app-header { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; gap: 10px; min-height: 52px; margin: 0 calc(-1 * clamp(24px, 5vw, 72px)); padding: 0 18px; border-bottom: 1px solid #41474e; background: #1a1f25; }
+.app-header h1 { flex: 1; min-width: 0; margin: 0; overflow: hidden; color: #fff; font-size: 13px; font-weight: 600; letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
+.header-mascot { display: block; flex: 0 0 30px; width: 30px; height: 30px; object-fit: contain; }
+.header-tokens { flex: 0 0 auto; display: flex; gap: 6px; color: #bfc5c9; font-size: 11px; white-space: nowrap; }
+.header-token-value { padding: 5px 8px; border: 1px solid #434a52; border-radius: 6px; cursor: help; }
+.header-title-button { display: block; max-width: 100%; padding: 6px 8px; margin-left: -8px; overflow: hidden; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.header-title-button:not(:disabled):hover { background: #343a42; }
+.header-title-button:disabled { cursor: default; }
+.header-title-input { width: min(100%, 420px); box-sizing: border-box; padding: 7px 9px; border: 1px solid #757b81; border-radius: 7px; background: #262b32; color: #fff; font: inherit; }
+.header-title-input:focus, .header-title-input:focus-visible { outline: 2px solid #75b8d3; outline-offset: -2px; }
+
+.session-detail { display: flex; flex-direction: column; min-height: calc(100vh - 180px); padding: 0; border: 0; background: transparent; box-shadow: none; }
+.session-context { display: flex; align-items: center; gap: 11px; align-self: flex-start; max-width: 100%; margin-bottom: 18px; }
+.context-icon { display: grid; place-items: center; width: 33px; height: 33px; border: 1px solid #51617c; border-radius: 9px; color: #bbcaf0; background: #293952; }
+.context-name { min-width: 0; }
+.context-label { display: block; margin-bottom: 2px; color: #9eacc3; font-size: 11px; }
+.session-context h2 { margin: 0; overflow: hidden; color: #e6eaf1; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.context-edit { width: 30px; height: 30px; border: 0; border-radius: 7px; background: transparent; color: #9fb1cd; }
+.context-edit:hover { background: #2b3950; color: #fff; }
+.conversation { display: flex; flex: 1; flex-direction: column; min-height: 0; margin: 0; padding: 0; border: 0; }
+.message-list { flex: 1; align-content: start; min-height: 140px; max-height: none; padding: 10px 4px 22px; }
+.composer-shell { margin-top: auto; overflow: hidden; border: 1px solid #495a74; border-radius: 15px; background: #1d2837; box-shadow: 0 16px 40px #060d1b55; }
+.composer { position: relative; display: block; margin: 0; }
+.composer textarea { display: block; width: 100%; min-height: 105px; margin: 0; padding: 17px 18px; border: 0; border-radius: 0; background: transparent; color: #e6eaf1; font-size: 14px; resize: vertical; }
+.composer textarea::placeholder { color: #9aa9bc; }
+.composer textarea:focus { border: 0; outline: none; }
+.composer-send { flex: 0 0 auto; display: grid; place-items: center; width: 32px; height: 32px; margin-left: auto; border: 0; border-radius: 8px; background: #6d91c1; color: #fff; font-size: 21px; font-weight: 700; line-height: 1; }
+.composer-send:hover { background: #80a6d6; }
+.composer-send:disabled { opacity: .5; cursor: wait; }
+.composer-config { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-height: 45px; padding: 6px 12px; border-top: 1px solid #3c4b61; }
+.config-field { display: flex; align-items: center; gap: 4px; min-width: 0; color: #aab7ca; font-size: 13px; }
+.config-field select, .config-field input { min-width: 0; max-width: 210px; padding: 5px 6px; border: 0; border-radius: 5px; outline: 0; background: transparent; color: #e6eaf1; font: inherit; }
+.config-field select { cursor: pointer; }
+.config-field select option { background: #1d2837; }
+.config-field input::placeholder { color: #8999ae; }
+.config-field:focus-within { border-radius: 5px; background: #2d3d55; }
+.model-field { flex: 0 1 215px; }
+.model-field input { width: 100%; }
+.workspace-field { flex: 1 1 170px; }
+.workspace-field input { flex: 1; width: 100%; max-width: none; }
+.config-divider { width: 1px; height: 18px; background: #4b5970; }
+.settings-panel { max-width: 650px; }
+.theme-settings { display: grid; gap: 10px; margin: 26px 0 0; padding: 0; border: 0; }
+.theme-settings legend { margin-bottom: 10px; font-size: 14px; font-weight: 600; }
+.theme-option { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid #3c4a5f; border-radius: 9px; background: #202b39; cursor: pointer; }
+.theme-option:has(input:checked) { border-color: #829bef; background: #293953; }
+.theme-option input { accent-color: #7892eb; }
+.theme-option strong, .theme-option small { display: block; }
+.theme-option small { margin-top: 3px; color: #9eacc0; font-size: 12px; }
+.settings-note { margin-top: 24px; font-size: 12px; }
+
+html[data-theme="light"] { color: #2c394a; background: #ebeff3; --line: #cbd5df; --muted: #6d7a89; --accent: #508fb4; }
+html[data-theme="light"] .sidebar { border-color: #cbd5df; background: linear-gradient(180deg, #e5eaf0, #dfe6ed); }
+html[data-theme="light"] .brand strong, html[data-theme="light"] h1 { color: #2b394b; }
+html[data-theme="light"] .brand small, html[data-theme="light"] p { color: #677587; }
+html[data-theme="light"] .brand-mark { border-color: #9cb8cb; background: #cbdde8; color: #4d83a2; box-shadow: none; }
+html[data-theme="light"] .tools-button { border-color: #c2d0db; background: #eef2f5; color: #344459; }
+html[data-theme="light"] .tools-button:hover { background: #e0e9ef; }
+html[data-theme="light"] .new-session, html[data-theme="light"] .primary-button { border-color: #649cba; background: #669fbc; box-shadow: none; }
+html[data-theme="light"] .new-session:hover, html[data-theme="light"] .primary-button:hover { background: #548eb0; }
+html[data-theme="light"] .sidebar-section-heading { color: #6c7b8b; }
+html[data-theme="light"] .sidebar-section-heading #session-count { background: #cbd7e2; color: #41526a; }
+html[data-theme="light"] .session-row:has(.session-item.active) { background: #d6dde3; }
+html[data-theme="light"] .session-item::before { background: #87939e; }
+html[data-theme="light"] .session-item, html[data-theme="light"] .settings-button { color: #526174; }
+html[data-theme="light"] .session-item:hover, html[data-theme="light"] .settings-button:hover { background: #d5e0e8; color: #263c50; }
+html[data-theme="light"] .session-item.active { color: #254c64; }
+html[data-theme="light"] .session-delete-button { color: #617488; }
+html[data-theme="light"] .session-delete-button:hover { background: #f4e7e7; color: #9d4e55; }
+html[data-theme="light"] .sidebar-empty, html[data-theme="light"] .local-badge { color: #748394; }
+html[data-theme="light"] .sidebar-footer { border-color: #c8d4de; }
+html[data-theme="light"] .main-area { background: radial-gradient(ellipse 70% 38% at 80% 0%, #dce7ee, transparent), #ebeff3; }
+html[data-theme="light"] .app-header { border-color: #cbd6df; background: #e9eef2; }
+html[data-theme="light"] .app-header h1 { color: #314255; }
+html[data-theme="light"] .header-tokens { color: #66798a; }
+html[data-theme="light"] .header-token-value { border-color: #c7d4dd; }
+html[data-theme="light"] .header-title-button:not(:disabled):hover { background: #d7e3eb; }
+html[data-theme="light"] .header-title-input { border-color: #8ba9bb; background: #f4f6f7; color: #314255; }
+html[data-theme="light"] .topbar { border-color: #cbd6df; }
+html[data-theme="light"] .eyebrow, html[data-theme="light"] .section-label { color: #698399; }
+html[data-theme="light"] .version-badge { border-color: #c7d3dd; color: #6f7e8e; }
+html[data-theme="light"] .empty-state { border-color: #c5d3de; background: radial-gradient(circle at 50% 0%, #d9e6ed, transparent 65%), #e8edf1; }
+html[data-theme="light"] .empty-icon { border-color: #a7bfd0; background: #d4e3ec; color: #5184a1; }
+html[data-theme="light"] .context-icon { border-color: #bed0dc; background: #d8e6ec; color: #5786a1; }
+html[data-theme="light"] .context-label { color: #7b8997; }
+html[data-theme="light"] .session-context h2 { color: #33485b; }
+html[data-theme="light"] .context-edit { color: #678098; }
+html[data-theme="light"] .context-edit:hover { background: #d6e3eb; color: #315a75; }
+html[data-theme="light"] .composer-shell { border-color: #c6d1dc; background: #f4f6f7; box-shadow: 0 18px 36px #68839a19; }
+html[data-theme="light"] .composer textarea { color: #293847; }
+html[data-theme="light"] .composer textarea::placeholder { color: #798593; }
+html[data-theme="light"] .composer-send { background: #72abc6; }
+html[data-theme="light"] .composer-send:hover { background: #5a99b8; }
+html[data-theme="light"] .composer-config { border-color: #d5dde5; }
+html[data-theme="light"] .config-field { color: #6f8292; }
+html[data-theme="light"] .config-field select, html[data-theme="light"] .config-field input { color: #354557; }
+html[data-theme="light"] .config-field select option { background: #f4f6f7; }
+html[data-theme="light"] .config-field input::placeholder { color: #8d9aa7; }
+html[data-theme="light"] .config-field:focus-within { background: #e5edf2; }
+html[data-theme="light"] .config-divider { background: #d3dce4; }
+html[data-theme="light"] .message { border-color: #cbd9e4; background: #dce9f1; }
+html[data-theme="light"] .message.assistant { border-color: #d0dcd4; background: #e3ede6; }
+html[data-theme="light"] .message-role { color: #527b99; }
+html[data-theme="light"] .message.assistant .message-role { color: #54806b; }
+html[data-theme="light"] .message-content { color: #344252; }
+html[data-theme="light"] .message-content pre, html[data-theme="light"] .message-content code { background: #e8edf1; }
+html[data-theme="light"] .message-content pre code { background: none; }
+html[data-theme="light"] .message-content a { color: #276f99; }
+html[data-theme="light"] .markdown-table-container th { background: #d3e1ea; }
+html[data-theme="light"] .message-empty { color: #8895a3; }
+html[data-theme="light"] .settings-panel { border-color: #cbd5df; background: #f0f3f5; box-shadow: 0 16px 35px #7890a01a; }
+html[data-theme="light"] .settings-panel h2, html[data-theme="light"] .theme-settings legend { color: #34475a; }
+html[data-theme="light"] .theme-option { border-color: #ccd8e1; background: #e9eef2; color: #405267; }
+html[data-theme="light"] .theme-option:has(input:checked) { border-color: #75a8c4; background: #dbeaf2; }
+html[data-theme="light"] .theme-option small { color: #758495; }
+html[data-theme="light"] .secondary-button { border-color: #b6cad8; background: #dbe8ef; color: #395d73; }
+html[data-theme="light"] .text-button { color: #4d83a3; }
+html[data-theme="light"] .tools-dialog { border-color: #c7d5df; background: #eef2f4; color: #34475a; box-shadow: 0 25px 70px #324d5b44; }
+html[data-theme="light"] .tools-dialog::backdrop { background: #34465a77; }
+html[data-theme="light"] .tools-close { color: #60778b; }
+html[data-theme="light"] .tool-row { border-color: #c9d6df; background: #e5edf1; }
+html[data-theme="light"] .tool-row small { color: #708394; }
+html[data-theme="light"] .notice { border-color: #dfb6b6; background: #f4e3e3; color: #8d3f4b; }
+
+@media (max-width: 700px) {
+  .app-header { margin: 0 -18px; padding: 0 16px; }
+  .session-detail { min-height: calc(100vh - 310px); }
+  .composer-config { align-items: stretch; }
+  .config-divider { display: none; }
+  .config-field { flex: 1 1 130px; }
+  .workspace-field { flex-basis: 100%; }
+}
+
+/* Тёмная палитра использует графит, белый и жёлтый акцент из выбранного образца. */
+html[data-theme="dark"] { color: #fff; background: #090c11; --surface: #262b32; --surface-raised: #30363d; --line: #424850; --muted: #aeb4b9; --accent: #ffd300; }
+html[data-theme="dark"] .sidebar { border-color: #333940; background: linear-gradient(180deg, #20252b, #15191e 62%); }
+html[data-theme="dark"] .brand-mark { border-color: #756b32; background: #383421; color: #ffd300; box-shadow: none; }
+html[data-theme="dark"] .brand strong, html[data-theme="dark"] h1 { color: #fff; }
+html[data-theme="dark"] .brand small, html[data-theme="dark"] p { color: #aeb4b9; }
+html[data-theme="dark"] .tools-button { border-color: #464c54; background: #262b32; color: #f0f1f2; }
+html[data-theme="dark"] .tools-button:hover { background: #343a42; }
+html[data-theme="dark"] .new-session, html[data-theme="dark"] .primary-button { border-color: #ffd300; background: #ffd300; color: #090c11; box-shadow: none; }
+html[data-theme="dark"] .new-session:hover, html[data-theme="dark"] .primary-button:hover { background: #ffe04b; }
+html[data-theme="dark"] .sidebar-section-heading { color: #aeb4b9; }
+html[data-theme="dark"] .sidebar-section-heading #session-count { background: #363c43; color: #e3e5e7; }
+html[data-theme="dark"] .session-row:has(.session-item.active) { background: #30363d; }
+html[data-theme="dark"] .session-item, html[data-theme="dark"] .settings-button { color: #c5c9cd; }
+html[data-theme="dark"] .session-item:hover, html[data-theme="dark"] .settings-button:hover { background: #30363d; color: #fff; }
+html[data-theme="dark"] .session-item.active { color: #fff; }
+html[data-theme="dark"] .session-item::before { background: #8b9299; }
+html[data-theme="dark"] .session-delete-button { color: #b7bdc3; }
+html[data-theme="dark"] .session-delete-button:hover { background: #372b2f; color: #f3bdc2; }
+html[data-theme="dark"] .sidebar-empty, html[data-theme="dark"] .local-badge { color: #a0a7ad; }
+html[data-theme="dark"] .sidebar-footer { border-color: #383e45; }
+html[data-theme="dark"] .status-dot { background: #ffd300; }
+html[data-theme="dark"] .main-area { background: radial-gradient(ellipse 75% 45% at 82% 0%, #2a2e33, transparent 75%), #090c11; }
+html[data-theme="dark"] .app-header { border-color: #353b42; background: #181d22; }
+html[data-theme="dark"] .header-tokens { color: #c1c6ca; }
+html[data-theme="dark"] .header-token-value { border-color: #444b52; }
+html[data-theme="dark"] .topbar { border-color: #353b42; }
+html[data-theme="dark"] .eyebrow, html[data-theme="dark"] .section-label { color: #b5a757; }
+html[data-theme="dark"] .version-badge { border-color: #434951; color: #b7bdc3; }
+html[data-theme="dark"] .empty-state { border-color: #454a50; background: radial-gradient(circle at 50% 0%, #33383d, transparent 65%), #1e2329; }
+html[data-theme="dark"] .empty-icon { border-color: #857536; background: #393727; color: #ffd300; }
+html[data-theme="dark"] .context-icon { border-color: #6f673f; background: #343224; color: #ffd300; }
+html[data-theme="dark"] .context-label { color: #a5aaaf; }
+html[data-theme="dark"] .session-context h2 { color: #fff; }
+html[data-theme="dark"] .context-edit { color: #c0c5c9; }
+html[data-theme="dark"] .context-edit:hover { background: #343a42; color: #ffd300; }
+html[data-theme="dark"] .composer-shell { border-color: #4a5159; background: #262b32; box-shadow: 0 18px 42px #0008; }
+html[data-theme="dark"] .composer textarea { color: #fff; }
+html[data-theme="dark"] .composer textarea::placeholder { color: #aeb4b9; }
+html[data-theme="dark"] .composer-send { background: #ffd300; color: #090c11; }
+html[data-theme="dark"] .composer-send:hover { background: #ffe04b; }
+html[data-theme="dark"] .composer-config { border-color: #424850; }
+html[data-theme="dark"] .config-field { color: #b2b8bd; }
+html[data-theme="dark"] .config-field select, html[data-theme="dark"] .config-field input { color: #f7f8f9; }
+html[data-theme="dark"] .config-field select option { background: #262b32; }
+html[data-theme="dark"] .config-field input::placeholder { color: #a5acb2; }
+html[data-theme="dark"] .config-field:focus-within { background: #363c43; }
+html[data-theme="dark"] .config-divider { background: #4a5057; }
+html[data-theme="dark"] .message { border-color: #525960; background: #30363d; }
+html[data-theme="dark"] .message.assistant { border-color: #3f454c; background: #22272d; }
+html[data-theme="dark"] .message-role, html[data-theme="dark"] .message.assistant .message-role { color: #ffe270; }
+html[data-theme="dark"] .message-content { color: #f1f2f3; }
+html[data-theme="dark"] .message-content pre, html[data-theme="dark"] .message-content code { background: #15191e; }
+html[data-theme="dark"] .message-content pre code { background: none; }
+html[data-theme="dark"] .message-content a { color: #ffe270; }
+html[data-theme="dark"] .message-empty { color: #aeb4b9; }
+html[data-theme="dark"] .settings-panel { border-color: #41474e; background: #20252b; box-shadow: 0 18px 42px #0006; }
+html[data-theme="dark"] .settings-panel h2, html[data-theme="dark"] .theme-settings legend { color: #fff; }
+html[data-theme="dark"] .theme-option { border-color: #434a52; background: #262b32; color: #e6e8ea; }
+html[data-theme="dark"] .theme-option:has(input:checked) { border-color: #ffd300; background: #363426; }
+html[data-theme="dark"] .theme-option input, html[data-theme="dark"] .tool-row input { accent-color: #ffd300; }
+html[data-theme="dark"] .theme-option small { color: #b0b6bb; }
+html[data-theme="dark"] .secondary-button { border-color: #777039; background: #3a3825; color: #ffe270; }
+html[data-theme="dark"] .text-button { color: #ffe270; }
+html[data-theme="dark"] .tools-dialog { border-color: #555c64; background: #262b32; color: #fff; box-shadow: 0 25px 70px #000b; }
+html[data-theme="dark"] .tools-dialog::backdrop { background: #090c11bb; }
+html[data-theme="dark"] .tools-close { color: #d3d6d9; }
+html[data-theme="dark"] .tool-row { border-color: #4c535b; background: #30363d; }
+html[data-theme="dark"] .tool-row small { color: #bdc2c7; }
+html[data-theme="dark"] .notice { border-color: #89676b; background: #382b2e; color: #ffd5d8; }
