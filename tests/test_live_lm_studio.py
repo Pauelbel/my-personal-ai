@@ -67,7 +67,8 @@ def test_live_memory_update(tmp_path) -> None:
             client.get(f"/api/memory/{document['name']}").json()["content"]
             for document in documents
         ]
-        assert any("<!-- memory:id=" in content for content in contents)
+        assert any("\n- " in content for content in contents)
+        assert all("<!-- memory:id=" not in content for content in contents)
 
         repeated = client.post(f"/api/sessions/{session['id']}/memory/update")
         assert repeated.status_code == 200

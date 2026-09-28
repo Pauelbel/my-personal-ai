@@ -21,6 +21,7 @@ export function renderPromptPanel() {
 }
 
 export async function showPrompt() {
+  state.showingTools = false;
   state.showingSettings = false;
   state.showingMemory = false;
   state.showingPrompt = true;

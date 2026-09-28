@@ -11,6 +11,7 @@ export function renderMemoryPanel() {
 }
 
 export async function showMemory() {
+  state.showingTools = false;
   state.showingSettings = false;
   state.showingMemory = true;
   state.showingPrompt = false;

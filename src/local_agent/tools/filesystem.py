@@ -39,6 +39,11 @@ def _inside_workspace(workspace: Path, relative_path: object) -> Path:
     return target
 
 
+def _deny_protected_write(target: Path, protected_root: Path | None) -> None:
+    if protected_root is not None and target.resolve().is_relative_to(protected_root.resolve()):
+        raise ValueError("Файлы долговременной памяти меняются только через раздел «Память»")
+
+
 class ListFilesTool:
     id = "list_files"
     name = "Список файлов"
@@ -194,11 +199,14 @@ class WriteFileTool:
         "additionalProperties": False,
     }
 
+    def __init__(self, protected_root: Path | None = None) -> None:
+        self._protected_root = protected_root
+
     async def execute(self, arguments: dict[str, object], workspace: Path) -> ToolResult:
-        return await asyncio.to_thread(self._run, arguments, workspace)
+        return await asyncio.to_thread(self._run, arguments, workspace, self._protected_root)
 
     @staticmethod
-    def _run(arguments: dict[str, object], workspace: Path) -> ToolResult:
+    def _run(arguments: dict[str, object], workspace: Path, protected_root: Path | None = None) -> ToolResult:
         try:
             content = arguments.get("content")
             if not isinstance(content, str):
@@ -211,6 +219,7 @@ class WriteFileTool:
             target = (root / _relative(arguments.get("path"))).resolve()
             if not target.is_relative_to(root) or target == root:
                 raise ValueError("Путь выходит за пределы рабочей папки")
+            _deny_protected_write(target, protected_root)
             if target.is_dir():
                 raise ValueError("По этому пути находится папка")
             existed = target.exists()
@@ -242,11 +251,14 @@ class EditFileTool:
         "additionalProperties": False,
     }
 
+    def __init__(self, protected_root: Path | None = None) -> None:
+        self._protected_root = protected_root
+
     async def execute(self, arguments: dict[str, object], workspace: Path) -> ToolResult:
-        return await asyncio.to_thread(self._run, arguments, workspace)
+        return await asyncio.to_thread(self._run, arguments, workspace, self._protected_root)
 
     @staticmethod
-    def _run(arguments: dict[str, object], workspace: Path) -> ToolResult:
+    def _run(arguments: dict[str, object], workspace: Path, protected_root: Path | None = None) -> ToolResult:
         try:
             old_text, new_text = arguments.get("old_text"), arguments.get("new_text")
             if not isinstance(old_text, str) or not old_text:
@@ -255,6 +267,7 @@ class EditFileTool:
                 raise ValueError("new_text должен быть строкой")
             root = _workspace_root(workspace)
             target = _inside_workspace(workspace, arguments.get("path"))
+            _deny_protected_write(target, protected_root)
             if not target.is_file():
                 raise ValueError("Это не файл")
             if target.stat().st_size > MAX_WRITE_BYTES:

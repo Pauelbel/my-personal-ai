@@ -3,7 +3,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -42,7 +42,7 @@ from local_agent.tools.filesystem import (
     SearchFilesTool,
     WriteFileTool,
 )
-from local_agent.tools.git import GitLogTool, GitShowTool
+from local_agent.tools.git import GitTool
 from local_agent.tools.registry import ToolRegistry
 
 
@@ -101,8 +101,9 @@ def create_app(
         )
         app.state.memory_service.initialize()
         app.state.tool_registry = ToolRegistry([
-            ListFilesTool(), ReadFileTool(), SearchFilesTool(), WriteFileTool(), EditFileTool(),
-            GitLogTool(), GitShowTool(),
+            ListFilesTool(), ReadFileTool(), SearchFilesTool(),
+            WriteFileTool(active_settings.memory_path), EditFileTool(active_settings.memory_path),
+            GitTool(),
         ])
         app.state.agent_registry = AgentRegistry(
             load_agents(active_settings.agents_path, active_settings.default_model)
@@ -136,6 +137,14 @@ def create_app(
 
     app = FastAPI(title="Meepo Agent", version="0.1.0", lifespan=lifespan)
     app.state.settings = active_settings
+    @app.middleware("http")
+    async def refresh_ui_assets(request: Request, call_next):
+        response = await call_next(request)
+        # HTML и модули должны обновляться вместе, иначе браузер смешивает версии интерфейса.
+        if request.url.path == "/" or request.url.path.startswith("/ui/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     # Starlette оборачивает последним добавленный middleware снаружи, поэтому отказы тоже попадут в лог.
     app.add_middleware(LocalOriginMiddleware, allowed_hosts=active_settings.allowed_host_set)
     app.add_middleware(RequestLoggingMiddleware)

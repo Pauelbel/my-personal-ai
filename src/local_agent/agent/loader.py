@@ -3,14 +3,16 @@
 import re
 import shutil
 from pathlib import Path
+from uuid import uuid4
 
 from local_agent.agent.models import Agent, Skill
+from local_agent.tools.registry import normalize_tool_ids
 
 DEFAULT_AGENT_FILE = """---
 name: Основной агент
 provider: lm_studio
 model:
-tools: list_files, read_file, search_files, write_file, edit_file, git_log, git_show
+tools: list_files, read_file, search_files, write_file, edit_file, git
 ---
 Ты полезный локальный ассистент. Отвечай на языке пользователя.
 Используй файловые инструменты только когда пользователь просит работать с файлами.
@@ -19,6 +21,7 @@ tools: list_files, read_file, search_files, write_file, edit_file, git_log, git_
 AGENT_KEYS = {"name", "provider", "model", "tools"}
 SKILL_KEYS = {"name", "description"}
 SKILL_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+ARCHIVED_SKILL_ID = re.compile(r"(?P<id>[a-z0-9][a-z0-9_-]*)\.[0-9a-f]{32}\.md")
 DEFAULT_SKILLS = Path(__file__).resolve().parent / "default_skills"
 
 
@@ -42,6 +45,70 @@ def save_prompt(root: Path, agent_id: str, prompt: str, default_model: str) -> A
     path = root / f"{agent_id}.md"
     _replace_body(path, prompt, "Системный промпт не может быть пустым")
     return _parse_agent(path, default_model)
+
+
+def create_skill(root: Path, name: str, description: str, instructions: str) -> Skill:
+    """Создаёт навык с безопасным ID, не перезаписывая существующие файлы."""
+    name, description, instructions = name.strip(), description.strip(), instructions.strip()
+    if not name or not description or not instructions:
+        raise ValueError("Название, описание и инструкции скилла не могут быть пустыми")
+    if any("\n" in value or "\r" in value for value in (name, description)):
+        raise ValueError("Название и описание скилла должны быть в одну строку")
+    root.mkdir(parents=True, exist_ok=True)
+    skill_id = f"skill-{uuid4().hex}"
+    path = root / f"{skill_id}.md"
+    with path.open("x", encoding="utf-8", newline="\n") as target:
+        target.write(f"---\nname: {name}\ndescription: {description}\n---\n{instructions}\n")
+    return _parse_skill(path)
+
+
+def archive_skill(root: Path, skill_id: str) -> None:
+    """Убирает навык из каталога, сохраняя его файл в архиве для восстановления."""
+    if not SKILL_ID.fullmatch(skill_id):
+        raise ValueError("Недопустимый ID скилла")
+    path = root / f"{skill_id}.md"
+    archive = root / ".deleted"
+    archive.mkdir(exist_ok=True)
+    path.rename(archive / f"{skill_id}.{uuid4().hex}.md")
+
+
+def archived_skills(root: Path) -> list[tuple[str, Skill]]:
+    """Перечисляет только файлы, созданные штатным архивированием скиллов."""
+    archive = root / ".deleted"
+    if not archive.exists():
+        return []
+    return [
+        (path.name, _parse_skill(path, match["id"]))
+        for path in sorted(archive.iterdir())
+        if path.is_file() and (match := ARCHIVED_SKILL_ID.fullmatch(path.name))
+    ]
+
+
+def restore_skill(root: Path, archive_id: str) -> Skill:
+    """Возвращает скилл из архива, не заменяя существующий скилл с тем же ID."""
+    match = ARCHIVED_SKILL_ID.fullmatch(archive_id)
+    if match is None:
+        raise ValueError("Недопустимый ID записи архива")
+    source = root / ".deleted" / archive_id
+    skill = _parse_skill(source, match["id"])
+    target = root / f"{skill.id}.md"
+    if target.exists():
+        raise FileExistsError("Скилл с таким ID уже существует")
+    source.rename(target)
+    return skill
+
+
+def clear_skill_archive(root: Path) -> int:
+    """Очищает штатные записи архива; посторонние файлы не затрагивает."""
+    archive = root / ".deleted"
+    if not archive.exists():
+        return 0
+    deleted = 0
+    for path in archive.iterdir():
+        if path.is_file() and ARCHIVED_SKILL_ID.fullmatch(path.name):
+            path.unlink()
+            deleted += 1
+    return deleted
 
 
 def save_skill(root: Path, skill_id: str, instructions: str) -> Skill:
@@ -91,12 +158,15 @@ def _parse_agent(path: Path, default_model: str) -> Agent:
         system_prompt=prompt.strip(),
         llm_provider=fields.get("provider") or "lm_studio",
         model=fields.get("model") or default_model,
-        tools=tuple(item.strip() for item in fields.get("tools", "").split(",") if item.strip()),
+        tools=tuple(normalize_tool_ids(
+            item.strip() for item in fields.get("tools", "").split(",") if item.strip()
+        )),
     )
 
 
-def _parse_skill(path: Path) -> Skill:
-    if not SKILL_ID.fullmatch(path.stem):
+def _parse_skill(path: Path, skill_id: str | None = None) -> Skill:
+    skill_id = path.stem if skill_id is None else skill_id
+    if not SKILL_ID.fullmatch(skill_id):
         raise ValueError(f"{path}: имя файла навыка — строчные латинские буквы, цифры, - и _")
     header, instructions = _split(path)
     fields = _fields(path, header, SKILL_KEYS)
@@ -105,7 +175,7 @@ def _parse_skill(path: Path) -> Skill:
     if not instructions.strip():
         raise ValueError(f"{path}: пустые инструкции навыка")
     return Skill(
-        id=path.stem,
+        id=skill_id,
         name=fields.get("name") or path.stem,
         description=fields["description"],
         instructions=instructions.strip(),

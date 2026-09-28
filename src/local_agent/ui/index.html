@@ -17,10 +17,7 @@
     <div class="app-shell">
       <aside class="sidebar" aria-label="Навигация">
         <div class="sidebar-tools">
-          <button class="tools-button" id="show-tools" type="button">⚒ Инструменты</button>
-          <button class="tools-button" id="show-memory" type="button">◇ Память</button>
-          <button class="tools-button" id="show-prompt" type="button">✎ Системный промпт</button>
-          <button class="tools-button" id="show-skills" type="button">✦ Навыки</button>
+          <button class="tools-button" id="show-customization" type="button">⚒ Кастомизация</button>
         </div>
 
         <button class="new-session" id="new-session" type="button">
@@ -104,7 +101,20 @@
           <p class="settings-note">Параметры сервера пока задаются в локальном файле конфигурации.</p>
         </section>
 
-        <section class="content-panel memory-panel" id="memory-panel" aria-labelledby="memory-title" hidden>
+        <section class="content-panel customization-panel" id="customization-panel" aria-labelledby="customization-title" hidden>
+          <h2 id="customization-title">Кастомизация</h2>
+          <p class="customization-description">Настройте инструменты, память и инструкции агента.</p>
+          <nav class="customization-tabs" aria-label="Разделы кастомизации">
+            <button id="show-tools" type="button" aria-controls="tools-panel">Инструменты</button>
+            <button id="show-memory" type="button" aria-controls="memory-panel">Память</button>
+            <button id="show-prompt" type="button" aria-controls="prompt-panel">Системный промпт</button>
+            <button id="show-skills" type="button" aria-controls="skills-panel">Скиллы</button>
+          </nav>
+          <section id="tools-panel" aria-labelledby="show-tools" hidden>
+            <p id="tools-intro"></p>
+            <div class="tools-list" id="tools-list"></div>
+          </section>
+        <section class="memory-panel" id="memory-panel" aria-labelledby="memory-title" hidden>
           <div class="memory-header">
             <div>
               <span class="section-label" id="memory-title">ДОЛГОВРЕМЕННАЯ ПАМЯТЬ</span>
@@ -123,7 +133,7 @@
           </div>
         </section>
 
-        <section class="content-panel memory-panel" id="prompt-panel" aria-labelledby="prompt-title" hidden>
+        <section class="memory-panel" id="prompt-panel" aria-labelledby="prompt-title" hidden>
           <div class="memory-header">
             <div>
               <span class="section-label" id="prompt-title">СИСТЕМНЫЙ ПРОМПТ</span>
@@ -142,34 +152,70 @@
           </div>
         </section>
 
-        <section class="content-panel memory-panel" id="skills-panel" aria-labelledby="skills-title" hidden>
+        <section class="memory-panel" id="skills-panel" aria-labelledby="skills-title" hidden>
           <div class="memory-header">
             <div>
-              <span class="section-label" id="skills-title">НАВЫКИ</span>
-              <p>Готовые инструкции для типовых задач. Модель видит только список с описаниями и сама подгружает нужный навык, когда задача под него подходит. Новый навык — это файл <code>&lt;id&gt;.md</code> с полями name и description в папке навыков; он появится после перезапуска.</p>
+              <span class="section-label" id="skills-title">СКИЛЛЫ</span>
+              <p>Готовые инструкции для типовых задач. Модель видит список с описаниями и сама подгружает нужный скилл. Добавленные здесь скиллы доступны сразу; файлы, добавленные вручную, подхватываются после перезапуска.</p>
+            </div>
+            <div class="skill-header-actions">
+              <button id="show-skill-archive" type="button">Архив</button>
+              <button class="primary-button" id="add-skill" type="button">＋ Добавить скилл</button>
             </div>
           </div>
           <p class="memory-status" id="skills-status" role="status"></p>
-          <p class="memory-status" id="skills-empty" hidden>Навыков пока нет.</p>
+          <p class="memory-status" id="skills-empty" hidden>Скиллов пока нет.</p>
           <div class="memory-workspace">
-            <nav class="memory-files" id="skills-list" aria-label="Навыки"></nav>
+            <nav class="memory-files" id="skills-list" aria-label="Скиллы"></nav>
             <div class="memory-editor">
-              <label for="skill-content" id="skill-title">Выберите навык</label>
+              <label for="skill-content" id="skill-title">Выберите скилл</label>
               <p class="memory-document-description" id="skill-description"></p>
-              <textarea id="skill-content" spellcheck="true" disabled></textarea>
-              <button class="primary-button" id="save-skill" type="button" disabled>Сохранить</button>
+              <div class="skill-view-controls" aria-label="Режим просмотра скилла">
+                <button id="skill-view" type="button" aria-pressed="true" disabled>Просмотр</button>
+                <button id="skill-edit" type="button" aria-pressed="false" disabled>Редактировать</button>
+                <button id="delete-skill" type="button" disabled>Удалить</button>
+              </div>
+              <div class="message-content skill-preview" id="skill-preview" role="region" aria-labelledby="skill-title"></div>
+              <textarea id="skill-content" spellcheck="true" disabled hidden></textarea>
+              <button class="primary-button" id="save-skill" type="button" disabled hidden>Сохранить</button>
             </div>
           </div>
         </section>
+        </section>
       </main>
     </div>
-    <dialog class="tools-dialog" id="tools-dialog" aria-labelledby="tools-title">
+    <dialog class="tools-dialog skill-dialog" id="skill-archive-dialog" aria-labelledby="skill-archive-title">
       <div class="tools-dialog-header">
-        <h2 id="tools-title">Инструменты</h2>
-        <button class="tools-close" id="close-tools" type="button" aria-label="Закрыть">×</button>
+        <h2 id="skill-archive-title">Архив скиллов</h2>
+        <button class="tools-close" id="skill-archive-close" type="button" aria-label="Закрыть">×</button>
       </div>
-      <p id="tools-intro"></p>
-      <div class="tools-list" id="tools-list"></div>
+      <p>Удалённые скиллы можно восстановить. Очистка архива удаляет их файлы без возможности восстановления через приложение.</p>
+      <p id="skill-archive-status" role="status"></p>
+      <div class="tools-list" id="skill-archive-list"></div>
+      <div class="skill-dialog-actions">
+        <button id="clear-skill-archive" type="button" disabled>Очистить архив</button>
+      </div>
+    </dialog>
+    <dialog class="tools-dialog skill-dialog" id="skill-dialog" aria-labelledby="skill-dialog-title">
+      <form id="skill-form">
+        <div class="tools-dialog-header">
+          <h2 id="skill-dialog-title">Добавить скилл</h2>
+          <button class="tools-close" id="skill-close" type="button" aria-label="Закрыть">×</button>
+        </div>
+        <div class="skill-form-fields">
+          <label for="new-skill-name">Название</label>
+          <input id="new-skill-name" maxlength="120" required placeholder="Например, диагностика ошибки" />
+          <label for="new-skill-description">Когда использовать</label>
+          <input id="new-skill-description" maxlength="500" required placeholder="Опишите задачи, для которых нужен этот скилл" />
+          <label for="new-skill-instructions">Инструкции (Markdown)</label>
+          <textarea id="new-skill-instructions" rows="10" maxlength="65536" required placeholder="Цель, порядок действий и ожидаемый результат"></textarea>
+        </div>
+        <p class="memory-status" id="skill-create-error" role="status"></p>
+        <div class="skill-dialog-actions">
+          <button id="skill-cancel" type="button">Отмена</button>
+          <button class="primary-button" id="skill-create" type="submit">Добавить</button>
+        </div>
+      </form>
     </dialog>
     <dialog class="tools-dialog project-dialog" id="project-dialog" aria-labelledby="project-dialog-title">
       <form id="project-form">

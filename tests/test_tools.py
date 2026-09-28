@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
 from local_agent.llm.models import ChatResult, ToolCall
-from local_agent.tools.filesystem import EditFileTool, ListFilesTool, ReadFileTool
+from local_agent.tools.filesystem import EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool
 
 
 class ToolCallingProvider:
@@ -38,7 +38,7 @@ def test_session_tools_persist(tmp_path):
         other = client.post("/api/sessions", json={}).json()
         tools = client.get(f"/api/sessions/{session['id']}/tools").json()
         assert [tool["id"] for tool in tools] == [
-            "list_files", "read_file", "search_files", "write_file", "edit_file", "git_log", "git_show"
+            "list_files", "read_file", "search_files", "write_file", "edit_file", "git"
         ]
         assert not any(tool["enabled"] for tool in tools)
         updated = client.put(
@@ -52,7 +52,7 @@ def test_session_tools_persist(tmp_path):
         ).status_code == 404
     with TestClient(create_app(settings)) as client:
         tools = client.get(f"/api/sessions/{session['id']}/tools").json()
-        assert [tool["enabled"] for tool in tools] == [False, True, False, False, False, False, False]
+        assert [tool["enabled"] for tool in tools] == [False, True, False, False, False, False]
         other_tools = client.get(f"/api/sessions/{other['id']}/tools").json()
         assert not any(tool["enabled"] for tool in other_tools)
 
@@ -88,7 +88,7 @@ def test_model_only_receives_enabled_tools_and_result(tmp_path):
         ).json()
         # Новый проект начинает с инструментов чтения; выключаем их, чтобы проверить путь с нуля.
         defaults = [tool["id"] for tool in client.get(f"/api/sessions/{session['id']}/tools").json() if tool["enabled"]]
-        assert defaults == ["list_files", "read_file", "search_files", "git_log", "git_show"]
+        assert defaults == ["list_files", "read_file", "search_files", "git"]
         for tool_id in defaults:
             client.put(f"/api/sessions/{session['id']}/tools/{tool_id}", json={"enabled": False})
         first = client.post(f"/api/sessions/{session['id']}/turns", json={"content": "Привет"})
@@ -164,3 +164,50 @@ def test_edit_file_validates_arguments(tmp_path, arguments):
     (tmp_path / "file.txt").write_text("x\n", encoding="utf-8")
 
     assert edit(tmp_path, path="file.txt", **arguments).is_error
+
+
+def test_file_write_tools_cannot_change_memory(tmp_path):
+    workspace = tmp_path / "workspace"
+    memory = workspace / "data" / "memory"
+    memory.mkdir(parents=True)
+    path = memory / "preferences.md"
+    path.write_text("# Предпочтения\n", encoding="utf-8")
+
+    async def exercise():
+        write = await WriteFileTool(memory).execute(
+            {"path": "data/memory/preferences.md", "content": "Удалено"}, workspace,
+        )
+        edit_result = await EditFileTool(memory).execute(
+            {"path": "data/memory/preferences.md", "old_text": "Предпочтения", "new_text": "Удалено"},
+            workspace,
+        )
+        new_file = await WriteFileTool(memory).execute(
+            {"path": "data/memory/new.md", "content": "Новая память"}, workspace,
+        )
+        ordinary = await WriteFileTool(memory).execute(
+            {"path": "note.txt", "content": "Обычный файл"}, workspace,
+        )
+        assert write.is_error and edit_result.is_error and new_file.is_error
+        assert not ordinary.is_error
+
+    asyncio.run(exercise())
+    assert path.read_text(encoding="utf-8") == "# Предпочтения\n"
+    assert not (memory / "new.md").exists()
+
+
+def test_app_configures_memory_write_protection(tmp_path):
+    settings = Settings(
+        agents_path=tmp_path / "agents",
+        sessions_path=tmp_path / "sessions",
+        conversations_path=tmp_path / "conversations",
+        memory_path=tmp_path / "memory",
+        _env_file=None,
+    )
+    with TestClient(create_app(settings)) as client:
+        tool = client.app.state.tool_registry.get("write_file")
+        result = asyncio.run(tool.execute(
+            {"path": "memory/preferences.md", "content": "Удалено"}, tmp_path,
+        ))
+        assert result.is_error
+        assert "только через раздел" in result.content
+        assert (settings.memory_path / "preferences.md").read_text(encoding="utf-8") == "# Предпочтения\n"

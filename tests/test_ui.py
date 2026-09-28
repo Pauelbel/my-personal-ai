@@ -29,6 +29,8 @@ def test_ui_files_are_served(tmp_path) -> None:
         tools_script = client.get("/ui/js/tools-dialog.js")
 
     assert page.status_code == 200
+    assert page.headers["cache-control"] == "no-cache"
+    assert script.headers["cache-control"] == "no-cache"
     assert "Новая сессия" in page.text
     assert 'class="brand"' not in page.text
     assert "Локальный агент</small>" not in page.text
@@ -48,8 +50,10 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert 'id="title-form"' not in page.text
     assert 'class="header-edit"' not in page.text
     assert 'class="session-context"' not in page.text
-    assert page.text.index('id="show-tools"') < page.text.index('id="new-session"')
-    assert 'id="tools-dialog"' in page.text
+    assert page.text.index('id="show-customization"') < page.text.index('id="new-session"')
+    assert 'id="customization-panel"' in page.text
+    assert 'id="tools-panel"' in page.text
+    assert 'id="tools-dialog"' not in page.text
     assert 'id="show-memory"' in page.text
     assert 'id="memory-panel"' in page.text
     assert '<h2 id="memory-title">Память</h2>' not in page.text

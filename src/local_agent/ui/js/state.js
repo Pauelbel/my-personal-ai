@@ -1,5 +1,6 @@
 // Общее состояние экрана и ссылки на элементы; модули меняют state и просят app.js перерисовать экран.
 const $ = (selector) => document.querySelector(selector);
+const initialView = loadView();
 
 export const elements = {
   list: $("#session-list"),
@@ -7,8 +8,9 @@ export const elements = {
   count: $("#session-count"),
   newButton: $("#new-session"),
   toolsButton: $("#show-tools"),
-  toolsDialog: $("#tools-dialog"),
-  toolsClose: $("#close-tools"),
+  customizationButton: $("#show-customization"),
+  customizationPanel: $("#customization-panel"),
+  toolsPanel: $("#tools-panel"),
   toolsIntro: $("#tools-intro"),
   toolsList: $("#tools-list"),
   memoryButton: $("#show-memory"),
@@ -45,6 +47,26 @@ export const elements = {
   skillTitle: $("#skill-title"),
   skillDescription: $("#skill-description"),
   skillContent: $("#skill-content"),
+  skillPreview: $("#skill-preview"),
+  skillView: $("#skill-view"),
+  skillEdit: $("#skill-edit"),
+  skillDelete: $("#delete-skill"),
+  skillArchive: $("#show-skill-archive"),
+  skillArchiveDialog: $("#skill-archive-dialog"),
+  skillArchiveClose: $("#skill-archive-close"),
+  skillArchiveList: $("#skill-archive-list"),
+  skillArchiveStatus: $("#skill-archive-status"),
+  skillArchiveClear: $("#clear-skill-archive"),
+  skillAdd: $("#add-skill"),
+  skillDialog: $("#skill-dialog"),
+  skillForm: $("#skill-form"),
+  skillClose: $("#skill-close"),
+  skillCancel: $("#skill-cancel"),
+  skillCreate: $("#skill-create"),
+  skillCreateError: $("#skill-create-error"),
+  newSkillName: $("#new-skill-name"),
+  newSkillDescription: $("#new-skill-description"),
+  newSkillInstructions: $("#new-skill-instructions"),
   skillSave: $("#save-skill"),
   emptyState: $("#empty-state"),
   detail: $("#session-detail"),
@@ -93,10 +115,11 @@ export const state = {
   messagesSessionId: null,
   preferredModel: "",
   selectedId: null,
-  showingSettings: false,
-  showingMemory: false,
-  showingPrompt: false,
-  showingSkills: false,
+  showingSettings: initialView === "settings",
+  showingTools: initialView === "tools",
+  showingMemory: initialView === "memory",
+  showingPrompt: initialView === "prompt",
+  showingSkills: initialView === "skills",
   editingTitle: false,
   actionsDisabled: false,
   sessionFilter: "",
@@ -105,6 +128,18 @@ export const state = {
   // Растёт при каждой замене списка сообщений: чат перерисовывается только тогда, а не на каждый токен.
   messagesVersion: 0,
 };
+
+function loadView() {
+  const viewFromUrl = window.location.hash.replace(/^#(?:customization\/)?/, "");
+  if (["chat", "settings", "tools", "memory", "prompt", "skills"].includes(viewFromUrl)) {
+    return viewFromUrl;
+  }
+  try {
+    return localStorage.getItem("app-view") || "chat";
+  } catch {
+    return "chat";
+  }
+}
 
 function loadCollapsed() {
   try {
@@ -143,6 +178,16 @@ export function setRenderer(callback) {
 }
 
 export function render() {
+  const view = state.showingSettings ? "settings" : state.showingTools ? "tools"
+    : state.showingMemory ? "memory" : state.showingPrompt ? "prompt"
+    : state.showingSkills ? "skills" : "chat";
+  try {
+    localStorage.setItem("app-view", view);
+  } catch {
+    // Без localStorage навигация работает, но не сохраняется после обновления.
+  }
+  const hash = ["chat", "settings"].includes(view) ? `#${view}` : `#customization/${view}`;
+  if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
   renderer();
 }
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,7 +20,7 @@ DEFAULT_DOCUMENTS = {
     "decisions.md": "Решения",
 }
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*\.md$")
-ENTRY = re.compile(r"^- <!-- memory:id=([a-f0-9]{32}) --> (.*)$")
+LEGACY_MARKER = re.compile(r"(?m)^- <!-- memory:id=[a-f0-9]{32} --> ")
 
 
 class MemoryDocument(BaseModel):
@@ -45,9 +46,20 @@ class MarkdownMemoryStore:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.state_path = root / ".state.json"
+        self.pending_path = root / ".pending.json"
+        self.log_path = root / ".updates.jsonl"
 
     def initialize(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
+        self._recover_pending()
+        legacy = {}
+        for path in self.root.glob("*.md"):
+            original = path.read_text(encoding="utf-8")
+            cleaned = LEGACY_MARKER.sub("- ", original)
+            if cleaned != original:
+                legacy[path.name] = cleaned
+        if legacy:
+            self._commit(legacy, {"kind": "remove_legacy_ids", "files": sorted(legacy)})
         for name, title in DEFAULT_DOCUMENTS.items():
             path = self.root / name
             if not path.exists():
@@ -69,12 +81,15 @@ class MarkdownMemoryStore:
         return MemoryDocument(name=name, title=title, content=content)
 
     def write(self, name: str, content: str) -> MemoryDocument:
-        path = self._path(name)
+        self._path(name)
         self.initialize()
-        self._atomic_write(path, content)
+        self._commit(
+            {name: content},
+            {"kind": "manual_edit", "files": [name]},
+        )
         return self.read(name)
 
-    def context(self, max_chars: int | None, *, strip_ids: bool = True) -> str:
+    def context(self, max_chars: int | None) -> str:
         """Собирает все файлы памяти; обрезает только целыми строками, чтобы записи не рвались."""
         documents = {document.name: document for document in self.list_documents()}
         order = [name for name in DEFAULT_DOCUMENTS if name in documents]
@@ -89,8 +104,6 @@ class MarkdownMemoryStore:
             ]
             if not any(line.strip() for line in body):
                 continue
-            if strip_ids:
-                body = [ENTRY.sub(r"- \2", line) for line in body]
             for line in [f"# {document.title}", *body, ""]:
                 if max_chars is not None and used + len(line) + 1 > max_chars:
                     return "\n".join(lines).strip()
@@ -99,11 +112,13 @@ class MarkdownMemoryStore:
         return "\n".join(lines).strip()
 
     def checkpoint(self, session_id: str) -> str | None:
+        self.initialize()
         checkpoint = self._read_state().sessions.get(session_id)
         return checkpoint.last_processed_message_id if checkpoint else None
 
     def forget(self, session_id: str) -> None:
         """Удаляет checkpoint удалённой сессии; сами записи памяти остаются."""
+        self.initialize()
         state = self._read_state()
         if state.sessions.pop(session_id, None) is not None:
             self._write_state(state)
@@ -117,39 +132,131 @@ class MarkdownMemoryStore:
     ) -> int:
         self.initialize()
         documents = {document.name: document.content for document in self.list_documents()}
+        original_documents = documents.copy()
         changed: set[str] = set()
 
-        for index, operation in enumerate(patch.operations):
+        for operation in patch.operations:
             if operation.file not in documents:
                 documents[operation.file] = f"# {operation.file.removesuffix('.md').replace('_', ' ').replace('-', ' ').title()}\n"
             original = documents[operation.file]
             if isinstance(operation, AddOperation):
-                entry_id = self._new_entry_id(session_id, operation.source_message_ids, index)
-                updated = self._add(original, operation.section, entry_id, operation.content)
+                updated = self._add(original, operation.section, operation.content)
             elif isinstance(operation, UpdateOperation):
-                updated = self._update(original, operation.entry_id, operation.content)
+                updated = self._update(original, operation.old_content, operation.content)
             elif isinstance(operation, DeleteOperation):
-                updated = self._delete(original, operation.entry_id)
+                updated = self._delete(original, operation.old_content)
             else:  # pragma: no cover - the discriminated model prevents this branch
                 raise ValueError("Неподдерживаемая операция памяти")
             documents[operation.file] = updated
             if updated != original:
                 changed.add(operation.file)
 
-        for name in sorted(changed):
-            self._atomic_write(self._path(name), documents[name])
-
+        original_state = self.state_path.read_text(encoding="utf-8") if self.state_path.exists() else None
         state = self._read_state()
         state.sessions[session_id] = SessionCheckpoint(
             last_processed_message_id=last_processed_message_id
         )
-        self._write_state(state)
+        targets = {name: documents[name] for name in sorted(changed)}
+        targets[self.state_path.name] = self._state_content(state)
+        self._commit(
+            targets,
+            {
+                "kind": "model_update",
+                "session_id": session_id,
+                "last_processed_message_id": last_processed_message_id,
+                "files": sorted(changed),
+                "operations": [operation.op for operation in patch.operations],
+            },
+            expected_before={
+                **{name: original_documents.get(name) for name in changed},
+                self.state_path.name: original_state,
+            },
+        )
         return len(patch.operations)
 
     def _write_state(self, state: MemoryState) -> None:
+        self._atomic_write(self.state_path, self._state_content(state))
+
+    @staticmethod
+    def _state_content(state: MemoryState) -> str:
+        return json.dumps(state.model_dump(), ensure_ascii=False, indent=2) + "\n"
+
+    def _commit(
+        self,
+        targets: dict[str, str],
+        event: dict[str, object],
+        *,
+        expected_before: dict[str, str | None] | None = None,
+    ) -> None:
+        """Фиксирует намерение до первой записи; восстановление повторяет только не изменённые вручную файлы."""
+        if self.pending_path.exists():
+            self._recover_pending()
+        changes = {}
+        for name, content in targets.items():
+            path = self.root / name
+            before = path.read_text(encoding="utf-8") if path.exists() else None
+            if expected_before is not None and before != expected_before[name]:
+                raise ValueError(f"Файл памяти {name} изменился во время обновления")
+            changes[name] = {
+                "before": before,
+                "after": content,
+            }
+        record = {
+            "id": uuid4().hex,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "event": event,
+            "changes": changes,
+        }
         self._atomic_write(
-            self.state_path,
-            json.dumps(state.model_dump(), ensure_ascii=False, indent=2) + "\n",
+            self.pending_path,
+            json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+        )
+        self._recover_pending()
+
+    def _recover_pending(self) -> None:
+        if not self.pending_path.exists():
+            return
+        record = json.loads(self.pending_path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict) or not isinstance(record.get("changes"), dict):
+            raise ValueError("Повреждён pending-журнал памяти")
+        changes = record["changes"]
+        if not isinstance(record.get("id"), str) or not isinstance(record.get("event"), dict):
+            raise ValueError("Повреждён pending-журнал памяти")
+        for name, change in changes.items():
+            if not isinstance(name, str) or (
+                name != self.state_path.name and not SAFE_NAME.fullmatch(name)
+            ):
+                raise ValueError("Недопустимый путь в pending-журнале памяти")
+            if not isinstance(change, dict) or not isinstance(change.get("after"), str) or (
+                change.get("before") is not None and not isinstance(change["before"], str)
+            ):
+                raise ValueError("Повреждён pending-журнал памяти")
+        # Сначала проверяем все файлы: при ручной правке после сбоя нельзя частично продолжить patch.
+        for name, change in changes.items():
+            path = self.root / name
+            current = path.read_text(encoding="utf-8") if path.exists() else None
+            if current not in (change["before"], change["after"]):
+                raise ValueError(f"Файл памяти {name} изменён после сбоя; требуется ручная проверка")
+        ordered = sorted(changes, key=lambda name: (name == self.state_path.name, name))
+        for name in ordered:
+            change = changes[name]
+            path = self.root / name
+            current = path.read_text(encoding="utf-8") if path.exists() else None
+            if current not in (change["before"], change["after"]):
+                raise ValueError(f"Файл памяти {name} изменён после сбоя; требуется ручная проверка")
+            if current != change["after"]:
+                self._atomic_write(path, change["after"])
+        self._append_log(record)
+        self.pending_path.unlink()
+
+    def _append_log(self, record: dict[str, object]) -> None:
+        previous = self.log_path.read_text(encoding="utf-8") if self.log_path.exists() else ""
+        if any(json.loads(line).get("id") == record["id"] for line in previous.splitlines()):
+            return
+        event = {key: record[key] for key in ("id", "timestamp", "event")}
+        self._atomic_write(
+            self.log_path,
+            previous + json.dumps(event, ensure_ascii=False) + "\n",
         )
 
     def _read_state(self) -> MemoryState:
@@ -163,17 +270,10 @@ class MarkdownMemoryStore:
         return self.root / name
 
     @staticmethod
-    def _new_entry_id(session_id: str, source_ids: list[str], index: int) -> str:
-        from uuid import NAMESPACE_URL, uuid5
-
-        return uuid5(NAMESPACE_URL, f"{session_id}:{','.join(source_ids)}:{index}").hex
-
-    @staticmethod
-    def _add(text: str, section: str, entry_id: str, content: str) -> str:
-        marker = f"<!-- memory:id={entry_id} -->"
-        if marker in text:
-            return text
-        line = f"- {marker} {content}"
+    def _add(text: str, section: str, content: str) -> str:
+        line = f"- {content}"
+        if line in text.splitlines():
+            raise ValueError("Такая запись памяти уже есть в файле")
         lines = text.rstrip().splitlines()
         heading = f"## {section}"
         try:
@@ -192,20 +292,20 @@ class MarkdownMemoryStore:
         return "\n".join(lines).rstrip() + "\n"
 
     @staticmethod
-    def _update(text: str, entry_id: str, content: str) -> str:
+    def _update(text: str, old_content: str, content: str) -> str:
         lines = text.splitlines()
-        matches = [index for index, line in enumerate(lines) if (match := ENTRY.match(line)) and match.group(1) == entry_id]
+        matches = [index for index, line in enumerate(lines) if line == f"- {old_content}"]
         if len(matches) != 1:
-            raise ValueError(f"Запись памяти {entry_id} должна встречаться ровно один раз")
-        lines[matches[0]] = f"- <!-- memory:id={entry_id} --> {content}"
+            raise ValueError("Прежний текст записи памяти должен встречаться ровно один раз")
+        lines[matches[0]] = f"- {content}"
         return "\n".join(lines).rstrip() + "\n"
 
     @staticmethod
-    def _delete(text: str, entry_id: str) -> str:
+    def _delete(text: str, old_content: str) -> str:
         lines = text.splitlines()
-        matches = [index for index, line in enumerate(lines) if (match := ENTRY.match(line)) and match.group(1) == entry_id]
+        matches = [index for index, line in enumerate(lines) if line == f"- {old_content}"]
         if len(matches) != 1:
-            raise ValueError(f"Запись памяти {entry_id} должна встречаться ровно один раз")
+            raise ValueError("Прежний текст записи памяти должен встречаться ровно один раз")
         del lines[matches[0]]
         return "\n".join(lines).rstrip() + "\n"
 

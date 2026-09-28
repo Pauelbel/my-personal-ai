@@ -1,4 +1,4 @@
-"""Git-инструменты только читают историю коммитов рабочей папки и ничего не меняют в репозитории."""
+"""Инструмент Git читает историю, состояние и изменения только внутри рабочей папки."""
 
 import asyncio
 import os
@@ -25,6 +25,7 @@ SAFE_OPTIONS = (
     "-c", "core.fsmonitor=false",
     "-c", "diff.external=",
     "-c", "log.showSignature=false",
+    "-c", "status.renames=false",
 )
 # LC_ALL=C: сообщения git на английском, чтобы распознавать ошибки независимо от языка системы.
 SAFE_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "GIT_PAGER": "cat", "LC_ALL": "C"}
@@ -56,7 +57,7 @@ def _git(workspace: Path, *arguments: str) -> str:
         output = (
             output[:MAX_OUTPUT_CHARS]
             + f"\n… (вывод обрезан до {MAX_OUTPUT_CHARS // 1024} КБ; чтобы увидеть остальное, "
-            "вызовите git_show с тем же commit и path нужного файла из списка выше)"
+            "повторите вызов инструмента git с тем же action и path нужного файла)"
         )
     return output
 
@@ -140,5 +141,69 @@ class GitShowTool:
                 "--format=fuller", commit, *_pathspec(workspace, arguments.get("path")),
             )
             return ToolResult(output.strip())
+        except (OSError, ValueError) as exc:
+            return ToolResult(str(exc), is_error=True)
+
+
+class GitTool:
+    id = "git"
+    name = "Гит"
+    description = (
+        "Чтение Git рабочей папки. Доступные действия (action):\n\n"
+        "log — история коммитов.\n"
+        "show — содержимое коммита по хешу из log.\n"
+        "status — изменённые, подготовленные и новые файлы.\n"
+        "diff — незакоммиченные изменения; staged=true — подготовленные к коммиту.\n\n"
+        "По умолчанию diff сравнивает рабочие файлы с индексом, staged=true — индекс с HEAD. "
+        "Новые файлы видны в status, их содержимое читается через read_file. Только чтение."
+    )
+    requires_approval = False
+    parameters = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["log", "show", "status", "diff"]},
+            "path": {"type": "string", "description": "Файл или папка внутри рабочей папки"},
+            "limit": GitLogTool.parameters["properties"]["limit"],
+            "commit": GitShowTool.parameters["properties"]["commit"],
+            "staged": {"type": "boolean", "description": "Для diff: изменения, подготовленные к коммиту"},
+        },
+        "required": ["action"],
+        "additionalProperties": False,
+    }
+
+    async def execute(self, arguments: dict[str, object], workspace: Path) -> ToolResult:
+        return await asyncio.to_thread(self._run, arguments, workspace)
+
+    @staticmethod
+    def _run(arguments: dict[str, object], workspace: Path) -> ToolResult:
+        try:
+            action = arguments.get("action")
+            fields = {
+                "log": {"action", "path", "limit"},
+                "show": {"action", "path", "commit"},
+                "status": {"action", "path"},
+                "diff": {"action", "path", "staged"},
+            }
+            if not isinstance(action, str) or action not in fields:
+                raise ValueError("action должен быть log, show, status или diff")
+            if set(arguments) - fields[action]:
+                raise ValueError("Переданы параметры, не поддерживаемые выбранным действием Git")
+            if action == "log":
+                return GitLogTool._run(arguments, workspace)
+            if action == "show":
+                return GitShowTool._run(arguments, workspace)
+            paths = _pathspec(workspace, arguments.get("path"))
+            if action == "status":
+                output = _git(workspace, "status", "--short", "--untracked-files=all", *paths)
+                return ToolResult(output.rstrip() or "Рабочая папка чистая")
+            staged = arguments.get("staged", False)
+            if type(staged) is not bool:
+                raise ValueError("staged должен быть логическим значением")
+            flags = ["--cached"] if staged else []
+            output = _git(
+                workspace, "diff", "--no-ext-diff", "--no-textconv", "--no-renames",
+                "--stat", "--patch", *flags, *paths,
+            )
+            return ToolResult(output.strip() or "Изменений нет")
         except (OSError, ValueError) as exc:
             return ToolResult(str(exc), is_error=True)

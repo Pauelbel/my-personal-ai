@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 PATCH_SCHEMA = {
     "type": "object",
     "properties": {
-        "version": {"type": "integer", "enum": [1]},
+        "version": {"type": "integer", "enum": [2]},
         "operations": {
             "type": "array",
             "maxItems": 100,
@@ -35,7 +35,7 @@ PATCH_SCHEMA = {
                     "op": {"type": "string", "enum": ["add", "update", "delete"]},
                     "file": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*\\.md$"},
                     "section": {"type": "string"},
-                    "entry_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+                    "old_content": {"type": "string"},
                     "content": {"type": "string"},
                     "source_message_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                 },
@@ -124,7 +124,7 @@ class MemoryService:
             if not dialogue:
                 # Только служебные сообщения инструментов: разбирать нечего, просто сдвигаем checkpoint.
                 self._store.apply(
-                    MemoryPatch(version=1, operations=[]),
+                    MemoryPatch(version=2, operations=[]),
                     session_id=session.id,
                     last_processed_message_id=messages[-1].id,
                 )
@@ -159,7 +159,7 @@ class MemoryService:
                     session.id, exc.index, exc.reason, checkpoint,
                 )
                 raise MemoryServiceError(f"Модель вернула некорректные операции памяти: {exc}") from exc
-            patch = MemoryPatch(version=1, operations=operations)
+            patch = MemoryPatch(version=2, operations=operations)
 
             try:
                 applied = self._store.apply(
@@ -189,7 +189,7 @@ class MemoryService:
                 role="user",
                 content=json.dumps(
                     {
-                        # Полная память с id по файлам: ключи — единственные допустимые значения file.
+                        # Полная память по файлам: ключи — единственные допустимые значения file.
                         "existing_memory": documents,
                         "new_messages": [
                             {
@@ -226,14 +226,15 @@ class MemoryService:
 Сохраняй лишь устойчивые факты о пользователе, предпочтения, проекты и принятые решения.
 Не считай ответы assistant фактами о пользователе. Не сохраняй временные вопросы и рассуждения.
 Верни только JSON без Markdown-обрамления строго такого вида:
-{"version":1,"operations":[
+{"version":2,"operations":[
 {"op":"add","file":"preferences.md","section":"Рабочий процесс","content":"Одна запись","source_message_ids":["id"]},
-{"op":"update","file":"projects.md","entry_id":"32 шестнадцатеричных символа","content":"Новая запись","source_message_ids":["id"]},
-{"op":"delete","file":"decisions.md","entry_id":"32 шестнадцатеричных символа","source_message_ids":["id"]}
+{"op":"update","file":"projects.md","old_content":"Точный прежний текст","content":"Новая запись","source_message_ids":["id"]},
+{"op":"delete","file":"decisions.md","old_content":"Точный прежний текст","source_message_ids":["id"]}
 ]}
 Ключи existing_memory — единственные допустимые значения file. Новые файлы не создавай.
-Для update и delete используй только существующие memory:id из указанного файла.
-Строки без memory:id — ручные записи пользователя: не меняй и не дублируй их.
+Для update и delete укажи точный текст после "- " у существующей строки в указанном файле.
+Не переписывай целый файл; меняй только запись, которую подтверждают новые слова пользователя.
+Сохраняй ручные записи пользователя, если новые слова явно не исправляют их.
 В source_message_ids указывай только id сообщений с role "user" из new_messages.
 Не добавляй запись, текст которой уже есть в памяти. Любая ошибка отклоняет весь ответ.
-Если полезных изменений нет, верни {"version":1,"operations":[]}."""
+Если полезных изменений нет, верни {"version":2,"operations":[]}."""

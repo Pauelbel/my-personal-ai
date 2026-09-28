@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-PATCH_VERSION = 1
+PATCH_VERSION = 2
 MAX_OPERATIONS = 100
 
 
@@ -23,7 +23,7 @@ class _Operation(BaseModel):
 
 
 class AddOperation(_Operation):
-    """Новая запись; entry_id для неё создаёт хранилище, а не модель."""
+    """Новая строка памяти в указанном разделе."""
 
     op: Literal["add"]
     section: str = Field(min_length=1, max_length=100)
@@ -38,13 +38,13 @@ class AddOperation(_Operation):
 
 
 class UpdateOperation(_Operation):
-    """Новый текст существующей управляемой записи."""
+    """Замена единственной строки с точно указанным прежним текстом."""
 
     op: Literal["update"]
-    entry_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    old_content: str = Field(min_length=1, max_length=2000)
     content: str = Field(min_length=1, max_length=2000)
 
-    @field_validator("content")
+    @field_validator("old_content", "content")
     @classmethod
     def single_line(cls, value: str) -> str:
         if "\n" in value or "\r" in value:
@@ -53,10 +53,17 @@ class UpdateOperation(_Operation):
 
 
 class DeleteOperation(_Operation):
-    """Удаление существующей управляемой записи."""
+    """Удаление единственной строки с точно указанным текстом."""
 
     op: Literal["delete"]
-    entry_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    old_content: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("old_content")
+    @classmethod
+    def single_line(cls, value: str) -> str:
+        if "\n" in value or "\r" in value:
+            raise ValueError("запись памяти должна занимать одну строку")
+        return value
 
 
 MemoryOperation = Annotated[
@@ -70,5 +77,5 @@ class MemoryPatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    version: Literal[1]
+    version: Literal[2]
     operations: list[MemoryOperation] = Field(max_length=MAX_OPERATIONS)

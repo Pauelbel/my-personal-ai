@@ -180,7 +180,9 @@ export async function sendMessage(event) {
         error.messageSaved = item.user_message_saved;
         throw error;
       }
-      render();
+      // Потоковые фрагменты меняют только пузырь ответа. Полная перерисовка здесь
+      // пересоздавала кнопки навигации и срывала клики во время генерации.
+      if (["user_message", "tool_calls", "tool_result", "done"].includes(item.type)) render();
     });
   } catch (error) {
     if (error.name === "AbortError") {

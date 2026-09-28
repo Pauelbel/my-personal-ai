@@ -65,6 +65,11 @@ export const catalogApi = {
 
 export const skillsApi = {
   list: () => request("/skills"),
+  create: (skill) => request("/skills", { method: "POST", body: JSON.stringify(skill) }),
+  delete: (skillId) => request(`/skills/${encodeURIComponent(skillId)}`, { method: "DELETE" }),
+  archive: () => request("/skills/archive"),
+  clearArchive: () => request("/skills/archive", { method: "DELETE" }),
+  restore: (archiveId) => request(`/skills/archive/${encodeURIComponent(archiveId)}/restore`, { method: "POST" }),
   read: (skillId) => request(`/skills/${encodeURIComponent(skillId)}`),
   save: (skillId, instructions) => request(
     `/skills/${encodeURIComponent(skillId)}`,

@@ -3,7 +3,7 @@ import { messagesApi, projectsApi, sessionsApi } from "./api.js";
 import { clearError, elements, render, setMessages, showError, state } from "./state.js";
 
 export function selectSession(id) {
-  elements.toolsDialog.close();
+  state.showingTools = false;
   state.selectedId = id;
   state.editingTitle = false;
   setMessages([], null);
@@ -45,7 +45,7 @@ export async function loadSessions() {
 }
 
 export async function createSession(projectId = null) {
-  elements.toolsDialog.close();
+  state.showingTools = false;
   elements.newButton.disabled = true;
   elements.emptyNewButton.disabled = true;
   try {
@@ -92,7 +92,7 @@ export async function deleteSession(sessionId) {
     `Удалить сессию «${session.title}» и всю её историю сообщений? Это действие нельзя отменить.`
   );
   if (!confirmed) return;
-  elements.toolsDialog.close();
+  state.showingTools = false;
 
   state.actionsDisabled = true;
   render();

@@ -30,3 +30,6 @@ class SkillRegistry:
 
     def replace(self, skill: Skill) -> None:
         self._skills[skill.id] = skill
+
+    def remove(self, skill_id: str) -> None:
+        self._skills.pop(skill_id, None)

@@ -9,7 +9,7 @@ import { renderMemoryPanel, saveMemory, showMemory, updateMemory } from "./memor
 import { initProjectDialog, openProjectDialog } from "./projects.js";
 import { renderPromptPanel, savePrompt, showPrompt } from "./prompt-panel.js";
 import { createSession, deleteSession, loadSessions, renameSession, selectSession } from "./sessions.js";
-import { renderSkillsPanel, saveSkill, showSkills } from "./skills-panel.js";
+import { deleteSkill, initSkillDialog, renderSkillsPanel, saveSkill, setSkillEditing, showSkills } from "./skills-panel.js";
 import { renderSidebar } from "./sidebar.js";
 import {
   elements, render, selectedProject, selectedSession, setRenderer, state, toggleProject,
@@ -46,8 +46,18 @@ function renderApp() {
     onToggle: toggleProject,
   });
 
-  const { showingSettings, showingMemory, showingPrompt, showingSkills, editingTitle } = state;
-  const showingPanel = showingSettings || showingMemory || showingPrompt || showingSkills;
+  const { showingSettings, showingTools, showingMemory, showingPrompt, showingSkills, editingTitle } = state;
+  const showingCustomization = showingTools || showingMemory || showingPrompt || showingSkills;
+  const showingPanel = showingSettings || showingCustomization;
+  elements.customizationPanel.hidden = !showingCustomization;
+  elements.toolsPanel.hidden = !showingTools;
+  elements.customizationButton.classList.toggle("active", showingCustomization);
+  for (const [button, active] of [[elements.toolsButton, showingTools], [elements.memoryButton, showingMemory],
+    [elements.promptButton, showingPrompt], [elements.skillsButton, showingSkills]]) {
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
   elements.settingsPanel.hidden = !showingSettings;
   elements.memoryPanel.hidden = !showingMemory;
   elements.promptPanel.hidden = !showingPrompt;
@@ -55,7 +65,7 @@ function renderApp() {
   elements.sessionPanel.hidden = showingPanel;
   const headerTitle = showingSettings
     ? "Настройки"
-    : showingMemory ? "Память" : showingPrompt ? "Системный промпт" : showingSkills ? "Навыки"
+    : showingCustomization ? "Кастомизация"
     : (selected?.title || "Сессии");
   elements.editTitle.textContent = headerTitle;
   elements.editTitle.title = selected && !showingPanel ? "Переименовать сессию" : headerTitle;
@@ -107,10 +117,10 @@ elements.newButton.addEventListener("click", () => createSession());
 elements.newProjectButton.addEventListener("click", () => openProjectDialog());
 elements.workspace.addEventListener("click", () => { void chooseWorkspace(); });
 elements.toolsButton.addEventListener("click", showTools);
+elements.customizationButton.addEventListener("click", showTools);
 elements.memoryButton.addEventListener("click", showMemory);
 elements.promptButton.addEventListener("click", showPrompt);
 elements.skillsButton.addEventListener("click", showSkills);
-elements.toolsClose.addEventListener("click", () => elements.toolsDialog.close());
 elements.emptyNewButton.addEventListener("click", () => createSession());
 elements.search.addEventListener("input", () => {
   state.sessionFilter = elements.search.value;
@@ -127,13 +137,16 @@ elements.messageInput.addEventListener("keydown", handleMessageKeydown);
 elements.memorySave.addEventListener("click", saveMemory);
 elements.promptSave.addEventListener("click", savePrompt);
 elements.skillSave.addEventListener("click", saveSkill);
+elements.skillView.addEventListener("click", () => setSkillEditing(false));
+elements.skillEdit.addEventListener("click", () => setSkillEditing(true));
+elements.skillDelete.addEventListener("click", deleteSkill);
 elements.memoryUpdateChat.addEventListener("click", updateMemory);
 for (const field of [elements.agent, elements.provider, elements.model]) {
   field.addEventListener("change", () => { void saveConfig(); });
 }
 elements.provider.addEventListener("change", () => { void loadModels(); });
 elements.editTitle.addEventListener("click", () => {
-  if (!state.selectedId || state.showingSettings || state.showingMemory || state.showingPrompt || state.showingSkills) return;
+  if (!state.selectedId || state.showingSettings || state.showingTools || state.showingMemory || state.showingPrompt || state.showingSkills) return;
   state.editingTitle = true;
   render();
   elements.titleInput.focus();
@@ -152,6 +165,7 @@ elements.titleInput.addEventListener("keydown", (event) => {
 });
 elements.settingsButton.addEventListener("click", () => {
   state.showingSettings = true;
+  state.showingTools = false;
   state.showingMemory = false;
   state.showingPrompt = false;
   state.showingSkills = false;
@@ -161,5 +175,13 @@ elements.settingsButton.addEventListener("click", () => {
 initTheme();
 initFolderPicker();
 initProjectDialog();
+initSkillDialog();
 render();
-loadSessions().then(loadCatalog);
+loadSessions().then(async () => {
+  await loadCatalog();
+  // После восстановления сессии загружаем данные открытой до обновления вкладки.
+  if (state.showingTools) await showTools();
+  else if (state.showingMemory) await showMemory();
+  else if (state.showingPrompt) await showPrompt();
+  else if (state.showingSkills) await showSkills();
+});

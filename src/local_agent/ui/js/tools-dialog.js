@@ -1,6 +1,6 @@
-// Диалог инструментов включает и выключает инструменты текущей сессии.
+// Вкладка инструментов управляет доступными действиями выбранного проекта.
 import { toolsApi } from "./api.js";
-import { clearError, elements, selectedProject, showError, state } from "./state.js";
+import { clearError, elements, render, selectedProject, showError, state } from "./state.js";
 
 let availableTools = [];
 
@@ -16,6 +16,10 @@ function renderToolDialog() {
     const text = document.createElement("span");
     const name = document.createElement("strong");
     name.textContent = tool.name;
+    const id = document.createElement("code");
+    id.className = "tool-id";
+    id.textContent = tool.id;
+    name.append(" ", id);
     const description = document.createElement("small");
     description.textContent = tool.description;
     text.append(name, description);
@@ -42,15 +46,27 @@ function renderToolDialog() {
 }
 
 export async function showTools() {
+  state.showingSettings = false;
+  state.showingTools = true;
+  state.showingMemory = false;
+  state.showingPrompt = false;
+  state.showingSkills = false;
+  state.editingTitle = false;
+  availableTools = [];
+  renderToolDialog();
+  render();
   if (!state.selectedId) {
-    showError(new Error("Выберите сессию, чтобы настроить её инструменты"));
+    elements.toolsIntro.textContent = "Выберите сессию проекта в боковой панели, чтобы настроить инструменты. Память, системный промпт и скиллы доступны в соседних вкладках.";
     return;
   }
+  const sessionId = state.selectedId;
   elements.toolsButton.disabled = true;
   try {
-    availableTools = await toolsApi.list(state.selectedId);
+    const tools = await toolsApi.list(sessionId);
+    if (state.selectedId !== sessionId || !state.showingTools) return;
+    availableTools = tools;
     renderToolDialog();
-    elements.toolsDialog.showModal();
+    clearError();
   } catch (error) {
     showError(error);
   } finally {

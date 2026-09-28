@@ -5,6 +5,11 @@ from collections.abc import Iterable
 from local_agent.tools.base import Tool
 
 
+def normalize_tool_ids(tool_ids: Iterable[str]) -> list[str]:
+    """Старые разрешения чтения Git относятся к единому инструменту Git."""
+    return list(dict.fromkeys("git" if item in {"git_log", "git_show"} else item for item in tool_ids))
+
+
 class ToolRegistry:
     def __init__(self, tools: Iterable[Tool] = ()) -> None:
         self._tools: dict[str, Tool] = {}

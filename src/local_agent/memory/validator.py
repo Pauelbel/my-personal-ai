@@ -8,7 +8,6 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import ValidationError
 
-from local_agent.memory.markdown import ENTRY
 from local_agent.memory.models import Message
 from local_agent.memory.operations import (
     MAX_OPERATIONS,
@@ -54,9 +53,8 @@ def validate_patch(
     operations = [_operation(index, item) for index, item in enumerate(items)]
 
     sources = {message.id: message for message in new_messages}
-    entries = _managed_entries(documents)
     texts = _existing_texts(documents)
-    touched: set[str] = set()
+    touched: set[tuple[str, str]] = set()
     for index, operation in enumerate(operations):
         if operation.file not in documents:
             raise MemoryPatchRejected(f"файл {operation.file} не входит в память", index)
@@ -68,10 +66,16 @@ def validate_patch(
                 raise MemoryPatchRejected(f"запись уже есть в памяти: «{operation.content}»", index)
             texts.add(key)
         else:
-            _check_entry(index, operation, entries.get(operation.entry_id, []))
-            if operation.entry_id in touched:
-                raise MemoryPatchRejected(f"запись {operation.entry_id} уже затронута в этом patch", index)
-            touched.add(operation.entry_id)
+            _check_entry(index, operation, documents[operation.file])
+            target = (operation.file, operation.old_content)
+            if target in touched:
+                raise MemoryPatchRejected("запись уже затронута в этом patch", index)
+            touched.add(target)
+            if isinstance(operation, UpdateOperation):
+                key = _normalize(operation.content)
+                if key in texts and key != _normalize(operation.old_content):
+                    raise MemoryPatchRejected(f"запись уже есть в памяти: «{operation.content}»", index)
+                texts.add(key)
     return operations
 
 
@@ -105,7 +109,7 @@ def _operation(index: int, item: object) -> MemoryOperation:
     model = OPERATION_MODELS.get(item.get("op"))
     if model is None:
         raise MemoryPatchRejected(f"неизвестная операция {item.get('op')!r}", index)
-    # null в чужом поле модели пишут вместо «поля нет» (entry_id: null у add); любое другое значение — лишнее поле.
+    # null в чужом поле модели пишут вместо «поля нет»; любое другое значение — лишнее поле.
     cleaned = {key: value for key, value in item.items() if key in model.model_fields or value is not None}
     try:
         return model.model_validate(cleaned)
@@ -126,39 +130,23 @@ def _check_source(index: int, message: Message | None, source_id: str, session_i
         raise MemoryPatchRejected(f"сообщение {source_id} написал не пользователь (role={message.role})", index)
 
 
-def _check_entry(index: int, operation: UpdateOperation | DeleteOperation, files: list[str]) -> None:
-    entry_id = operation.entry_id
-    if not files:
-        raise MemoryPatchRejected(
-            f"управляемой записи {entry_id} нет; ручные записи без memory:id модели недоступны", index
-        )
-    if len(files) > 1:
-        raise MemoryPatchRejected(f"запись {entry_id} встречается в памяти несколько раз ({len(files)})", index)
-    if files[0] != operation.file:
-        raise MemoryPatchRejected(f"запись {entry_id} находится в {files[0]}, а не в {operation.file}", index)
-
-
-def _managed_entries(documents: Mapping[str, str]) -> dict[str, list[str]]:
-    """entry_id → файлы, где он встречается; повтор означает испорченную память."""
-    entries: dict[str, list[str]] = {}
-    for name, content in documents.items():
-        for line in content.splitlines():
-            if match := ENTRY.match(line):
-                entries.setdefault(match.group(1), []).append(name)
-    return entries
+def _check_entry(index: int, operation: UpdateOperation | DeleteOperation, document: str) -> None:
+    matches = document.splitlines().count(f"- {operation.old_content}")
+    if matches == 0:
+        raise MemoryPatchRejected("строка с указанным прежним текстом не найдена в файле", index)
+    if matches > 1:
+        raise MemoryPatchRejected("строка с указанным прежним текстом встречается несколько раз", index)
 
 
 def _existing_texts(documents: Mapping[str, str]) -> set[str]:
-    """Тексты всех строк памяти без маркеров: и управляемых, и ручных."""
+    """Тексты всех строк памяти для проверки дублей при добавлении."""
     texts: set[str] = set()
     for content in documents.values():
         for line in content.splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            if match := ENTRY.match(line):
-                line = match.group(2)
-            elif match := LIST_ITEM.match(line):
+            if match := LIST_ITEM.match(line):
                 line = match.group(1)
             texts.add(_normalize(line))
     return texts

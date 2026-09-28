@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from local_agent.agent.context import build_context, build_system_prompt, estimate_message_tokens
+from local_agent.agent.project_instructions import load_project_instructions
 from local_agent.agent.registry import AgentRegistry, SkillRegistry
 from local_agent.agent.summary import ConversationSummarizer
 from local_agent.agent.tool_executor import ToolExecutor
@@ -25,7 +26,7 @@ from local_agent.tools.skills import UseSkillTool
 logger = logging.getLogger(__name__)
 
 LOG_ARGUMENTS_CHARS = 160
-# Навык обычно занимает несколько шагов подряд: use_skill, git_log, git_show, read_file.
+# Навык обычно занимает несколько шагов подряд: use_skill, git, read_file.
 MAX_TOOL_ROUNDS = 8
 MAX_CALLS_PER_ROUND = 4
 APPROVAL_TIMEOUT_SECONDS = 300
@@ -150,9 +151,14 @@ class AgentRuntime:
             self._conversation.recent, session_id, self._limits.max_context_messages * 10
         )
         memory_context = self._memory.context()
+        project_context = await asyncio.to_thread(
+            load_project_instructions, session.workspace,
+            max_bytes=max(window - self._limits.response_reserve_tokens, 0),
+        )
         context = build_context(
             build_system_prompt(
-                agent.system_prompt, memory_context, session.summary, today=date.today(), skills=skills
+                agent.system_prompt, memory_context, session.summary, today=date.today(), skills=skills,
+                project_context=project_context,
             ),
             history,
             max_messages=self._limits.max_context_messages,
@@ -165,8 +171,10 @@ class AgentRuntime:
             f"Контекст: {context.included_count} из {len(history)} сообщений истории, "
             f"≈{used} из {window} токенов окна{'' if loaded_window else ' (по умолчанию)'}"
         )
-        extras = [name for name, present in (("память", memory_context), ("резюме", session.summary)) if present]
-        yield _log(f"В системный промпт добавлено: {', '.join(extras)}" if extras else "Память и резюме не подключены")
+        extras = [name for name, present in (
+            ("инструкции проекта", project_context), ("память", memory_context), ("резюме", session.summary)
+        ) if present]
+        yield _log(f"В системный промпт добавлено: {', '.join(extras)}" if extras else "Дополнительный контекст не подключён")
         yield _log(
             "Инструменты: " + ", ".join(item["function"]["name"] for item in definitions)
             if definitions else "Инструменты недоступны: выберите рабочую папку и включите их"

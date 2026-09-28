@@ -52,6 +52,100 @@ def test_use_skill_returns_instructions(tmp_path):
     assert tool.parameters["properties"]["name"]["enum"] == ["check"]
 
 
+def test_skill_creation_is_available_immediately_and_survives_restart(tmp_path):
+    configured = settings(tmp_path)
+    app = create_app(configured)
+    with TestClient(app) as client:
+        created = client.post("/api/skills", json={
+            "name": " Мой скилл ", "description": " Проверять результат ",
+            "instructions": "# Проверка\n\n1. Прочитай файл.\n",
+        })
+        assert created.status_code == 201
+        skill = created.json()
+        tool = UseSkillTool(app.state.skill_registry)
+        result = asyncio.run(tool.execute({"name": skill["id"]}, None))
+        assert not result.is_error and "# Проверка" in result.content
+        assert client.get(f"/api/skills/{skill['id']}").json()["name"] == "Мой скилл"
+    with TestClient(create_app(configured)) as client:
+        loaded = client.get(f"/api/skills/{skill['id']}").json()
+        assert loaded["description"] == "Проверять результат"
+        assert loaded["instructions"] == "# Проверка\n\n1. Прочитай файл."
+
+
+def test_skill_deletion_archives_file_and_removes_it_from_agent(tmp_path):
+    configured = settings(tmp_path)
+    app = create_app(configured)
+    with TestClient(app) as client:
+        created = client.post("/api/skills", json={
+            "name": "Удаляемый", "description": "Проверка удаления", "instructions": "# Текст",
+        }).json()
+        skill_id = created["id"]
+        assert client.delete(f"/api/skills/{skill_id}").status_code == 204
+        assert client.get(f"/api/skills/{skill_id}").status_code == 404
+        tool = UseSkillTool(app.state.skill_registry)
+        assert skill_id not in tool.parameters["properties"]["name"]["enum"]
+        assert asyncio.run(tool.execute({"name": skill_id}, None)).is_error
+        assert client.delete(f"/api/skills/{skill_id}").status_code == 404
+    archive = list((tmp_path / "skills" / ".deleted").glob(f"{skill_id}.*.md"))
+    assert len(archive) == 1 and "# Текст" in archive[0].read_text(encoding="utf-8")
+    assert not (tmp_path / "skills" / f"{skill_id}.md").exists()
+    with TestClient(create_app(configured)) as client:
+        assert client.get(f"/api/skills/{skill_id}").status_code == 404
+
+
+def test_archive_lists_restores_and_clears_only_deleted_skills(tmp_path):
+    configured = settings(tmp_path)
+    with TestClient(create_app(configured)) as client:
+        skill = client.post("/api/skills", json={
+            "name": "Архивный", "description": "Архив", "instructions": "# Текст",
+        }).json()
+        assert client.delete(f"/api/skills/{skill['id']}").status_code == 204
+        archived = client.get("/api/skills/archive").json()
+        assert len(archived) == 1 and archived[0]["name"] == "Архивный"
+        restored = client.post(f"/api/skills/archive/{archived[0]['archive_id']}/restore")
+        assert restored.status_code == 200 and restored.json()["id"] == skill["id"]
+        assert client.get("/api/skills/archive").json() == []
+        assert client.get(f"/api/skills/{skill['id']}").status_code == 200
+        assert client.delete(f"/api/skills/{skill['id']}").status_code == 204
+        unrelated = tmp_path / "skills" / ".deleted" / "notes.txt"
+        unrelated.write_text("Не удалять", encoding="utf-8")
+        assert client.delete("/api/skills/archive").json() == {"deleted": 1}
+        assert client.get("/api/skills/archive").json() == []
+        assert unrelated.read_text(encoding="utf-8") == "Не удалять"
+        assert client.get(f"/api/skills/{skill['id']}").status_code == 404
+
+
+def test_archive_restore_refuses_existing_skill(tmp_path):
+    configured = settings(tmp_path)
+    with TestClient(create_app(configured)) as client:
+        skill = client.post("/api/skills", json={
+            "name": "Архивный", "description": "Архив", "instructions": "Исходный текст",
+        }).json()
+        client.delete(f"/api/skills/{skill['id']}")
+        archive_id = client.get("/api/skills/archive").json()[0]["archive_id"]
+        path = tmp_path / "skills" / f"{skill['id']}.md"
+        path.write_text("---\nname: Другой\ndescription: Другой\n---\nНовый текст\n", encoding="utf-8")
+        response = client.post(f"/api/skills/archive/{archive_id}/restore")
+        assert response.status_code == 409
+        assert "Новый текст" in path.read_text(encoding="utf-8")
+        assert len(client.get("/api/skills/archive").json()) == 1
+
+
+@pytest.mark.parametrize("fields", [
+    {"name": "   "}, {"description": "   "}, {"instructions": "   "},
+    {"name": "Имя\ntools: write_file"}, {"description": "Описание\rname: X"},
+])
+def test_skill_creation_rejects_empty_fields_and_header_injection(tmp_path, fields):
+    configured = settings(tmp_path)
+    with TestClient(create_app(configured)) as client:
+        before = client.get("/api/skills").json()
+        result = client.post("/api/skills", json={
+            "name": "Имя", "description": "Описание", "instructions": "Текст", **fields,
+        })
+        assert result.status_code == 400
+        assert client.get("/api/skills").json() == before
+
+
 def test_use_skill_warns_about_missing_tools(tmp_path):
     (tmp_path / "overview.md").write_text(
         "---\ndescription: обзор\n---\nВызови list_files, затем read_file.\n", encoding="utf-8"

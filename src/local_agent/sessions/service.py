@@ -13,6 +13,7 @@ from local_agent.projects.models import Project
 from local_agent.sessions.models import Session
 from local_agent.sessions.repository import SessionRepository
 from local_agent.storage.json.projects import JsonProjectRepository
+from local_agent.tools.registry import normalize_tool_ids
 
 
 class InvalidWorkspaceError(ValueError):
@@ -134,10 +135,14 @@ class SessionService:
         return self._projects.get(session.project_id)
 
     def _effective(self, session: Session | None) -> Session | None:
-        if session is None or (project := self._project(session)) is None:
+        if session is None:
             return session
+        project = self._project(session)
         return session.model_copy(
-            update={"workspace": project.workspace, "enabled_tools": list(project.enabled_tools)}
+            update={
+                "workspace": project.workspace if project else session.workspace,
+                "enabled_tools": normalize_tool_ids(project.enabled_tools if project else session.enabled_tools),
+            }
         )
 
     def set_summary(self, session_id: str, summary: str, until_message_id: str) -> None:

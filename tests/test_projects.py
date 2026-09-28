@@ -30,7 +30,7 @@ def test_sessions_share_project_folder_tools_and_last_model(tmp_path):
         project = client.post("/api/projects", json={"name": "Код", "workspace": str(workspace), "model": "m1"}).json()
         first = client.post("/api/sessions", json={"project_id": project["id"]}).json()
         client.put(f"/api/sessions/{first['id']}/tools/write_file", json={"enabled": True})
-        client.put(f"/api/sessions/{first['id']}/tools/git_log", json={"enabled": False})
+        client.put(f"/api/sessions/{first['id']}/tools/git", json={"enabled": False})
         client.put(f"/api/sessions/{first['id']}/config", json={"provider": "lm_studio", "model": "m2"})
         second = client.post("/api/sessions", json={"project_id": project["id"]}).json()
         second_tools = client.get(f"/api/sessions/{second['id']}/tools").json()
@@ -40,7 +40,7 @@ def test_sessions_share_project_folder_tools_and_last_model(tmp_path):
     assert second["model"] == "m2"
     # Чтение включено у нового проекта сразу; переключатели в одной сессии видны во всех.
     assert [tool["id"] for tool in second_tools if tool["enabled"]] == [
-        "list_files", "read_file", "search_files", "write_file", "git_show"
+        "list_files", "read_file", "search_files", "write_file"
     ]
 
 
@@ -55,6 +55,26 @@ def test_project_folder_must_exist_be_absolute_and_unique(tmp_path):
     assert duplicate.status_code == 400 and "уже есть проект" in duplicate.json()["detail"]
     assert missing.status_code == 400
     assert relative.status_code == 400
+
+
+def test_legacy_git_permissions_become_one_toggle(tmp_path):
+    workspace = folder(tmp_path)
+    configured = settings(tmp_path)
+    with TestClient(create_app(configured)) as client:
+        project = client.post("/api/projects", json={"name": "Код", "workspace": str(workspace)}).json()
+        session = client.post("/api/sessions", json={"project_id": project["id"]}).json()
+    path = tmp_path / "projects" / f"{project['id']}.json"
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved["enabled_tools"] = ["git_log", "git_show", "read_file"]
+    path.write_text(json.dumps(saved), encoding="utf-8")
+    with TestClient(create_app(configured)) as client:
+        tools = client.get(f"/api/sessions/{session['id']}/tools").json()
+        assert [tool["id"] for tool in tools if tool["enabled"]] == ["read_file", "git"]
+        result = client.put(f"/api/sessions/{session['id']}/tools/git", json={"enabled": False})
+        assert result.status_code == 200 and result.json()["enabled"] is False
+    with TestClient(create_app(configured)) as client:
+        tools = client.get(f"/api/sessions/{session['id']}/tools").json()
+        assert [tool["id"] for tool in tools if tool["enabled"]] == ["read_file"]
 
 
 def test_deleting_project_keeps_sessions_without_file_access(tmp_path):
