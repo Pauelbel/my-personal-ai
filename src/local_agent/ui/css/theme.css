@@ -345,3 +345,10 @@ html[data-theme="sunset"] .tools-close { color: #d8ccd2; }
 html[data-theme="sunset"] .tool-row { border-color: #3d4868; background: #2b3553; }
 html[data-theme="sunset"] .tool-row small { color: #bfb4bf; }
 html[data-theme="sunset"] .notice { border-color: #b4182d; background: #54162b; color: #ffd9dc; }
+.turn-recovery {
+  margin: 12px 24px;
+  padding: 12px 16px;
+  border: 1px solid currentColor;
+  border-radius: 12px;
+}
+.turn-recovery p { margin: 0 0 10px; }

@@ -2,7 +2,7 @@
 import { renderMessages } from "./chat.js";
 import {
   attachStreamingBubble, chooseWorkspace, handleMessageKeydown, loadCatalog, loadModels, saveConfig, sendMessage,
-  stopStreaming,
+  stopStreaming, renderTurnRecovery, retryTurn,
 } from "./composer.js";
 import { initFolderPicker } from "./folder-picker.js";
 import { renderMemoryPanel, saveMemory, showMemory, updateMemory } from "./memory-panel.js";
@@ -88,6 +88,7 @@ function renderApp() {
     renderedMessagesVersion = state.messagesVersion;
   }
   attachStreamingBubble();
+  renderTurnRecovery();
 
   if (selected) {
     if (!editingTitle) elements.titleInput.value = selected.title;
@@ -127,6 +128,7 @@ elements.search.addEventListener("input", () => {
   render();
 });
 elements.messageForm.addEventListener("submit", sendMessage);
+elements.retryTurn.addEventListener("click", retryTurn);
 elements.saveMessage.addEventListener("click", (event) => {
   // Во время ответа кнопка работает как «Стоп» и не отправляет форму.
   if (!state.streaming) return;

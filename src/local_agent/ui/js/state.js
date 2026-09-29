@@ -101,6 +101,9 @@ export const elements = {
   folderCancel: $("#folder-cancel"),
   folderClose: $("#folder-close"),
   messageList: $("#message-list"),
+  turnRecovery: $("#turn-recovery"),
+  turnRecoveryText: $("#turn-recovery-text"),
+  retryTurn: $("#retry-turn"),
   messageForm: $("#message-form"),
   messageInput: $("#message-input"),
   saveMessage: $("#save-message"),
@@ -108,6 +111,7 @@ export const elements = {
 
 export const state = {
   sessions: [],
+  turnFailures: new Map(),
   projects: [],
   // Свёрнутые в сайдбаре проекты; запоминаются в этом браузере.
   collapsedProjects: loadCollapsed(),

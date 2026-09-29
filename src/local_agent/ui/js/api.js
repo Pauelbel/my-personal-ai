@@ -97,6 +97,7 @@ export const turnsApi = {
     if (!response.ok) throw await responseError(response);
     const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
     let buffer = "";
+    let completed = false;
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -106,9 +107,14 @@ export const turnsApi = {
         const chunk = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
         const data = chunk.split("\n").filter((line) => line.startsWith("data: ")).map((line) => line.slice(6)).join("\n");
-        if (data) onEvent(JSON.parse(data));
+        if (data) {
+          const event = JSON.parse(data);
+          completed ||= event.type === "done";
+          onEvent(event);
+        }
       }
     }
+    if (!completed) throw new Error("Соединение закрыто до завершения ответа.");
   },
   decide: (sessionId, callId, approved) => request(
     `${sessionPath(sessionId)}/approvals/${encodeURIComponent(callId)}`,

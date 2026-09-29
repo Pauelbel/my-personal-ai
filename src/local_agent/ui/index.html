@@ -68,6 +68,10 @@
           <div class="session-detail" id="session-detail" hidden>
             <div class="conversation">
               <div class="message-list" id="message-list" aria-live="polite"></div>
+              <div class="turn-recovery" id="turn-recovery" role="status" hidden>
+                <p id="turn-recovery-text"></p>
+                <button class="secondary-button" id="retry-turn" type="button">Повторить</button>
+              </div>
               <div class="composer-shell">
                 <form class="composer" id="message-form">
                   <label class="visually-hidden" for="message-input">Сообщение</label>

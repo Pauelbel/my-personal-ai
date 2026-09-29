@@ -16,7 +16,7 @@ dist/
 
 # Кэши инструментов разработки
 .pytest_cache/
-.pytest_tmp/
+.pytest_tmp*/
 .mypy_cache/
 .ruff_cache/
 

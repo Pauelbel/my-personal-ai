@@ -67,6 +67,8 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert 'id="update-memory-chat"' in page.text
     assert page.text.index('id="update-memory-chat"') < page.text.index('id="save-message"')
     assert 'id="message-form"' in page.text
+    assert 'id="turn-recovery"' in page.text
+    assert 'id="retry-turn"' in page.text
     assert "Ctrl+Enter — новая строка" in page.text
     assert 'name="theme" value="light"' in page.text
     assert 'name="theme" value="dark"' in page.text

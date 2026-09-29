@@ -3,6 +3,7 @@ import { catalogApi, sessionsApi, turnsApi } from "./api.js";
 import { StreamingMessage } from "./chat.js";
 import { pickFolder } from "./folder-picker.js";
 import { openProjectDialog } from "./projects.js";
+import { turnRecovery } from "./recovery.js";
 import { loadSessions } from "./sessions.js";
 import {
   clearError, elements, render, selectedProject, setMessages, showError, state,
@@ -124,10 +125,28 @@ export async function chooseWorkspace() {
   }
 }
 
-export async function sendMessage(event) {
+export function renderTurnRecovery() {
+  const recovery = state.messagesSessionId === state.selectedId
+    ? turnRecovery(state.messages, state.turnFailures.get(state.selectedId)) : null;
+  elements.turnRecovery.hidden = !recovery || state.streaming;
+  elements.turnRecoveryText.textContent = recovery?.text || "";
+  elements.retryTurn.disabled = state.actionsDisabled || state.streaming;
+}
+
+export async function retryTurn(event) {
+  if (state.messagesSessionId !== state.selectedId) return;
+  const recovery = turnRecovery(state.messages, state.turnFailures.get(state.selectedId));
+  if (!recovery) return;
+  if (recovery.tools && !window.confirm(
+    "Некоторые инструменты уже выполнялись. Повтор может выполнить действия ещё раз. Повторить запрос?",
+  )) return;
+  await sendMessage(event, recovery.content);
+}
+
+export async function sendMessage(event, retryContent = null) {
   event.preventDefault();
   if (state.actionsDisabled || state.streaming) return;
-  const content = elements.messageInput.value.trim();
+  const content = retryContent ?? elements.messageInput.value.trim();
   const sessionId = state.selectedId;
   if (!sessionId || !content) return;
 
@@ -139,6 +158,7 @@ export async function sendMessage(event) {
     return;
   }
   controller = new AbortController();
+  state.turnFailures.delete(sessionId);
   state.streaming = true;
   bubbleSessionId = sessionId;
   bubble = new StreamingMessage(elements.messageList);
@@ -153,7 +173,7 @@ export async function sendMessage(event) {
     await turnsApi.stream(sessionId, content, controller.signal, (item) => {
       if (item.type === "user_message") {
         saved = true;
-        if (state.selectedId === sessionId) elements.messageInput.value = "";
+        if (retryContent === null && state.selectedId === sessionId) elements.messageInput.value = "";
         push(item.message);
       } else if (item.type === "log") {
         bubble.addLog(item.text);
@@ -186,9 +206,9 @@ export async function sendMessage(event) {
     });
   } catch (error) {
     if (error.name === "AbortError") {
-      notice = new Error("Ответ остановлен. То, что модель успела написать, сохранено.");
+      notice = new Error("Ответ остановлен.");
     } else {
-      if ((error.messageSaved || saved) && state.selectedId === sessionId) elements.messageInput.value = "";
+      if (retryContent === null && (error.messageSaved || saved) && state.selectedId === sessionId) elements.messageInput.value = "";
       notice = error;
     }
   } finally {
@@ -198,9 +218,12 @@ export async function sendMessage(event) {
     controller = null;
     state.streaming = false;
     state.actionsDisabled = false;
+    if (notice) state.turnFailures.set(sessionId, {
+      content, saved: saved || notice.messageSaved === true, reason: notice.message,
+    });
     await loadSessions();
     // loadSessions сбрасывает уведомления, поэтому итог хода показываем после неё.
-    if (notice) showError(notice);
+    render();
   }
 }
 
