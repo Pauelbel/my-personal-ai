@@ -20,6 +20,36 @@
 
 Нужны Python 3.11+, [`uv`](https://docs.astral.sh/uv/) и LM Studio с загруженной моделью и включённым локальным API-сервером.
 
+### Установка uv
+
+[`uv`](https://docs.astral.sh/uv/) — менеджер Python-проектов: он сам создаёт виртуальное окружение и ставит зависимости.
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Или через winget: `winget install --id=astral-sh.uv -e`.
+
+macOS и Linux:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+На macOS можно и через Homebrew: `brew install uv`.
+
+После установки откройте новый терминал и проверьте:
+
+```powershell
+uv --version
+```
+
+Если подходящего Python нет, `uv` скачает его сам при первом `uv sync`.
+
+### Запуск
+
 1. Создайте файл настроек:
 
    ```powershell
