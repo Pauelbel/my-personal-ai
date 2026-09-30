@@ -1,19 +1,18 @@
 // Боковая панель: проекты со своими сессиями, затем сессии без проекта.
 
+// Контурная папка в одну линию — как остальные значки интерфейса.
+const FOLDER_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" '
+  + 'stroke-width="1.6" stroke-linejoin="round"><path d="M3 6.5h6l2 2h10v10.5H3z"/></svg>';
+
 export function renderSidebar(container, options) {
-  const { projects, sessions, filter, selectedId, collapsed } = options;
+  const { projects, sessions, selectedId, collapsed } = options;
   container.replaceChildren();
-  const matches = (text) => !filter || text.toLocaleLowerCase("ru-RU").includes(filter);
   const known = new Set(projects.map((project) => project.id));
-  const groups = projects
-    .map((project) => ({
-      project,
-      sessions: sessions.filter(
-        (session) => session.project_id === project.id && (matches(session.title) || matches(project.name)),
-      ),
-    }))
-    .filter((group) => !filter || group.sessions.length > 0 || matches(group.project.name));
-  const loose = sessions.filter((session) => !known.has(session.project_id) && matches(session.title));
+  const groups = projects.map((project) => ({
+    project,
+    sessions: sessions.filter((session) => session.project_id === project.id),
+  }));
+  const loose = sessions.filter((session) => !known.has(session.project_id));
 
   if (groups.length === 0 && loose.length === 0) {
     const empty = document.createElement("p");
@@ -25,8 +24,8 @@ export function renderSidebar(container, options) {
 
   for (const group of groups) {
     const hasSelected = group.sessions.some((session) => session.id === selectedId);
-    // При поиске и для открытой сессии группа раскрыта, иначе найденное было бы не видно.
-    const expanded = !collapsed.has(group.project.id) || Boolean(filter) || hasSelected;
+    // Группа с открытой сессией раскрыта, иначе открытую сессию было бы не видно.
+    const expanded = !collapsed.has(group.project.id) || hasSelected;
     container.append(projectRow(group, expanded, options));
     if (!expanded) continue;
     for (const session of group.sessions) container.append(sessionRow(session, options, true));
@@ -48,7 +47,7 @@ export function renderSidebar(container, options) {
   }
 }
 
-function projectRow({ project, sessions }, expanded, options) {
+function projectRow({ project }, expanded, options) {
   const row = document.createElement("div");
   row.className = "project-row";
 
@@ -61,13 +60,14 @@ function projectRow({ project, sessions }, expanded, options) {
   arrow.className = "project-arrow";
   arrow.setAttribute("aria-hidden", "true");
   arrow.textContent = expanded ? "▾" : "▸";
+  const icon = document.createElement("span");
+  icon.className = "project-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = FOLDER_ICON;
   const name = document.createElement("span");
   name.className = "project-name";
   name.textContent = project.name;
-  const count = document.createElement("span");
-  count.className = "project-count";
-  count.textContent = String(sessions.length);
-  toggle.append(arrow, name, count);
+  toggle.append(arrow, icon, name);
   toggle.addEventListener("click", () => options.onToggle(project.id));
 
   const add = iconButton("＋", `Новая сессия в проекте «${project.name}»`, () => options.onCreate(project.id));

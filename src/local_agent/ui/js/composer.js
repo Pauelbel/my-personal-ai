@@ -4,6 +4,7 @@ import { StreamingMessage } from "./chat.js";
 import { pickFolder } from "./folder-picker.js";
 import { openProjectDialog } from "./projects.js";
 import { turnRecovery } from "./recovery.js";
+import { nodeName, showRunState } from "./session-canvas.js";
 import { loadSessions } from "./sessions.js";
 import {
   clearError, elements, render, selectedProject, setMessages, showError, state,
@@ -14,6 +15,8 @@ let controller = null;
 let bubble = null;
 let bubbleSessionId = null;
 let pendingApproval = null;
+// Карточка агента сессии на холсте: ей уходит сообщение, написанное в чате самой сессии.
+const ENTRY = "main";
 
 // Пузырь печатающегося ответа показываем, только пока открыта сессия, в которой он идёт.
 export function attachStreamingBubble() {
@@ -23,10 +26,7 @@ export function attachStreamingBubble() {
 
 export async function loadCatalog() {
   try {
-    const [providers, agents] = await Promise.all([catalogApi.providers(), catalogApi.agents()]);
-    fillSelect(elements.provider, providers);
-    fillSelect(elements.agent, agents);
-    elements.agentField.hidden = agents.length < 2;
+    fillSelect(elements.provider, await catalogApi.providers());
     render();
   } catch (error) {
     showError(error);
@@ -74,14 +74,13 @@ export function saveConfig() {
     model,
     // Папка задаётся проектом; сессия меняет её только через chooseWorkspace.
     workspace: null,
-    agent_id: elements.agent.value || null,
+    agent_id: null,
   };
   const operation = pendingConfigSave.then(async () => {
     const current = state.sessions.find((session) => session.id === sessionId);
     if (!current) return false;
     if (
       current.provider === config.provider && current.model === config.model
-      && (!config.agent_id || current.agent_id === config.agent_id)
     ) {
       return true;
     }
@@ -117,7 +116,7 @@ export async function chooseWorkspace() {
       provider: elements.provider.value,
       model: elements.model.value.trim() || state.preferredModel,
       workspace: folder,
-      agent_id: elements.agent.value || null,
+      agent_id: null,
     });
     await loadSessions();
   } catch (error) {
@@ -169,32 +168,44 @@ export async function sendMessage(event, retryContent = null) {
   };
   let saved = false;
   let notice = null;
+  // Кому написали: агенту сессии или агенту холста напрямую — его переписка открыта в чате.
+  const addressee = state.sessions.find((session) => session.id === sessionId)?.node_id ?? ENTRY;
   try {
     await turnsApi.stream(sessionId, content, controller.signal, (item) => {
-      if (item.type === "user_message") {
+      // С агентами на холсте события приходят от разных агентов. В открытый чат попадает только то,
+      // что относится к агенту, которому написали; работу остальных видно в статусе ответа и на холсте.
+      const own = !item.node_id || item.node_id === addressee;
+      const who = own ? "" : `${nodeName(item.node_id)}: `;
+      if (item.type === "node_started") {
+        showRunState({ activeNode: item.node_id, label: "работает" });
+        if (!own) bubble.reset(`${nodeName(item.node_id)} работает`);
+      } else if (item.type === "user_message") {
+        if (!own) return;
         saved = true;
-        if (retryContent === null && state.selectedId === sessionId) elements.messageInput.value = "";
+        if (!item.message.sender && retryContent === null && state.selectedId === sessionId) elements.messageInput.value = "";
         push(item.message);
       } else if (item.type === "log") {
-        bubble.addLog(item.text);
+        bubble.addLog(who + item.text);
       } else if (item.type === "reasoning") {
-        bubble.addReasoning(item.text);
+        if (own) bubble.addReasoning(item.text);
       } else if (item.type === "delta") {
-        bubble.append(item.text);
+        if (own) bubble.append(item.text);
       } else if (item.type === "tool_calls") {
-        push(item.message);
-        bubble.reset("Выполняется инструмент");
+        if (own) push(item.message);
+        bubble.reset(`${who}выполняется инструмент`);
       } else if (item.type === "approval_required") {
-        pendingApproval = item.call.id;
-        bubble.askApproval(item, (approved) => {
+        const approvalSession = item.session_id || sessionId;
+        pendingApproval = { sessionId: approvalSession, callId: item.call.id };
+        if (!own) showRunState({ activeNode: item.node_id, label: "ждёт подтверждения" });
+        bubble.askApproval({ ...item, actor: own ? undefined : nodeName(item.node_id) }, (approved) => {
           pendingApproval = null;
-          return turnsApi.decide(sessionId, item.call.id, approved).catch(showError);
+          return turnsApi.decide(approvalSession, item.call.id, approved).catch(showError);
         });
       } else if (item.type === "tool_result") {
-        push(item.message);
-        bubble.setStatus("Модель думает");
-      } else if (item.type === "done") {
-        push(item.message);
+        if (own) push(item.message);
+        bubble.setStatus(`${who}модель думает`);
+      } else if (item.type === "done" || item.type === "notice") {
+        if (own) push(item.message);
       } else if (item.type === "error") {
         const error = new Error(item.message);
         error.messageSaved = item.user_message_saved;
@@ -202,7 +213,7 @@ export async function sendMessage(event, retryContent = null) {
       }
       // Потоковые фрагменты меняют только пузырь ответа. Полная перерисовка здесь
       // пересоздавала кнопки навигации и срывала клики во время генерации.
-      if (["user_message", "tool_calls", "tool_result", "done"].includes(item.type)) render();
+      if (own && ["user_message", "tool_calls", "tool_result", "done", "notice"].includes(item.type)) render();
     });
   } catch (error) {
     if (error.name === "AbortError") {
@@ -216,6 +227,7 @@ export async function sendMessage(event, retryContent = null) {
     bubble = null;
     pendingApproval = null;
     controller = null;
+    showRunState({ activeNode: null, label: "" });
     state.streaming = false;
     state.actionsDisabled = false;
     if (notice) state.turnFailures.set(sessionId, {
@@ -229,8 +241,8 @@ export async function sendMessage(event, retryContent = null) {
 
 export function stopStreaming() {
   // Иначе сервер до таймаута ждал бы решения по вызову инструмента и держал сессию занятой.
-  if (pendingApproval && bubbleSessionId) {
-    turnsApi.decide(bubbleSessionId, pendingApproval, false).catch(() => {});
+  if (pendingApproval) {
+    turnsApi.decide(pendingApproval.sessionId, pendingApproval.callId, false).catch(() => {});
     pendingApproval = null;
   }
   controller?.abort();

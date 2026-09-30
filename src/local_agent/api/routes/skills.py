@@ -125,11 +125,11 @@ def delete_skill(
     registry: Annotated[SkillRegistry, Depends(get_skill_registry)],
 ) -> Response:
     if registry.get(skill_id) is None:
-        raise HTTPException(status_code=404, detail="Скилл не найден")
+        raise HTTPException(status_code=404, detail="Навык не найден")
     try:
         archive_skill(request.app.state.settings.skills_path, skill_id)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Файл скилла не найден") from exc
+        raise HTTPException(status_code=404, detail="Файл навыка не найден") from exc
     registry.remove(skill_id)
     return Response(status_code=204)
 

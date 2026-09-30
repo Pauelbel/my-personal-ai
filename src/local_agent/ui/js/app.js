@@ -7,10 +7,12 @@ import {
 import { initFolderPicker } from "./folder-picker.js";
 import { renderMemoryPanel, saveMemory, showMemory, updateMemory } from "./memory-panel.js";
 import { initProjectDialog, openProjectDialog } from "./projects.js";
-import { renderPromptPanel, savePrompt, showPrompt } from "./prompt-panel.js";
+import { initAgentsPanel, renderAgentsPanel, showAgents } from "./agents-panel.js";
 import { createSession, deleteSession, loadSessions, renameSession, selectSession } from "./sessions.js";
 import { deleteSkill, initSkillDialog, renderSkillsPanel, saveSkill, setSkillEditing, showSkills } from "./skills-panel.js";
+import { initResizer } from "./resizer.js";
 import { renderSidebar } from "./sidebar.js";
+import { initSessionCanvas, renderSessionCanvas } from "./session-canvas.js";
 import {
   elements, render, selectedProject, selectedSession, setRenderer, state, toggleProject,
 } from "./state.js";
@@ -29,16 +31,15 @@ function estimateTranscriptTokens(history) {
 
 function renderApp() {
   const selected = selectedSession();
-  const filter = state.sessionFilter.trim().toLocaleLowerCase("ru-RU");
-  elements.count.textContent = String(state.sessions.length);
+  // Чаты узлов команды открываются из ленты запуска, в списке их нет.
+  const listed = state.sessions.filter((session) => !session.hidden);
   renderSidebar(elements.list, {
     projects: state.projects,
-    sessions: state.sessions,
-    filter,
+    sessions: listed,
     selectedId: state.selectedId,
     collapsed: state.collapsedProjects,
     actionsDisabled: state.actionsDisabled,
-    emptyText: filter ? "Ничего не найдено" : "Пока нет сессий",
+    emptyText: "Пока нет сессий",
     onSelect: selectSession,
     onDelete: deleteSession,
     onCreate: (projectId) => createSession(projectId),
@@ -93,7 +94,6 @@ function renderApp() {
   if (selected) {
     if (!editingTitle) elements.titleInput.value = selected.title;
     if (document.activeElement !== elements.provider) elements.provider.value = selected.provider;
-    if (document.activeElement !== elements.agent) elements.agent.value = selected.agent_id;
     if (document.activeElement !== elements.model) elements.model.value = selected.model || state.preferredModel;
   }
   const project = selectedProject();
@@ -107,8 +107,9 @@ function renderApp() {
   elements.saveMessage.setAttribute("aria-label", state.streaming ? "Остановить ответ" : "Отправить сообщение");
   elements.saveMessage.disabled = state.actionsDisabled && !state.streaming;
   elements.memoryUpdateChat.disabled = state.actionsDisabled || !selected;
+  renderSessionCanvas();
   renderMemoryPanel();
-  renderPromptPanel();
+  renderAgentsPanel();
   renderSkillsPanel();
 }
 
@@ -120,13 +121,9 @@ elements.workspace.addEventListener("click", () => { void chooseWorkspace(); });
 elements.toolsButton.addEventListener("click", showTools);
 elements.customizationButton.addEventListener("click", showTools);
 elements.memoryButton.addEventListener("click", showMemory);
-elements.promptButton.addEventListener("click", showPrompt);
+elements.promptButton.addEventListener("click", () => { void showAgents(); });
 elements.skillsButton.addEventListener("click", showSkills);
 elements.emptyNewButton.addEventListener("click", () => createSession());
-elements.search.addEventListener("input", () => {
-  state.sessionFilter = elements.search.value;
-  render();
-});
 elements.messageForm.addEventListener("submit", sendMessage);
 elements.retryTurn.addEventListener("click", retryTurn);
 elements.saveMessage.addEventListener("click", (event) => {
@@ -137,13 +134,12 @@ elements.saveMessage.addEventListener("click", (event) => {
 });
 elements.messageInput.addEventListener("keydown", handleMessageKeydown);
 elements.memorySave.addEventListener("click", saveMemory);
-elements.promptSave.addEventListener("click", savePrompt);
 elements.skillSave.addEventListener("click", saveSkill);
 elements.skillView.addEventListener("click", () => setSkillEditing(false));
 elements.skillEdit.addEventListener("click", () => setSkillEditing(true));
 elements.skillDelete.addEventListener("click", deleteSkill);
 elements.memoryUpdateChat.addEventListener("click", updateMemory);
-for (const field of [elements.agent, elements.provider, elements.model]) {
+for (const field of [elements.provider, elements.model]) {
   field.addEventListener("change", () => { void saveConfig(); });
 }
 elements.provider.addEventListener("change", () => { void loadModels(); });
@@ -178,12 +174,19 @@ initTheme();
 initFolderPicker();
 initProjectDialog();
 initSkillDialog();
+initSessionCanvas();
+// Ширина боковой панели тянется мышью и запоминается; рабочей области остаётся не меньше 480px.
+initResizer({
+  handle: elements.sidebarResizer, container: elements.appShell, variable: "--sidebar-width",
+  storageKey: "sidebar-width", defaultWidth: 280, min: 200, reserve: 480,
+});
+initAgentsPanel();
 render();
 loadSessions().then(async () => {
   await loadCatalog();
   // После восстановления сессии загружаем данные открытой до обновления вкладки.
   if (state.showingTools) await showTools();
   else if (state.showingMemory) await showMemory();
-  else if (state.showingPrompt) await showPrompt();
+  else if (state.showingPrompt) await showAgents();
   else if (state.showingSkills) await showSkills();
 });

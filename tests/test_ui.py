@@ -77,13 +77,15 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert "Удалить сессию" not in page.text
     assert styles.status_code == 200
     assert theme_styles.status_code == 200
-    assert "composer-shell" in theme_styles.text
+    assert "composer-shell" in styles.text
     assert 'html[data-theme="dark"]' in theme_styles.text
     assert 'html[data-theme="sunset"]' in theme_styles.text
-    assert "#ffd300" in theme_styles.text
-    assert 'content: "◻"' not in styles.text
-    assert "border-radius: 50%" in styles.text
-    assert "box-shadow: inset 3px" not in theme_styles.text
+    # Темы задают только токены цвета, а форма компонентов общая: терминальный стиль без скруглений.
+    for token in ("--bg", "--fg", "--line", "--line-strong", "--accent", "--accent-fg"):
+        assert theme_styles.text.count(f"{token}:") == 3
+    assert "monospace" in styles.text
+    assert 'content: "❯"' in styles.text
+    assert "border-radius: 8px" not in styles.text and "box-shadow: 0" not in styles.text
     assert script.status_code == 200
     assert "toolsApi.configure" in tools_script.text
     assert "selected?.context_tokens" in script.text

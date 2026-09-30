@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -19,7 +19,7 @@ from local_agent.memory.conversation import ConversationService
 from local_agent.memory.models import Message
 from local_agent.memory.service import MemoryService, MemoryServiceError
 from local_agent.sessions.service import SessionService
-from local_agent.tools.base import ToolResult
+from local_agent.tools.base import Tool, ToolResult
 from local_agent.tools.registry import ToolRegistry
 from local_agent.tools.skills import UseSkillTool
 
@@ -30,6 +30,8 @@ LOG_ARGUMENTS_CHARS = 160
 MAX_TOOL_ROUNDS = 8
 MAX_CALLS_PER_ROUND = 4
 APPROVAL_TIMEOUT_SECONDS = 300
+# Команда агентов работает долго, и человек может отойти, пока агент с холста ждёт подтверждения.
+NODE_APPROVAL_TIMEOUT_SECONDS = 3600
 INTERRUPTED_SUFFIX = "\n\n_(ответ прерван)_"
 
 
@@ -102,13 +104,20 @@ class AgentRuntime:
         return answer
 
     async def stream_turn(
-        self, session_id: str, content: str, request_id: str
+        self,
+        session_id: str,
+        content: str,
+        request_id: str,
+        extra_tools: Sequence[Tool] = (),
+        sender: str | None = None,
     ) -> AsyncIterator[dict]:
+        """extra_tools — встроенные инструменты этого хода, например send_message у агента с холста;
+        sender — имя агента, если реплику написал он, а не пользователь."""
         lock = self._session_locks.setdefault(session_id, asyncio.Lock())
         if lock.locked():
             raise SessionBusyError("В этой сессии ещё выполняется предыдущий ход")
         async with lock:
-            async for event in self._turn(session_id, content, request_id):
+            async for event in self._turn(session_id, content, request_id, extra_tools, sender):
                 yield event
 
     async def close(self) -> None:
@@ -117,7 +126,9 @@ class AgentRuntime:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _turn(self, session_id: str, content: str, request_id: str) -> AsyncIterator[dict]:
+    async def _turn(
+        self, session_id: str, content: str, request_id: str, extra_tools: Sequence[Tool], sender: str | None
+    ) -> AsyncIterator[dict]:
         session = self._sessions.get(session_id)
         if session is None:
             raise SessionNotFoundError("Сессия не найдена")
@@ -132,17 +143,18 @@ class AgentRuntime:
         if not model:
             raise AgentRuntimeError("Выберите модель для этой сессии")
 
-        user_message = await asyncio.to_thread(self._conversation.add_user_message, session_id, content)
-        self._sessions.name_from_first_message(
-            session_id, content, self._conversation.count(session_id)
-        )
+        user_message = await asyncio.to_thread(self._conversation.add_user_message, session_id, content, sender)
+        if sender is None:
+            self._sessions.name_from_first_message(
+                session_id, content, self._conversation.count(session_id)
+            )
         yield {"type": "user_message", "message": user_message}
 
-        skills = self._skills.all()
         available = {tool.id for tool in ToolExecutor.allowed_tools(self._tools, agent, session)}
-        skill_tool = UseSkillTool(self._skills, {tool.id for tool in self._tools.all()}, available)
+        skill_tool = UseSkillTool(self._skills, {tool.id for tool in self._tools.all()}, available, agent.skills)
+        skills = skill_tool.skills()
         executor = ToolExecutor.for_session(
-            self._tools, agent, session, request_id, builtins=[skill_tool] if skills else (),
+            self._tools, agent, session, request_id, builtins=[*([skill_tool] if skills else []), *extra_tools],
         )
         definitions = executor.definitions()
         loaded_window = await context_length(provider, model)
@@ -150,7 +162,8 @@ class AgentRuntime:
         history = await asyncio.to_thread(
             self._conversation.recent, session_id, self._limits.max_context_messages * 10
         )
-        memory_context = self._memory.context()
+        # Агент с холста работает на агента сессии, а не на пользователя: личная память в его сессию не попадает.
+        memory_context = "" if session.parent_id else self._memory.context()
         project_context = await asyncio.to_thread(
             load_project_instructions, session.workspace,
             max_bytes=max(window - self._limits.response_reserve_tokens, 0),
@@ -183,10 +196,12 @@ class AgentRuntime:
         partial: list[str] = []
         result: ChatResult | None = None
         started = time.perf_counter()
+        max_rounds = agent.max_tool_rounds or MAX_TOOL_ROUNDS
+        approval_timeout = NODE_APPROVAL_TIMEOUT_SECONDS if session.parent_id else APPROVAL_TIMEOUT_SECONDS
         try:
             rounds = 0
             while True:
-                offered = definitions if rounds < MAX_TOOL_ROUNDS else None
+                offered = definitions if rounds < max_rounds else None
                 result = None
                 yield _log(
                     f"Запрос к {provider_id} · {model}" + (f" · раунд {rounds + 1}" if rounds else "")
@@ -210,7 +225,7 @@ class AgentRuntime:
                 yield _log(_round_summary(result, time.perf_counter() - requested))
                 if not result.tool_calls:
                     break
-                if rounds == MAX_TOOL_ROUNDS:
+                if rounds == max_rounds:
                     raise AgentRuntimeError("Модель превысила лимит раундов вызова инструментов")
                 rounds += 1
 
@@ -240,7 +255,7 @@ class AgentRuntime:
                                     "call": {"id": call.id, "name": call.name, "arguments": call.arguments},
                                     "tool_name": tool.name,
                                 }
-                                approved = await asyncio.wait_for(future, APPROVAL_TIMEOUT_SECONDS)
+                                approved = await asyncio.wait_for(future, approval_timeout)
                             except TimeoutError:
                                 approved = False
                             finally:
@@ -295,14 +310,14 @@ class AgentRuntime:
             result.input_tokens, result.output_tokens,
             (time.perf_counter() - started) * 1000,
         )
-        self._after_turn(session_id, model, context.included_count + added)
+        self._after_turn(session_id, model, context.included_count + added, remember=not session.parent_id)
         yield {"type": "done", "message": answer}
 
-    def _after_turn(self, session_id: str, model: str, included_count: int) -> None:
+    def _after_turn(self, session_id: str, model: str, included_count: int, *, remember: bool) -> None:
         if self._conversation.count(session_id) > included_count:
             self._spawn(f"summary:{session_id}", self._summarizer.update(session_id, included_count, model))
         threshold = self._limits.memory_auto_update_messages
-        if threshold and self._memory.pending_user_messages(session_id) >= threshold:
+        if remember and threshold and self._memory.pending_user_messages(session_id) >= threshold:
             self._spawn(f"memory:{session_id}", self._update_memory(session_id))
 
     async def _update_memory(self, session_id: str) -> None:

@@ -1,9 +1,10 @@
-// Панель навыков: список навыков агента и правка их инструкций.
-import { skillsApi } from "./api.js";
+// Панель навыков: общий каталог навыков, правка их инструкций и какие агенты их используют.
+import { catalogApi, skillsApi } from "./api.js";
 import { appendMarkdown } from "./markdown.js";
 import { clearError, elements, render, showError, state } from "./state.js";
 
 let skills = [];
+let agents = [];
 let selectedSkillId = null;
 let deletingSkill = false;
 
@@ -31,7 +32,7 @@ export async function showSkills() {
   elements.skillsStatus.textContent = "";
   render();
   try {
-    skills = await skillsApi.list();
+    [skills, agents] = await Promise.all([skillsApi.list(), catalogApi.agents()]);
     selectedSkillId = skills.some((skill) => skill.id === selectedSkillId) ? selectedSkillId : (skills[0]?.id || null);
     render();
     if (selectedSkillId) await selectSkill(selectedSkillId);
@@ -59,7 +60,8 @@ async function selectSkill(skillId) {
 
 function showSkill(skill) {
   elements.skillTitle.textContent = skill.name;
-  elements.skillDescription.textContent = `${skill.description}. Файл ${skill.id}.md в папке скиллов; название и описание меняются в нём.`;
+  elements.skillDescription.textContent = `${skill.description}. Файл ${skill.id}.md в папке навыков; название и описание меняются в нём.`;
+  elements.skillUsers.textContent = usersText(skill.id);
   elements.skillContent.value = skill.instructions;
   elements.skillContent.disabled = false;
   elements.skillSave.disabled = false;
@@ -67,6 +69,16 @@ function showSkill(skill) {
   elements.skillEdit.disabled = false;
   elements.skillDelete.disabled = false;
   setSkillEditing(false);
+}
+
+// Правка навыка меняет работу всех, кто его использует: показываем, кого именно.
+function usersText(skillId) {
+  // Агент без списка навыков видит весь каталог, значит, и этот навык.
+  const users = agents
+    .filter((agent) => agent.skills === null || agent.skills.includes(skillId))
+    .map((agent) => agent.skills === null ? `${agent.name} (все навыки)` : agent.name);
+  return users.length ? `Используют: ${users.join(", ")}`
+    : "Пока ни один агент его не использует — отметьте навык в форме агента во вкладке «Агенты».";
 }
 
 export function setSkillEditing(editing) {
@@ -87,7 +99,7 @@ export async function deleteSkill() {
   if (!selectedSkillId || deletingSkill) return;
   const skillId = selectedSkillId;
   const name = skills.find((skill) => skill.id === skillId)?.name || elements.skillTitle.textContent;
-  if (!window.confirm(`Удалить скилл «${name}»? Агент перестанет его использовать. Файл будет сохранён в архиве для восстановления.`)) return;
+  if (!window.confirm(`Удалить навык «${name}»? Агенты перестанут его использовать. Файл будет сохранён в архиве для восстановления.`)) return;
   deletingSkill = true;
   elements.skillDelete.disabled = true;
   try {
@@ -95,7 +107,7 @@ export async function deleteSkill() {
     skills = skills.filter((skill) => skill.id !== skillId);
     if (selectedSkillId === skillId) {
       selectedSkillId = null;
-      elements.skillTitle.textContent = "Выберите скилл";
+      elements.skillTitle.textContent = "Выберите навык";
       elements.skillDescription.textContent = "";
       elements.skillContent.value = "";
       elements.skillContent.disabled = true;
@@ -106,7 +118,7 @@ export async function deleteSkill() {
       if (skills.length) await selectSkill(skills[0].id);
     }
     render();
-    elements.skillsStatus.textContent = "Скилл удалён. Его файл сохранён в архиве.";
+    elements.skillsStatus.textContent = "Навык удалён. Его файл сохранён в архиве.";
     clearError();
   } catch (error) {
     showError(error);
@@ -145,7 +157,7 @@ export function initSkillDialog() {
       selectedSkillId = skill.id;
       showSkill(skill);
       render();
-      elements.skillsStatus.textContent = "Скилл добавлен и доступен агенту со следующего сообщения.";
+      elements.skillsStatus.textContent = "Навык добавлен и доступен агентам со следующего сообщения.";
       elements.skillDialog.close();
       elements.skillForm.reset();
       clearError();
@@ -178,14 +190,14 @@ function initSkillArchive() {
       restore.type = "button";
       restore.textContent = "Восстановить";
       restore.disabled = busy;
-      restore.setAttribute("aria-label", `Восстановить скилл «${skill.name}»`);
+      restore.setAttribute("aria-label", `Восстановить навык «${skill.name}»`);
       restore.addEventListener("click", () => run(async () => {
         const restored = await skillsApi.restore(skill.archive_id);
         skills = [...skills.filter((item) => item.id !== restored.id), restored];
         selectedSkillId = restored.id;
         showSkill(restored);
         render();
-        elements.skillsStatus.textContent = "Скилл восстановлен и доступен агенту.";
+        elements.skillsStatus.textContent = "Навык восстановлен и доступен агентам.";
       }));
       row.append(text, restore);
       return row;
@@ -195,7 +207,7 @@ function initSkillArchive() {
   };
   const refresh = async () => {
     archived = await skillsApi.archive();
-    elements.skillArchiveStatus.textContent = archived.length ? `Скиллов в архиве: ${archived.length}` : "Архив пуст.";
+    elements.skillArchiveStatus.textContent = archived.length ? `Навыков в архиве: ${archived.length}` : "Архив пуст.";
     draw();
   };
   const run = async (action) => {
@@ -222,7 +234,7 @@ function initSkillArchive() {
   elements.skillArchiveDialog.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
   elements.skillArchiveClear.addEventListener("click", () => {
     if (busy || !archived.length) return;
-    if (!window.confirm(`Безвозвратно удалить все скиллы из архива (${archived.length})? Восстановить их через приложение будет невозможно.`)) return;
+    if (!window.confirm(`Безвозвратно удалить все навыки из архива (${archived.length})? Восстановить их через приложение будет невозможно.`)) return;
     void run(() => skillsApi.clearArchive());
   });
 }
@@ -234,7 +246,7 @@ export async function saveSkill() {
   try {
     const skill = await skillsApi.save(skillId, elements.skillContent.value);
     if (selectedSkillId === skillId) showSkill(skill);
-    elements.skillsStatus.textContent = "Скилл сохранён. Он действует со следующего сообщения.";
+    elements.skillsStatus.textContent = "Навык сохранён. Он действует со следующего сообщения.";
     clearError();
   } catch (error) {
     elements.skillsStatus.textContent = `Не удалось сохранить: ${error.message}`;

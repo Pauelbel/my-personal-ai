@@ -34,7 +34,7 @@ export async function loadSessions() {
     const previousId = state.selectedId;
     state.selectedId = state.sessions.some((session) => session.id === state.selectedId)
       ? state.selectedId
-      : (state.sessions[0]?.id || null);
+      : (state.sessions.find((session) => !session.hidden)?.id || null);
     if (state.selectedId !== previousId) setMessages([], null);
     clearError();
     render();

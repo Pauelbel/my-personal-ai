@@ -38,12 +38,13 @@ class ToolExecutor:
 
     @staticmethod
     def allowed_tools(registry: ToolRegistry, agent: Agent, session: Session) -> list[Tool]:
-        """Инструмент доступен, только если его разрешает агент, он включён в сессии и выбрана рабочая папка."""
+        """Инструмент доступен, только если его разрешает агент, он включён в сессии и выбрана рабочая папка.
+        Узлу графа переключатели сессии не нужны: его права целиком задаёт файл агента."""
         if not session.workspace:
             return []
         return [
             tool for tool in registry.all()
-            if tool.id in agent.tools and tool.id in session.enabled_tools
+            if tool.id in agent.tools and (session.node_id or tool.id in session.enabled_tools)
         ]
 
     def definitions(self) -> list[dict[str, object]]:

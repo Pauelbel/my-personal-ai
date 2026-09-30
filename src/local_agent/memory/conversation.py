@@ -20,8 +20,8 @@ class ConversationService:
         self._store = store
         self._on_saved = on_saved
 
-    def add_user_message(self, session_id: str, content: str) -> Message:
-        return self._add(session_id, role="user", content=content)
+    def add_user_message(self, session_id: str, content: str, sender: str | None = None) -> Message:
+        return self._add(session_id, role="user", content=content, sender=sender)
 
     def add_assistant_message(
         self, session_id: str, content: str, tool_calls: tuple[ToolCall, ...] = ()

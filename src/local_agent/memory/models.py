@@ -24,6 +24,13 @@ class Message(BaseModel):
     tool_call_id: str | None = None
     tool_name: str | None = None
     is_error: bool = False
+    # Реплику «user» написал не человек, а агент с холста сессии: здесь его имя.
+    sender: str | None = None
+
+    @property
+    def from_user(self) -> bool:
+        """Реплика человека: только её разбирает долговременная память."""
+        return self.role == "user" and self.sender is None
 
     @property
     def is_dialogue(self) -> bool:

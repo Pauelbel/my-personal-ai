@@ -117,6 +117,8 @@ class JsonlConversationStore:
             data["tool_name"] = message.tool_name
         if message.is_error:
             data["is_error"] = True
+        if message.sender:
+            data["sender"] = message.sender
         return (json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
     @staticmethod

@@ -102,9 +102,12 @@ class MemoryService:
             messages = self._conversation.after(session_id, self._store.checkpoint(session_id))
         except ValueError:
             return 0
-        return sum(1 for message in messages if message.role == "user" and message.is_dialogue)
+        return sum(1 for message in messages if message.from_user and message.is_dialogue)
 
     async def update_session(self, session: Session) -> MemoryUpdateResult:
+        if session.parent_id:
+            # Реплики «user» в сессии агента с холста пишут другие агенты, а не пользователь.
+            raise MemoryServiceError("Память не обновляется из переписки агентов между собой")
         async with self._update_lock:
             checkpoint = self._store.checkpoint(session.id)
             try:
@@ -120,7 +123,8 @@ class MemoryService:
                     applied_operations=0,
                     last_processed_message_id=checkpoint,
                 )
-            dialogue = [message for message in messages if message.is_dialogue]
+            # Ответы агентов с холста приходят репликами «user», но пользователь их не писал.
+            dialogue = [message for message in messages if message.is_dialogue and message.sender is None]
             if not dialogue:
                 # Только служебные сообщения инструментов: разбирать нечего, просто сдвигаем checkpoint.
                 self._store.apply(

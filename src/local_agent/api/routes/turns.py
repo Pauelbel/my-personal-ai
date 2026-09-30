@@ -1,4 +1,7 @@
-"""Маршруты хода агента: обычный ответ, потоковый ответ (SSE) и подтверждение вызовов инструментов."""
+"""Маршруты хода агента: обычный ответ, потоковый ответ (SSE) и подтверждение вызовов инструментов.
+
+Если на холсте сессии есть агенты, которым агент сессии может писать, или пользователь пишет агенту
+с холста напрямую, ход ведёт координатор команды."""
 
 import json
 from typing import Annotated
@@ -17,6 +20,7 @@ from local_agent.api.routes.sessions import get_session_service
 from local_agent.llm.base import LLMProviderError, LLMProviderUnavailable
 from local_agent.memory.models import Message
 from local_agent.sessions.service import SessionService
+from local_agent.team.coordinator import TeamCoordinator
 
 router = APIRouter(prefix="/sessions/{session_id}", tags=["turns"])
 
@@ -35,13 +39,22 @@ def get_agent_runtime(request: Request) -> AgentRuntime:
     return request.app.state.agent_runtime
 
 
+def get_team_coordinator(request: Request) -> TeamCoordinator:
+    return request.app.state.team_coordinator
+
+
 @router.post("/turns", response_model=Message)
 async def create_turn(
     session_id: str,
     payload: TurnCreate,
     request: Request,
     runtime: Annotated[AgentRuntime, Depends(get_agent_runtime)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
 ) -> Message:
+    session = sessions.get(session_id)
+    if session is not None and (session.parent_id or TeamCoordinator.is_team(session)):
+        # Подтверждать вызовы агентов команды без потока некому.
+        raise HTTPException(status_code=400, detail="С агентами на холсте ответ идёт только потоком")
     try:
         return await runtime.run_turn(
             session_id, payload.content, request.state.request_id
@@ -71,21 +84,33 @@ async def stream_turn(
     request: Request,
     runtime: Annotated[AgentRuntime, Depends(get_agent_runtime)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
+    coordinator: Annotated[TeamCoordinator, Depends(get_team_coordinator)],
 ) -> StreamingResponse:
     # Эти ошибки проверяем до ответа 200, чтобы клиент получил обычный HTTP-статус.
-    if sessions.get(session_id) is None:
+    session = sessions.get(session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
-    if runtime.is_busy(session_id):
+    # Переписка агента с холста принадлежит сессии-хозяину: ход идёт по её холсту, начиная с этого агента.
+    owner = sessions.get(session.parent_id) if session.parent_id else session
+    if owner is None:
+        raise HTTPException(status_code=404, detail="Сессия, которой принадлежит этот агент, удалена")
+    if runtime.is_busy(session_id) or coordinator.is_busy(owner.id):
         raise HTTPException(status_code=409, detail="В этой сессии ещё выполняется предыдущий ход")
+    if session.parent_id:
+        turn = coordinator.turn(owner, payload.content, request.state.request_id, start=session.node_id)
+    elif coordinator.is_team(session):
+        turn = coordinator.turn(session, payload.content, request.state.request_id)
+    else:
+        turn = runtime.stream_turn(session_id, payload.content, request.state.request_id)
 
     async def events():
         saved = False
         try:
-            async for event in runtime.stream_turn(session_id, payload.content, request.state.request_id):
+            async for event in turn:
                 saved = saved or event["type"] == "user_message"
-                yield _sse(event)
+                yield sse_event(event)
         except (AgentRuntimeError, LLMProviderError) as exc:
-            yield _sse({"type": "error", "message": str(exc), "user_message_saved": saved})
+            yield sse_event({"type": "error", "message": str(exc), "user_message_saved": saved})
 
     return StreamingResponse(
         events(),
@@ -105,7 +130,7 @@ def decide_approval(
         raise HTTPException(status_code=404, detail="Запрос подтверждения уже не активен")
 
 
-def _sse(event: dict) -> str:
+def sse_event(event: dict) -> str:
     data = {
         key: value.model_dump(mode="json") if isinstance(value, Message) else value
         for key, value in event.items()

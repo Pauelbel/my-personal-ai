@@ -3,6 +3,7 @@
 from collections.abc import Collection
 from pathlib import Path
 
+from local_agent.agent.models import Skill
 from local_agent.agent.registry import SkillRegistry
 from local_agent.tools.base import ToolResult
 
@@ -14,12 +15,24 @@ class UseSkillTool:
     requires_approval = False
 
     def __init__(
-        self, skills: SkillRegistry, known_tools: Collection[str] = (), available_tools: Collection[str] = ()
+        self,
+        skills: SkillRegistry,
+        known_tools: Collection[str] = (),
+        available_tools: Collection[str] = (),
+        allowed_skills: Collection[str] | None = None,
     ) -> None:
         self._skills = skills
         # Все инструменты приложения и те, что доступны в этом ходе: по ним видно, чего навыку не хватит.
         self._known_tools = set(known_tools)
         self._available_tools = set(available_tools)
+        # None — агенту доступен весь каталог.
+        self._allowed_skills = None if allowed_skills is None else set(allowed_skills)
+
+    def skills(self) -> list[Skill]:
+        return [
+            skill for skill in self._skills.all()
+            if self._allowed_skills is None or skill.id in self._allowed_skills
+        ]
 
     @property
     def parameters(self) -> dict[str, object]:
@@ -29,7 +42,7 @@ class UseSkillTool:
             "properties": {
                 "name": {
                     "type": "string",
-                    "enum": [skill.id for skill in self._skills.all()],
+                    "enum": [skill.id for skill in self.skills()],
                     "description": "id навыка",
                 },
             },
@@ -38,10 +51,10 @@ class UseSkillTool:
         }
 
     async def execute(self, arguments: dict[str, object], workspace: Path | None) -> ToolResult:
-        skill = self._skills.get(arguments.get("name"))
+        skills = {skill.id: skill for skill in self.skills()}
+        skill = skills.get(arguments.get("name"))
         if skill is None:
-            available = ", ".join(item.id for item in self._skills.all())
-            return ToolResult(f"Такого навыка нет. Доступные: {available}", is_error=True)
+            return ToolResult(f"Такого навыка нет. Доступные: {', '.join(skills)}", is_error=True)
         content = f"Навык «{skill.name}». Выполни задачу по этим инструкциям:\n\n{skill.instructions}"
         # Без нужных инструментов навык не выполнить: пусть модель скажет об этом, а не ответит «нет данных».
         missing = sorted(

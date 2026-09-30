@@ -18,6 +18,12 @@ export function renderMessages(container, messages) {
   let toolBubble = null;
   for (const message of messages) {
     if (message.role === "tool") continue;
+    if (message.sender) {
+      // Ответ агента с холста агенту сессии: короткая сворачиваемая строка, полный текст — по щелчку.
+      container.append(incomingNode(message));
+      toolBubble = null;
+      continue;
+    }
     // Раунды инструментов и итоговый ответ одного хода показываем одним пузырём агента.
     const shell = message.role === "assistant" && toolBubble ? toolBubble : messageShell(message.role);
     const { item, content } = shell;
@@ -146,9 +152,10 @@ export class StreamingMessage {
     const title = document.createElement("strong");
     const args = parseArguments(event.call.arguments);
     const editing = event.call.name === "edit_file" && typeof args.old_text === "string";
-    title.textContent = event.call.name === "write_file" && args.path
+    // В запуске команды подтверждение просит узел графа: показываем, кто именно.
+    title.textContent = (event.actor ? `${event.actor}: ` : "") + (event.call.name === "write_file" && args.path
       ? `Модель хочет записать файл ${args.path} (${(args.content || "").length} символов)`
-      : editing ? `Модель хочет изменить файл ${args.path}` : `Модель хочет выполнить «${event.tool_name}»`;
+      : editing ? `Модель хочет изменить файл ${args.path}` : `Модель хочет выполнить «${event.tool_name}»`);
     const preview = document.createElement("details");
     // Правку показываем сразу: по ней видно, что именно заменится.
     preview.open = editing;
@@ -226,12 +233,42 @@ function renderAssistantText(container, text) {
   }
 }
 
+function incomingNode(message) {
+  const item = document.createElement("article");
+  item.className = "message incoming";
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  // Координатор начинает реплику с пометки «[ответ: QA]»: в строке она не нужна, имя уже есть.
+  const text = message.content.replace(/^\[(?:ответ|от): [^\]]*\]\s*/, "");
+  summary.textContent = `⇠ ${message.sender}: ${firstLine(text)}`;
+  const body = document.createElement("div");
+  body.className = "message-content";
+  appendMarkdown(body, text);
+  details.append(summary, body);
+  item.append(details);
+  return item;
+}
+
+function firstLine(text) {
+  const line = text.trim().split("\n")[0];
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+}
+
 function toolCallNode(call, result) {
   const details = document.createElement("details");
   details.className = "tool-call";
   details.classList.toggle("failed", Boolean(result?.is_error));
   const summary = document.createElement("summary");
   const args = parseArguments(call.arguments);
+  if (call.name === "send_message") {
+    // Поручение агенту с холста читается как строка переписки, а не как вызов инструмента.
+    details.classList.add("delegation");
+    summary.textContent = `→ ${args.to ?? "?"}: ${firstLine(String(args.content ?? ""))}`;
+    const body = document.createElement("pre");
+    body.textContent = result?.is_error ? result.content : String(args.content ?? "");
+    details.append(summary, body);
+    return details;
+  }
   const target = args.path || args.query || args.commit || args.name || "";
   summary.textContent = `⚒ ${call.name}${target ? ` · ${target}` : ""}${result ? "" : " · нет результата"}`;
   const body = document.createElement("pre");

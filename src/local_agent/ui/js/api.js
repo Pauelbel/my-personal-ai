@@ -23,7 +23,8 @@ async function responseError(response) {
 const sessionPath = (sessionId) => `/sessions/${encodeURIComponent(sessionId)}`;
 
 export const sessionsApi = {
-  list: () => request("/sessions"),
+  // Служебные сессии запуска тоже нужны: их открывают из ленты, а сайдбар их прячет.
+  list: () => request("/sessions?include_hidden=true"),
   create: (model, projectId = null) => request(
     "/sessions",
     { method: "POST", body: JSON.stringify({ model, project_id: projectId }) },
@@ -37,6 +38,14 @@ export const sessionsApi = {
     { method: "PUT", body: JSON.stringify({ title }) },
   ),
   delete: (sessionId) => request(sessionPath(sessionId), { method: "DELETE" }),
+  // Холст сохраняется целиком; в ответе — ошибки, из-за которых команда пока не запустится.
+  // Переписка агента с холста: создаётся, если ему ещё ничего не поручали.
+  openNode: (sessionId, nodeId) => request(
+    `${sessionPath(sessionId)}/canvas/${encodeURIComponent(nodeId)}/session`, { method: "POST" },
+  ),
+  saveCanvas: (sessionId, canvas) => request(
+    `${sessionPath(sessionId)}/canvas`, { method: "PUT", body: JSON.stringify(canvas) },
+  ),
 };
 
 export const projectsApi = {
@@ -78,6 +87,12 @@ export const skillsApi = {
 };
 
 export const agentsApi = {
+  options: () => request("/agents/options"),
+  create: (agent) => request("/agents", { method: "POST", body: JSON.stringify(agent) }),
+  update: (agentId, agent) => request(
+    `/agents/${encodeURIComponent(agentId)}`, { method: "PUT", body: JSON.stringify(agent) },
+  ),
+  delete: (agentId) => request(`/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" }),
   prompt: (agentId) => request(`/agents/${encodeURIComponent(agentId)}/prompt`),
   savePrompt: (agentId, systemPrompt) => request(
     `/agents/${encodeURIComponent(agentId)}/prompt`,
@@ -85,37 +100,41 @@ export const agentsApi = {
   ),
 };
 
-export const turnsApi = {
-  // Ответ приходит потоком событий SSE; onEvent вызывается на каждое событие.
-  stream: async (sessionId, content, signal, onEvent) => {
-    const response = await fetch(`/api${sessionPath(sessionId)}/turns/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
-      signal,
-    });
-    if (!response.ok) throw await responseError(response);
-    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-    let buffer = "";
-    let completed = false;
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += value;
-      let boundary;
-      while ((boundary = buffer.indexOf("\n\n")) !== -1) {
-        const chunk = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        const data = chunk.split("\n").filter((line) => line.startsWith("data: ")).map((line) => line.slice(6)).join("\n");
-        if (data) {
-          const event = JSON.parse(data);
-          completed ||= event.type === "done";
-          onEvent(event);
-        }
+// Поток событий SSE: onEvent вызывается на каждое событие. Без события finalType поток считается оборванным.
+async function streamEvents(path, body, signal, onEvent, finalType) {
+  const response = await fetch(`/api${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) throw await responseError(response);
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  let completed = false;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += value;
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const chunk = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const data = chunk.split("\n").filter((line) => line.startsWith("data: ")).map((line) => line.slice(6)).join("\n");
+      if (data) {
+        const event = JSON.parse(data);
+        completed ||= event.type === finalType;
+        onEvent(event);
       }
     }
-    if (!completed) throw new Error("Соединение закрыто до завершения ответа.");
-  },
+  }
+  if (!completed) throw new Error("Соединение закрыто до завершения ответа.");
+}
+
+export const turnsApi = {
+  stream: (sessionId, content, signal, onEvent) => streamEvents(
+    `${sessionPath(sessionId)}/turns/stream`, { content }, signal, onEvent, "done",
+  ),
   decide: (sessionId, callId, approved) => request(
     `${sessionPath(sessionId)}/approvals/${encodeURIComponent(callId)}`,
     { method: "POST", body: JSON.stringify({ approved }) },

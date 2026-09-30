@@ -1,4 +1,6 @@
 // Этот модуль безопасно превращает распространённую Markdown-разметку в элементы чата.
+const WORD = /[\p{L}\p{N}]/u;
+
 function appendText(parent, value) {
   parent.append(document.createTextNode(value));
 }
@@ -55,7 +57,13 @@ function appendInline(parent, source) {
     let matched = false;
     for (const [marker, tag] of [["**", "strong"], ["__", "strong"], ["~~", "del"], ["*", "em"], ["_", "em"]]) {
       if (!source.startsWith(marker, index)) continue;
-      const end = source.indexOf(marker, index + marker.length);
+      // Подчёркивание внутри слова (git_log, read_file) — часть имени, а не курсив.
+      const intraword = marker[0] === "_";
+      if (intraword && WORD.test(source[index - 1] ?? "")) continue;
+      let end = source.indexOf(marker, index + marker.length);
+      while (intraword && end !== -1 && WORD.test(source[end + marker.length] ?? "")) {
+        end = source.indexOf(marker, end + 1);
+      }
       if (end <= index + marker.length) continue;
       const element = document.createElement(tag);
       appendInline(element, source.slice(index + marker.length, end));

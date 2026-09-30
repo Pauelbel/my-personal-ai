@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     projects_path: Path = Path("data/projects")
     conversations_path: Path = Path("data/conversations")
     memory_path: Path = Path("data/memory")
+    # Шаг — один ход одного агента холста; на нём ход команды останавливается, даже если агенты не договорились.
+    max_run_steps: int = Field(default=20, gt=0)
     memory_model: str = ""
     max_memory_context_chars: int = Field(default=12000, gt=0)
     memory_auto_update_messages: int = Field(default=10, ge=0)

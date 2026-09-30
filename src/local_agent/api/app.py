@@ -7,11 +7,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from local_agent.agent.loader import load_agents, load_skills
+from local_agent.agent.loader import load_agents, load_skills, warn_unknown_references
 from local_agent.agent.registry import AgentRegistry, SkillRegistry
 from local_agent.agent.runtime import AgentRuntime, RuntimeLimits
 from local_agent.agent.summary import ConversationSummarizer
 from local_agent.api.middleware import LocalOriginMiddleware, RequestLoggingMiddleware
+from local_agent.api.routes.agents import router as agents_router
 from local_agent.api.routes.folders import router as folders_router
 from local_agent.api.routes.health import router as health_router
 from local_agent.api.routes.memory import router as memory_router
@@ -35,6 +36,7 @@ from local_agent.sessions.service import SessionService
 from local_agent.storage.json.projects import JsonProjectRepository
 from local_agent.storage.json.sessions import JsonSessionRepository
 from local_agent.storage.jsonl.conversation import JsonlConversationStore
+from local_agent.team.coordinator import TeamCoordinator
 from local_agent.tools.filesystem import (
     EditFileTool,
     ListFilesTool,
@@ -109,6 +111,11 @@ def create_app(
             load_agents(active_settings.agents_path, active_settings.default_model)
         )
         app.state.skill_registry = SkillRegistry(load_skills(active_settings.skills_path))
+        warn_unknown_references(
+            app.state.agent_registry.all(),
+            {tool.id for tool in app.state.tool_registry.all()},
+            {skill.id for skill in app.state.skill_registry.all()},
+        )
         app.state.agent_runtime = AgentRuntime(
             app.state.session_service,
             app.state.conversation_service,
@@ -128,6 +135,13 @@ def create_app(
                 response_reserve_tokens=active_settings.response_reserve_tokens,
                 memory_auto_update_messages=active_settings.memory_auto_update_messages,
             ),
+        )
+        app.state.team_coordinator = TeamCoordinator(
+            app.state.agent_runtime,
+            app.state.session_service,
+            app.state.conversation_service,
+            app.state.agent_registry,
+            max_steps=active_settings.max_run_steps,
         )
         try:
             yield
@@ -155,6 +169,7 @@ def create_app(
     app.include_router(messages_router, prefix="/api")
     app.include_router(memory_router, prefix="/api")
     app.include_router(models_router, prefix="/api")
+    app.include_router(agents_router, prefix="/api")
     app.include_router(turns_router, prefix="/api")
     app.include_router(tools_router, prefix="/api")
     app.include_router(skills_router, prefix="/api")

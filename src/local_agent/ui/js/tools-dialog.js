@@ -56,7 +56,7 @@ export async function showTools() {
   renderToolDialog();
   render();
   if (!state.selectedId) {
-    elements.toolsIntro.textContent = "Выберите сессию проекта в боковой панели, чтобы настроить инструменты. Память, системный промпт и скиллы доступны в соседних вкладках.";
+    elements.toolsIntro.textContent = "Выберите сессию проекта в боковой панели, чтобы настроить инструменты. Память, агенты и навыки — в соседних вкладках.";
     return;
   }
   const sessionId = state.selectedId;

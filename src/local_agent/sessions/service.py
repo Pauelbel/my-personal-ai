@@ -13,6 +13,7 @@ from local_agent.projects.models import Project
 from local_agent.sessions.models import Session
 from local_agent.sessions.repository import SessionRepository
 from local_agent.storage.json.projects import JsonProjectRepository
+from local_agent.team.models import Canvas
 from local_agent.tools.registry import normalize_tool_ids
 
 
@@ -49,6 +50,9 @@ class SessionService:
         provider: str,
         workspace: str | None,
         project_id: str | None = None,
+        parent_id: str | None = None,
+        node_id: str | None = None,
+        hidden: bool = False,
     ) -> Session:
         # У сессии проекта своей папки нет: её задаёт проект.
         workspace = None if project_id else self._validate_workspace(workspace)
@@ -63,6 +67,9 @@ class SessionService:
             provider=provider,
             workspace=workspace,
             project_id=project_id,
+            parent_id=parent_id,
+            node_id=node_id,
+            hidden=hidden,
         )
         return self._effective(self._repository.save(session))
 
@@ -145,6 +152,24 @@ class SessionService:
             }
         )
 
+    def reassign_agent(self, old_agent_id: str, new_agent_id: str) -> int:
+        """Агента удалили: его сессии продолжают работу с другим агентом, а не падают на следующем сообщении."""
+        moved = 0
+        for session in self._repository.list():
+            if session.agent_id == old_agent_id:
+                self._repository.patch(session.id, {"agent_id": new_agent_id})
+                moved += 1
+        return moved
+
+    def set_canvas(self, session_id: str, canvas: Canvas) -> Session | None:
+        return self._effective(self._repository.patch(session_id, {"canvas": canvas}))
+
+    def set_node_session(self, session_id: str, node_id: str, child_id: str) -> None:
+        """Запоминает скрытую сессию узла холста, чтобы агент продолжал её в следующих ходах."""
+        session = self._repository.get(session_id)
+        if session is not None:
+            self._repository.patch(session_id, {"node_sessions": {**session.node_sessions, node_id: child_id}})
+
     def set_summary(self, session_id: str, summary: str, until_message_id: str) -> None:
         self._repository.patch(
             session_id, {"summary": summary, "summary_until_message_id": until_message_id}
@@ -158,6 +183,10 @@ class SessionService:
         if deleted:
             for callback in self._on_deleted:
                 callback(session_id)
+            # Скрытые сессии агентов с холста живут, только пока жива их сессия.
+            for child in self._repository.list():
+                if child.parent_id == session_id:
+                    self.delete(child.id)
         return deleted
 
     def set_context_tokens(self, session_id: str, count: int | None) -> None:

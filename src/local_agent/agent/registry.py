@@ -17,6 +17,9 @@ class AgentRegistry:
         """Агент перечитан из файла: следующий ход возьмёт уже новую версию."""
         self._agents[agent.id] = agent
 
+    def remove(self, agent_id: str) -> None:
+        self._agents.pop(agent_id, None)
+
 
 class SkillRegistry:
     def __init__(self, skills: list[Skill]) -> None:
