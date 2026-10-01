@@ -55,11 +55,9 @@ def test_agent_is_created_edited_and_survives_restart(tmp_path):
     ({"skills": ["ghost"]}, "Неизвестные навыки: ghost"),
     ({"name": "Имя\ntools: write_file"}, "в одну строку"),
     ({"description": "Описание\rtools: write_file, git"}, "в одну строку"),
-    ({"model": "m\ntools: git"}, "в одну строку"),
     ({"id": "../default"}, "ID агента"),
     ({"id": "Reviewer"}, "ID агента"),
     ({"max_tool_rounds": 0}, "Раундов инструментов"),
-    ({"provider": "nope"}, "Провайдер LLM не найден"),
 ])
 def test_agent_file_cannot_gain_unexpected_rights(tmp_path, fields, message):
     """Инструменты — права агента: в файл попадают только известные, а перевод строки не дописывает заголовок."""
@@ -70,9 +68,27 @@ def test_agent_file_cannot_gain_unexpected_rights(tmp_path, fields, message):
 
     assert response.status_code == 400 and message in response.json()["detail"]
     assert edit is None or edit.status_code == 400
-    agents = {agent.id: agent for agent in load_agents(tmp_path / "agents", "")}
+    agents = {agent.id: agent for agent in load_agents(tmp_path / "agents")}
     assert set(agents) == {"default"}
     assert "rm_rf" not in agents["default"].tools and agents["default"].name == "Основной агент"
+
+
+def test_agent_form_does_not_set_model(tmp_path):
+    """Модель выбирают в чате: API агентов её не принимает, а закреплённую в файле вручную не трогает."""
+    configured = settings(tmp_path)
+    injected = {**AGENT, "provider": "nope", "model": "m\ntools: write_file"}
+    with TestClient(create_app(configured)) as client:
+        created = client.post("/api/agents", json={**injected, "id": "reviewer"})
+    path = tmp_path / "agents" / "reviewer.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("name:", "provider: ollama\nmodel: pinned\nname:", 1), encoding="utf-8")
+    with TestClient(create_app(configured)) as client:
+        updated = client.put("/api/agents/reviewer", json={**injected, "description": "Строгий"})
+
+    assert created.status_code == 201 and updated.status_code == 200
+    assert "model" not in created.json() and "provider" not in updated.json()
+    agent = next(agent for agent in load_agents(tmp_path / "agents") if agent.id == "reviewer")
+    assert agent.tools == ("read_file", "git") and agent.description == "Строгий"
+    assert (agent.llm_provider, agent.model) == ("ollama", "pinned")
 
 
 def test_agent_deletion_is_guarded_and_moves_sessions_to_default(tmp_path):
@@ -101,4 +117,4 @@ def test_agent_deletion_is_guarded_and_moves_sessions_to_default(tmp_path):
     assert listed == {"default", "reviewer"}
     # Удалённый агент лежит в архиве и не загружается как активный.
     assert len(list((tmp_path / "agents" / ".deleted").glob("helper.*.md"))) == 1
-    assert {agent.id for agent in load_agents(tmp_path / "agents", "")} == {"default", "reviewer"}
+    assert {agent.id for agent in load_agents(tmp_path / "agents")} == {"default", "reviewer"}

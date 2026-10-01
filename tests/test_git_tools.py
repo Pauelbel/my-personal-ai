@@ -155,7 +155,7 @@ def test_agent_legacy_git_allowlist_is_normalized(tmp_path: Path) -> None:
     (tmp_path / "old.md").write_text(
         "---\nname: Старый агент\ntools: read_file, git_log, git_show\n---\nТекст\n", encoding="utf-8"
     )
-    assert load_agents(tmp_path, "test-model")[0].tools == ("read_file", "git")
+    assert load_agents(tmp_path)[0].tools == ("read_file", "git")
 
 
 def test_unified_git_status_and_diff_separate_staged_changes(repo: Path) -> None:

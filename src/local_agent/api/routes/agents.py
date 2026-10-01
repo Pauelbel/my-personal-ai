@@ -26,8 +26,6 @@ class AgentSummary(AgentInfo):
     """Все параметры агента: их показывают карточка на холсте и форма агента."""
 
     description: str
-    provider: str
-    model: str
     tools: list[str]
     # None — агенту доступны все навыки.
     skills: list[str] | None
@@ -48,8 +46,6 @@ class AgentPayload(BaseModel):
 
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(default="", max_length=500)
-    provider: str = Field(default="lm_studio", min_length=1)
-    model: str = ""
     tools: list[str] = Field(default_factory=list)
     skills: list[str] | None = None
     max_tool_rounds: int | None = None
@@ -84,8 +80,8 @@ Agents = Annotated[AgentRegistry, Depends(get_agent_registry)]
 
 def summary(agent: Agent) -> AgentSummary:
     return AgentSummary(
-        id=agent.id, name=agent.name, description=agent.description, provider=agent.llm_provider,
-        model=agent.model, tools=list(agent.tools), skills=None if agent.skills is None else list(agent.skills),
+        id=agent.id, name=agent.name, description=agent.description,
+        tools=list(agent.tools), skills=None if agent.skills is None else list(agent.skills),
         max_tool_rounds=agent.max_tool_rounds, system_prompt=agent.system_prompt,
     )
 
@@ -157,9 +153,8 @@ def read_agent_prompt(agent_id: str, agents: Agents) -> AgentPrompt:
 def save_agent_prompt(agent_id: str, payload: AgentPromptUpdate, request: Request, agents: Agents) -> AgentPrompt:
     if agents.get(agent_id) is None:
         raise HTTPException(status_code=404, detail="Агент не найден")
-    settings = request.app.state.settings
     try:
-        agent = save_prompt(settings.agents_path, agent_id, payload.system_prompt, settings.default_model)
+        agent = save_prompt(request.app.state.settings.agents_path, agent_id, payload.system_prompt)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     agents.replace(agent)
@@ -168,11 +163,12 @@ def save_agent_prompt(agent_id: str, payload: AgentPromptUpdate, request: Reques
 
 def _save(request: Request, agent_id: str, payload: AgentPayload, *, create: bool) -> Agent:
     state = request.app.state
-    if state.llm_registry.get(payload.provider) is None:
-        raise HTTPException(status_code=400, detail="Провайдер LLM не найден")
+    # Модель выбирают в чате, а не в форме агента; закреплённая в файле вручную при правке остаётся.
+    existing = state.agent_registry.get(agent_id)
     agent = Agent(
-        id=agent_id, name=payload.name, system_prompt=payload.system_prompt, llm_provider=payload.provider,
-        model=payload.model, tools=tuple(normalize_tool_ids(payload.tools)), description=payload.description,
+        id=agent_id, name=payload.name, system_prompt=payload.system_prompt,
+        llm_provider=existing.llm_provider if existing else "lm_studio", model=existing.model if existing else "",
+        tools=tuple(normalize_tool_ids(payload.tools)), description=payload.description,
         skills=None if payload.skills is None else tuple(payload.skills), max_tool_rounds=payload.max_tool_rounds,
     )
     try:
@@ -180,7 +176,7 @@ def _save(request: Request, agent_id: str, payload: AgentPayload, *, create: boo
             state.settings.agents_path, agent,
             known_tools={tool.id for tool in state.tool_registry.all()},
             known_skills={skill.id for skill in state.skill_registry.all()},
-            default_model=state.settings.default_model, create=create,
+            create=create,
         )
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail="Агент с таким ID уже есть") from exc

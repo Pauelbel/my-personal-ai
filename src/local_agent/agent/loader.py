@@ -12,8 +12,6 @@ from local_agent.tools.registry import normalize_tool_ids
 
 DEFAULT_AGENT_FILE = """---
 name: Основной агент
-provider: lm_studio
-model:
 tools: list_files, read_file, search_files, write_file, edit_file, git
 ---
 Ты полезный локальный ассистент. Отвечай на языке пользователя.
@@ -31,12 +29,12 @@ DEFAULT_SKILLS = Path(__file__).resolve().parent / "default_skills"
 logger = logging.getLogger(__name__)
 
 
-def load_agents(root: Path, default_model: str) -> list[Agent]:
+def load_agents(root: Path) -> list[Agent]:
     """Каждый `<id>.md` в папке — отдельный агент. Пустая папка получает агента по умолчанию."""
     root.mkdir(parents=True, exist_ok=True)
     if not any(root.glob("*.md")):
         (root / "default.md").write_text(DEFAULT_AGENT_FILE, encoding="utf-8")
-    return [_parse_agent(path, default_model) for path in sorted(root.glob("*.md"))]
+    return [_parse_agent(path) for path in sorted(root.glob("*.md"))]
 
 
 def load_skills(root: Path) -> list[Skill]:
@@ -46,11 +44,11 @@ def load_skills(root: Path) -> list[Skill]:
     return [_parse_skill(path) for path in sorted(root.glob("*.md"))]
 
 
-def save_prompt(root: Path, agent_id: str, prompt: str, default_model: str) -> Agent:
+def save_prompt(root: Path, agent_id: str, prompt: str) -> Agent:
     """Меняет только системный промпт: блок параметров в начале файла остаётся как был."""
     path = root / f"{agent_id}.md"
     _replace_body(path, prompt, "Системный промпт не может быть пустым")
-    return _parse_agent(path, default_model)
+    return _parse_agent(path)
 
 
 def create_skill(root: Path, name: str, description: str, instructions: str) -> Skill:
@@ -95,7 +93,6 @@ def write_agent(
     *,
     known_tools: Collection[str],
     known_skills: Collection[str],
-    default_model: str,
     create: bool,
 ) -> Agent:
     """Записывает файл агента целиком. Новый файл не перезаписывает существующий."""
@@ -110,7 +107,7 @@ def write_agent(
         if not path.is_file():
             raise FileNotFoundError("Агент не найден")
         path.write_text(text, encoding="utf-8", newline="\n")
-    return _parse_agent(path, default_model)
+    return _parse_agent(path)
 
 
 def _check_agent(agent: Agent, known_tools: Collection[str], known_skills: Collection[str]) -> None:
@@ -136,7 +133,10 @@ def _agent_text(agent: Agent) -> str:
     lines = [f"name: {agent.name}"]
     if agent.description:
         lines.append(f"description: {agent.description}")
-    lines += [f"provider: {agent.llm_provider}", f"model: {agent.model}", f"tools: {', '.join(agent.tools)}"]
+    # Модель выбирают в чате; строки provider и model есть только у агента, которому её закрепили в файле вручную.
+    if agent.model:
+        lines += [f"provider: {agent.llm_provider}", f"model: {agent.model}"]
+    lines.append(f"tools: {', '.join(agent.tools)}")
     # Без строки skills агенту доступны все навыки, пустая строка — ни одного.
     if agent.skills is not None:
         lines.append(f"skills: {', '.join(agent.skills)}")
@@ -220,7 +220,7 @@ def _fields(path: Path, header: str, known: set[str]) -> dict[str, str]:
     return fields
 
 
-def _parse_agent(path: Path, default_model: str) -> Agent:
+def _parse_agent(path: Path) -> Agent:
     header, prompt = _split(path)
     fields = _fields(path, header, AGENT_KEYS)
     if not prompt.strip():
@@ -233,7 +233,8 @@ def _parse_agent(path: Path, default_model: str) -> Agent:
         name=fields.get("name") or path.stem,
         system_prompt=prompt.strip(),
         llm_provider=fields.get("provider") or "lm_studio",
-        model=fields.get("model") or default_model,
+        # Пусто — агент работает на модели, выбранной в чате.
+        model=fields.get("model", ""),
         tools=tuple(normalize_tool_ids(_items(fields.get("tools", "")))),
         description=fields.get("description", ""),
         # Строка «skills:» без значений означает «без навыков», а отсутствие строки — «все навыки».

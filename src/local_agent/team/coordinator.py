@@ -139,9 +139,11 @@ class TeamCoordinator:
         if known and self._sessions.get(known) is not None:
             return known
         agent = self._agents.get(node.agent_id)
+        # Агент холста начинает с модели сессии-хозяйки, если в его файле не закреплена своя; дальше её меняют в его чате.
+        provider, model = (agent.llm_provider, agent.model) if agent.model else (session.provider, session.model)
         child = self._sessions.create(
             title=f"{self._name(session, node.id)} · {session.title}", agent_id=agent.id,
-            model=agent.model or session.model, provider=agent.llm_provider,
+            model=model, provider=provider,
             workspace=None, project_id=session.project_id, parent_id=session.id, node_id=node.id, hidden=True,
         )
         self._sessions.set_node_session(session.id, node.id, child.id)

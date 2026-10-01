@@ -78,10 +78,11 @@
                   <textarea id="message-input" rows="3" placeholder="Спросите о проекте или попросите внести изменения..." title="Enter — отправить, Ctrl+Enter — новая строка" required></textarea>
                 </form>
                 <div class="composer-config">
-                  <label class="config-field" id="agent-field" for="session-agent" hidden><span class="visually-hidden">Агент</span><select id="session-agent"><option value="default">Основной агент</option></select></label>
+                  <label class="config-field" for="session-agent" title="Агент этой сессии. Агенты с холста перечислены ниже: выбор открывает разговор с ними"><span class="visually-hidden">Агент</span><select id="session-agent"><option value="agent:default">Основной агент</option></select></label>
+                  <span class="config-divider" aria-hidden="true"></span>
                   <label class="config-field" for="session-provider"><span class="visually-hidden">Провайдер</span><select id="session-provider"><option value="lm_studio">LM Studio</option></select></label>
                   <span class="config-divider" aria-hidden="true"></span>
-                  <label class="config-field model-field" for="session-model"><span class="visually-hidden">Модель</span><input id="session-model" list="available-models" placeholder="Выберите модель" required /><datalist id="available-models"></datalist></label>
+                  <label class="config-field model-field" for="session-model" title="Модель этого чата: меняется сразу, со следующего сообщения"><span class="visually-hidden">Модель</span><select id="session-model" required></select></label>
                   <span class="config-divider" aria-hidden="true"></span>
                   <button class="config-field workspace-field workspace-button" id="session-workspace" type="button"><span aria-hidden="true">⌂</span><span id="workspace-label">Выбрать папку…</span></button>
                   <button class="composer-memory" id="update-memory-chat" type="button" title="Обработать новые сообщения этой сессии">Обновить память</button>
@@ -165,7 +166,7 @@
           <div class="memory-header">
             <div>
               <span class="section-label" id="prompt-title">АГЕНТЫ</span>
-              <p>Агент — роль: модель, инструменты, навыки и системный промпт, с которого начинается каждый его запрос к модели. Изменения действуют со следующего сообщения во всех сессиях и командах этого агента.</p>
+              <p>Агент — роль: инструменты, навыки и системный промпт, с которого начинается каждый его запрос к модели. Агента и модель выбирают под полем ввода в чате. Изменения действуют со следующего сообщения во всех сессиях и командах этого агента.</p>
             </div>
             <div class="skill-header-actions">
               <button class="primary-button" id="add-agent" type="button">＋ Агент</button>
@@ -181,9 +182,8 @@
                 <label class="dialog-field">Имя<input id="agent-name" maxlength="100" autocomplete="off" required /></label>
                 <label class="dialog-field">ID<input id="agent-id" maxlength="60" autocomplete="off" placeholder="латиница, например reviewer" pattern="[a-z0-9][a-z0-9_-]*" /></label>
                 <label class="dialog-field wide">Описание — его видят соседи по команде<input id="agent-description" maxlength="500" autocomplete="off" /></label>
-                <label class="dialog-field">Провайдер<select id="agent-provider"></select></label>
-                <label class="dialog-field">Модель<input id="agent-model" list="available-models" autocomplete="off" placeholder="по умолчанию" /></label>
-                <label class="dialog-field">Раундов инструментов за ход<input id="agent-rounds" type="number" min="1" max="50" placeholder="8" /></label>
+                <label class="dialog-field">Раундов инструментов за ход<input id="agent-rounds" type="number" min="1" max="50" placeholder="8" aria-describedby="agent-rounds-hint" /></label>
+                <p class="field-hint wide" id="agent-rounds-hint">Раунд — один шаг работы с инструментами: модель просит вызвать их (прочитать файл, найти, записать — до 4 вызовов за раз), приложение выполняет и возвращает результат. Число задаёт, сколько таких шагов подряд агент сделает на одно ваше сообщение; после лимита он обязан ответить текстом, уже без инструментов. Пусто — 8. Агенту, который сначала изучает папки, а потом пишет файл, ставьте больше, например 15–20: иначе раунды уйдут на чтение и до записи он не дойдёт.</p>
               </div>
               <fieldset class="agent-checks" id="agent-tools"><legend>Инструменты</legend></fieldset>
               <fieldset class="agent-checks" id="agent-skills">

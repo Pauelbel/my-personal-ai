@@ -107,9 +107,7 @@ def create_app(
             WriteFileTool(active_settings.memory_path), EditFileTool(active_settings.memory_path),
             GitTool(),
         ])
-        app.state.agent_registry = AgentRegistry(
-            load_agents(active_settings.agents_path, active_settings.default_model)
-        )
+        app.state.agent_registry = AgentRegistry(load_agents(active_settings.agents_path))
         app.state.skill_registry = SkillRegistry(load_skills(active_settings.skills_path))
         warn_unknown_references(
             app.state.agent_registry.all(),

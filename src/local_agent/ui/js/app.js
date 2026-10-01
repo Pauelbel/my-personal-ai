@@ -2,7 +2,7 @@
 import { renderMessages } from "./chat.js";
 import {
   attachStreamingBubble, chooseWorkspace, handleMessageKeydown, loadCatalog, loadModels, saveConfig, sendMessage,
-  stopStreaming, renderTurnRecovery, retryTurn,
+  showModel, stopStreaming, renderTurnRecovery, retryTurn,
 } from "./composer.js";
 import { initFolderPicker } from "./folder-picker.js";
 import { renderMemoryPanel, saveMemory, showMemory, updateMemory } from "./memory-panel.js";
@@ -94,7 +94,7 @@ function renderApp() {
   if (selected) {
     if (!editingTitle) elements.titleInput.value = selected.title;
     if (document.activeElement !== elements.provider) elements.provider.value = selected.provider;
-    if (document.activeElement !== elements.model) elements.model.value = selected.model || state.preferredModel;
+    if (document.activeElement !== elements.model) showModel(selected.model || state.preferredModel);
   }
   const project = selectedProject();
   elements.workspaceLabel.textContent = project ? project.name : "Выбрать папку…";

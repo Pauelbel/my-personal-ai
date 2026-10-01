@@ -53,12 +53,7 @@ export async function showAgents({ create = false } = {}) {
   elements.promptStatus.textContent = "";
   render();
   try {
-    const [loaded, loadedOptions, providers] = await Promise.all([
-      catalogApi.agents(), agentsApi.options(), catalogApi.providers(),
-    ]);
-    agents = loaded;
-    options = loadedOptions;
-    fillSelect(elements.agentProvider, providers);
+    [agents, options] = await Promise.all([catalogApi.agents(), agentsApi.options()]);
     fillChecks();
     clearError();
   } catch (error) {
@@ -129,7 +124,7 @@ function fillForm(agent) {
   const disabled = !agent && !creating;
   elements.promptAgentTitle.textContent = agent ? agent.name : creating ? "Новый агент" : "Агентов нет";
   elements.promptAgentFile.textContent = agent?.id === DEFAULT_AGENT_ID
-    ? "Основной агент: с него начинается каждая новая сессия, на холсте это карточка «вход». Файл default.md в папке агентов."
+    ? "Основной агент: с него начинается каждая новая сессия, сменить агента можно под полем ввода в чате. Удалить его нельзя. Файл default.md в папке агентов."
     : agent
     ? `Файл ${agent.id}.md в папке агентов.`
     : "ID — имя агента для команды: по нему соседи пишут ему через send_message. Оставьте пустым — он сгенерируется.";
@@ -137,8 +132,6 @@ function fillForm(agent) {
   elements.agentId.value = agent?.id ?? "";
   elements.agentId.disabled = !creating;
   elements.agentDescription.value = agent?.description ?? "";
-  elements.agentProvider.value = agent?.provider ?? "lm_studio";
-  elements.agentModel.value = agent?.model ?? "";
   elements.agentRounds.value = agent?.max_tool_rounds ?? "";
   const tools = new Set(agent ? agent.tools : DEFAULT_TOOLS);
   const skills = agent?.skills ?? null;
@@ -153,9 +146,8 @@ function fillForm(agent) {
   }
   syncSkills();
   elements.promptSave.disabled = disabled;
-  elements.agentDelete.hidden = creating || !agent;
-  elements.agentDelete.disabled = agent?.id === DEFAULT_AGENT_ID;
-  elements.agentDelete.title = agent?.id === DEFAULT_AGENT_ID ? "Основного агента удалить нельзя: на нём работают обычные сессии" : "";
+  // У основного агента кнопки нет вовсе: неактивная выглядела сломанной.
+  elements.agentDelete.hidden = creating || !agent || agent.id === DEFAULT_AGENT_ID;
 }
 
 function syncSkills() {
@@ -173,8 +165,6 @@ function formData() {
   return {
     name: elements.agentName.value.trim(),
     description: elements.agentDescription.value.trim(),
-    provider: elements.agentProvider.value,
-    model: elements.agentModel.value.trim(),
     max_tool_rounds: elements.agentRounds.value ? Number(elements.agentRounds.value) : null,
     tools: checked("tool"),
     skills: elements.agentAllSkills.checked ? null : checked("skill"),
@@ -192,7 +182,7 @@ async function saveAgent() {
     const known = agents.some((agent) => agent.id === saved.id);
     agents = known ? agents.map((agent) => agent.id === saved.id ? saved : agent) : [...agents, saved];
     elements.promptStatus.textContent = creating
-      ? `Агент «${saved.name}» создан. Его можно выбрать в сессии и поставить в команду.`
+      ? `Агент «${saved.name}» создан. Его можно выбрать под полем ввода в чате и поставить на холст.`
       : "Агент сохранён. Изменения действуют со следующего сообщения.";
     selectAgent(saved.id);
     // Холст тоже должен узнать о новом агенте: его можно сразу поставить на холст.
@@ -218,13 +208,4 @@ async function deleteAgent() {
   } catch (error) {
     elements.promptStatus.textContent = `Не удалось удалить: ${error.message}`;
   }
-}
-
-function fillSelect(select, items) {
-  select.replaceChildren(...items.map((item) => {
-    const option = document.createElement("option");
-    option.value = item.id;
-    option.textContent = item.name;
-    return option;
-  }));
 }

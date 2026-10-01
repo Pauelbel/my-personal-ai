@@ -1,14 +1,17 @@
 // Холст сессии: агенты, которым агент сессии может поручать работу, и связи «кто кому пишет».
 // Карточка «вход» — сам агент сессии; пока от неё нет стрелок, сессия работает как обычный чат.
-// Список агентов под чатом — это агенты холста: выбор открывает переписку с выбранным агентом.
+// Список агентов под чатом: агент сессии выбирается из всех агентов, а агенты холста идут отдельной
+// группой — выбор открывает переписку с выбранным агентом.
 import { showAgents } from "./agents-panel.js";
 import { agentsApi, catalogApi, sessionsApi } from "./api.js";
 import { initResizer } from "./resizer.js";
 import { loadSessions, selectSession } from "./sessions.js";
-import { elements, selectedSession, state } from "./state.js";
+import { elements, render, selectedSession, showError, state } from "./state.js";
 
 // Пункт списка «Добавить агента», который открывает создание нового агента; id агента двоеточия не содержит.
 const NEW_AGENT = ":new";
+// Префикс пункта «агент сессии» в списке под чатом: без него id агента совпал бы с id его карточки на холсте.
+const SESSION_AGENT = "agent:";
 // Карточка агента сессии: через неё сообщение пользователя входит в команду.
 const ENTRY = "main";
 const SVG = "http://www.w3.org/2000/svg";
@@ -57,7 +60,11 @@ export function initSessionCanvas() {
     const agent = agents.find((item) => item.id === value);
     if (agent) addNode(agent);
   });
-  elements.agent.addEventListener("change", () => { void openAgentChat(elements.agent.value); });
+  elements.agent.addEventListener("change", () => {
+    const value = elements.agent.value;
+    if (value.startsWith(SESSION_AGENT)) void chooseSessionAgent(value.slice(SESSION_AGENT.length));
+    else void openAgentChat(value);
+  });
   elements.zoomIn.addEventListener("click", () => zoomAtCenter(view.zoom + ZOOM_STEP));
   elements.zoomOut.addEventListener("click", () => zoomAtCenter(view.zoom - ZOOM_STEP));
   elements.zoomReset.addEventListener("click", () => {
@@ -116,21 +123,54 @@ async function openAgentChat(nodeId) {
     selectSession(opened.id);
   } catch (error) {
     setStatus(`Не удалось открыть переписку: ${error.message}`);
-    renderChatAgents();
+    showChatAgent();
   }
 }
 
-// С кем разговор: в списке только агенты холста, сколько карточек — столько и вариантов.
-function renderChatAgents() {
-  const nodes = graph?.nodes ?? [];
-  const key = JSON.stringify([currentNode(), nodes.map((node) => [node.id, displayName(node)])]);
-  if (elements.agent.dataset.key !== key) {
-    elements.agent.dataset.key = key;
-    fillSelect(elements.agent, nodes.map((node) => [node.id, displayName(node)]));
+// Агент сессии меняется прямо в чате: переписка остаётся, следующие сообщения получает новый агент.
+async function chooseSessionAgent(agentId) {
+  const owner = ownerSession();
+  if (!owner) return;
+  try {
+    if (owner.agent_id !== agentId) {
+      if (state.streaming) throw new Error("дождитесь конца ответа");
+      const updated = await sessionsApi.configure(owner.id, {
+        provider: owner.provider, model: owner.model || state.preferredModel, workspace: null, agent_id: agentId,
+      });
+      state.sessions = state.sessions.map((session) => session.id === updated.id ? updated : session);
+    }
+    if (state.selectedId !== owner.id) selectSession(owner.id);
+    else render();
+  } catch (error) {
+    showError(new Error(`Не удалось сменить агента: ${error.message}`));
+    showChatAgent();
   }
-  if (document.activeElement !== elements.agent) elements.agent.value = currentNode();
-  elements.agentField.hidden = nodes.length < 2;
-  elements.agentField.title = "С кем разговор: агенты с холста этой сессии";
+}
+
+// Под чатом: агент сессии — любой из агентов; агенты холста, если они есть, идут второй группой.
+function renderChatAgents() {
+  const own = agents.map((agent) => [SESSION_AGENT + agent.id, agent.name]);
+  const team = (graph?.nodes ?? []).filter((node) => node.id !== ENTRY).map((node) => [node.id, displayName(node)]);
+  const key = JSON.stringify([own, team]);
+  const rebuilt = elements.agent.dataset.key !== key;
+  if (rebuilt) {
+    elements.agent.dataset.key = key;
+    if (team.length) elements.agent.replaceChildren(optionGroup("Агент сессии", own), optionGroup("Агенты холста", team));
+    else fillSelect(elements.agent, own);
+  }
+  if (rebuilt || document.activeElement !== elements.agent) showChatAgent();
+}
+
+// С кем сейчас разговор: с агентом сессии или с агентом холста.
+function showChatAgent() {
+  elements.agent.value = currentNode() === ENTRY ? SESSION_AGENT + (ownerSession()?.agent_id ?? "") : currentNode();
+}
+
+function optionGroup(label, options) {
+  const group = document.createElement("optgroup");
+  group.label = label;
+  fillSelect(group, options);
+  return group;
 }
 
 // Вызывается при каждой перерисовке: холст перестраивается, только когда открыли другую сессию.
@@ -361,7 +401,7 @@ function card(node) {
   if (!agent) {
     content.append(section(node, "agent", "Агент", null, [span("agent-card-missing", `Агент ${node.agent_id || "сессии"} не найден`)]));
   } else {
-    const about = [span("agent-card-meta", [agent.name, agent.model || "модель по умолчанию"].join(" · "))];
+    const about = [span("agent-card-meta", agent.name)];
     if (agent.description) about.push(paragraph(agent.description));
     const prompt = document.createElement("div");
     prompt.className = "agent-card-prompt";

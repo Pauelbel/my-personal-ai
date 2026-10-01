@@ -10,6 +10,8 @@ from local_agent.llm.base import LLMProviderError, LLMProviderUnavailable
 from local_agent.llm.models import ChatMessage, ChatResult, ReasoningDelta, ToolCall
 
 CONTEXT_CACHE_SECONDS = 60
+# Сколько символов пояснения сервера показать в ошибке: «model does not exist» и подобное.
+ERROR_DETAIL_CHARS = 300
 
 
 class OpenAICompatibleProvider:
@@ -71,7 +73,7 @@ class OpenAICompatibleProvider:
             async with self._client.stream("POST", "chat/completions", json=payload) as response:
                 if response.is_error:
                     await response.aread()
-                    raise LLMProviderError(f"{self.name} вернул ошибку HTTP {response.status_code}")
+                    raise LLMProviderError(self._http_error(response))
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -121,20 +123,38 @@ class OpenAICompatibleProvider:
         cached = self._context_cache.get(model)
         if cached and time.monotonic() - cached[0] < CONTEXT_CACHE_SECONDS:
             return cached[1]
-        length = None
+        # LM Studio сообщает окно в нативном API, vLLM — в поле max_model_len списка /v1/models.
+        length = await self._window(self._native_root + "api/v0/models", model, "loaded_context_length", "max_context_length")
+        if length is None:
+            length = await self._window("models", model, "max_model_len")
+        self._context_cache[model] = (time.monotonic(), length)
+        return length
+
+    async def _window(self, url: str, model: str, *fields: str) -> int | None:
+        """Размер окна модели из списка моделей сервера; None, если сервер его не сообщает."""
         try:
-            response = await self._client.get(self._native_root + "api/v0/models")
+            response = await self._client.get(url)
             response.raise_for_status()
             for item in response.json().get("data", []):
                 if item.get("id") == model:
-                    value = item.get("loaded_context_length") or item.get("max_context_length")
-                    length = value if isinstance(value, int) and value > 0 else None
-                    break
+                    value = next((item[field] for field in fields if item.get(field)), None)
+                    return value if isinstance(value, int) and value > 0 else None
         except (httpx.HTTPError, ValueError, AttributeError):
-            # Не LM Studio или старая версия: runtime возьмёт DEFAULT_CONTEXT_TOKENS.
-            length = None
-        self._context_cache[model] = (time.monotonic(), length)
-        return length
+            # Сервер этого не умеет: runtime возьмёт DEFAULT_CONTEXT_TOKENS.
+            return None
+        return None
+
+    def _http_error(self, response: httpx.Response) -> str:
+        """Ошибка HTTP с пояснением сервера: по одному коду 404 не понять, что не так с моделью."""
+        detail = ""
+        try:
+            data = response.json()
+            error = data.get("error") if isinstance(data, dict) else None
+            detail = (error.get("message") if isinstance(error, dict) else error) or data.get("detail") or data.get("message")
+        except (ValueError, AttributeError):
+            detail = response.text
+        detail = " ".join(str(detail or "").split())[:ERROR_DETAIL_CHARS]
+        return f"Сервер модели «{self.name}» вернул ошибку HTTP {response.status_code}" + (f": {detail}" if detail else "")
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -191,8 +211,6 @@ class OpenAICompatibleProvider:
         except httpx.RequestError as exc:
             raise LLMProviderUnavailable(f"Не удалось подключиться к {self.name}") from exc
         except httpx.HTTPStatusError as exc:
-            raise LLMProviderError(
-                f"{self.name} вернул ошибку HTTP {exc.response.status_code}"
-            ) from exc
+            raise LLMProviderError(self._http_error(exc.response)) from exc
         except ValueError as exc:
             raise LLMProviderError(f"{self.name} вернул некорректный JSON") from exc

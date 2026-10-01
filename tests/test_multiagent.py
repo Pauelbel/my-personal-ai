@@ -91,7 +91,7 @@ def events_of(response):
 
 def test_agent_file_fields(root):
     (root / "agents" / "plain.md").write_text("---\nname: Простой\nmax_tool_rounds: 3\n---\nТекст\n", encoding="utf-8")
-    agents = {agent.id: agent for agent in load_agents(root / "agents", "")}
+    agents = {agent.id: agent for agent in load_agents(root / "agents")}
 
     assert agents["qa"].description == "Проектирует тестирование"
     assert agents["qa"].skills == ("check",)
@@ -101,7 +101,19 @@ def test_agent_file_fields(root):
 
     (root / "agents" / "bad.md").write_text("---\nmax_tool_rounds: 0\n---\nТекст\n", encoding="utf-8")
     with pytest.raises(ValueError, match="max_tool_rounds"):
-        load_agents(root / "agents", "")
+        load_agents(root / "agents")
+
+
+def test_canvas_agent_starts_with_session_model_unless_its_file_pins_one(root):
+    (root / "agents" / "plain.md").write_text("---\nname: Простой\n---\nТекст\n", encoding="utf-8")
+    canvas = {"nodes": [*TEAM["nodes"], {"id": "plain", "name": "Простой", "agent_id": "plain"}], "edges": TEAM["edges"]}
+    with TestClient(create_app(settings(root, default_model="other-model"), llm_provider=TeamProvider({}))) as client:
+        session_id = open_session(client, root, canvas)
+        plain = client.post(f"/api/sessions/{session_id}/canvas/plain/session").json()
+        qa = client.post(f"/api/sessions/{session_id}/canvas/qa/session").json()
+
+    # Модель выбирают в чате: агент без своей модели берёт модель сессии, а не DEFAULT_MODEL.
+    assert plain["model"] == "main-model" and qa["model"] == "qa-model"
 
 
 def test_canvas_validation_reports_broken_references():

@@ -15,6 +15,8 @@ let controller = null;
 let bubble = null;
 let bubbleSessionId = null;
 let pendingApproval = null;
+// Модели выбранного провайдера: из них собирается список под чатом.
+let models = [];
 // Карточка агента сессии на холсте: ей уходит сообщение, написанное в чате самой сессии.
 const ENTRY = "main";
 
@@ -38,17 +40,23 @@ export async function loadModels() {
   try {
     const available = await catalogApi.models(elements.provider.value || "lm_studio");
     state.preferredModel = available.default_model || available.models[0] || "";
-    elements.modelOptions.replaceChildren();
-    for (const model of available.models) {
-      const option = document.createElement("option");
-      option.value = model;
-      elements.modelOptions.append(option);
-    }
+    models = available.models;
     clearError();
     render();
   } catch (error) {
     showError(error);
   }
+}
+
+// Список моделей под чатом. Модель сессии, которой на сервере уже нет, остаётся в нём, пока её не сменят.
+export function showModel(model) {
+  const listed = !model || models.includes(model) ? models : [model, ...models];
+  const key = JSON.stringify(listed);
+  if (elements.model.dataset.key !== key) {
+    elements.model.dataset.key = key;
+    fillSelect(elements.model, listed.map((id) => ({ id, name: id })));
+  }
+  elements.model.value = model;
 }
 
 function fillSelect(select, items) {
