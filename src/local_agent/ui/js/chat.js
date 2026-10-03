@@ -62,6 +62,7 @@ export class StreamingMessage {
     this.container.querySelector(".message-empty")?.remove();
     this.container.append(this.item);
     this.setStatus("Модель думает");
+    this.container.scrollTop = this.container.scrollHeight;
     this.timer = setInterval(() => this.#renderStatus(), 1000);
   }
 
@@ -70,7 +71,7 @@ export class StreamingMessage {
     if (this.item.parentNode !== this.container || this.item !== this.container.lastElementChild) {
       this.container.append(this.item);
     }
-    this.#scroll();
+    this.container.scrollTop = this.container.scrollHeight;
   }
 
   detach() {
@@ -128,13 +129,14 @@ export class StreamingMessage {
   }
 
   #followLog() {
-    if (!this.log.hidden) this.log.scrollTop = this.log.scrollHeight;
+    const { log } = this;
+    if (!log.hidden && log.scrollHeight - log.scrollTop - log.clientHeight < 80) log.scrollTop = log.scrollHeight;
   }
 
   #toggleLog(open) {
     this.log.hidden = !open;
     this.status.setAttribute("aria-expanded", String(open));
-    this.#followLog();
+    if (open) this.log.scrollTop = this.log.scrollHeight;
     this.#scroll();
   }
 
@@ -195,8 +197,12 @@ export class StreamingMessage {
     this.item.remove();
   }
 
+  // Лента едет за ответом, только пока пользователь внизу: таймер и поток не отбирают прокрутку.
   #scroll() {
-    this.container.scrollTop = this.container.scrollHeight;
+    const { container } = this;
+    if (container.scrollHeight - container.scrollTop - container.clientHeight < 80) {
+      container.scrollTop = container.scrollHeight;
+    }
   }
 }
 

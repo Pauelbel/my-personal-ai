@@ -98,7 +98,7 @@ class SessionService:
         if project is None:
             updates["workspace"] = self._validate_workspace(workspace)
         if (provider, model) != (session.provider, session.model):
-            updates["context_tokens"] = None
+            updates.update(context_tokens=None, context_window=None, tokens_per_second=None)
         if agent_id is not None:
             updates["agent_id"] = agent_id
         updated = self._repository.patch(session_id, updates)
@@ -189,8 +189,8 @@ class SessionService:
                     self.delete(child.id)
         return deleted
 
-    def set_context_tokens(self, session_id: str, count: int | None) -> None:
-        self._repository.set_context_tokens(session_id, count)
+    def set_usage(self, session_id: str, usage: dict[str, object]) -> None:
+        self._repository.set_usage(session_id, usage)
 
     def touch(self, session_id: str, updated_at: datetime) -> None:
         self._repository.touch(session_id, updated_at)

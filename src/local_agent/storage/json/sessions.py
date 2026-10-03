@@ -76,13 +76,13 @@ class JsonSessionRepository:
             path.unlink()
             return True
 
-    def set_context_tokens(self, session_id: str, count: int | None) -> None:
+    def set_usage(self, session_id: str, usage: dict[str, object]) -> None:
         with self._lock:
             session = self.get(session_id)
             if session is None:
                 return
             self.update(session.model_copy(update={
-                "context_tokens": count,
+                **usage,
                 "updated_at": datetime.now(UTC),
             }))
 

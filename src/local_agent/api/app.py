@@ -13,6 +13,7 @@ from local_agent.agent.runtime import AgentRuntime, RuntimeLimits
 from local_agent.agent.summary import ConversationSummarizer
 from local_agent.api.middleware import LocalOriginMiddleware, RequestLoggingMiddleware
 from local_agent.api.routes.agents import router as agents_router
+from local_agent.api.routes.files import router as files_router
 from local_agent.api.routes.folders import router as folders_router
 from local_agent.api.routes.health import router as health_router
 from local_agent.api.routes.memory import router as memory_router
@@ -164,6 +165,7 @@ def create_app(
     app.include_router(sessions_router, prefix="/api")
     app.include_router(projects_router, prefix="/api")
     app.include_router(folders_router, prefix="/api")
+    app.include_router(files_router, prefix="/api")
     app.include_router(messages_router, prefix="/api")
     app.include_router(memory_router, prefix="/api")
     app.include_router(models_router, prefix="/api")

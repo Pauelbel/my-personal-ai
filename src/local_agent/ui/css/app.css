@@ -107,9 +107,6 @@ select option { background: var(--surface); color: var(--fg); }
 .header-title-button:not(:disabled):hover { background: var(--surface-2); }
 .header-title-button:disabled { opacity: 1; }
 .header-title-input { width: min(100%, 420px); padding: 4px 8px; font-size: 12px; }
-.header-tokens { flex: 0 0 auto; display: flex; gap: 0; font-size: 11px; white-space: nowrap; }
-.header-token-value { padding: 2px 8px; border: 1px solid var(--line); color: var(--muted); cursor: help; }
-.header-token-value + .header-token-value { border-left: 0; }
 
 .content-panel { max-width: 980px; margin: 20px auto 0; }
 .customization-panel { max-width: 1280px; }
@@ -323,8 +320,8 @@ select option { background: var(--surface); color: var(--fg); }
 .session-detail { display: grid; grid-template-columns: var(--chat-width, 560px) auto minmax(0, 1fr); height: calc(100vh - 45px); }
 .session-detail.canvas-collapsed, .session-detail.no-canvas { grid-template-columns: minmax(0, 1fr); }
 .session-detail.canvas-collapsed .conversation, .session-detail.no-canvas .conversation { width: min(100%, 980px); margin: 0 auto; }
-.session-detail.canvas-collapsed > .run-resizer, .session-detail.canvas-collapsed > .canvas-pane,
-.session-detail.no-canvas > .run-resizer, .session-detail.no-canvas > .canvas-pane { display: none; }
+.session-detail.canvas-collapsed > .run-resizer, .session-detail.canvas-collapsed > .canvas-pane, .session-detail.canvas-collapsed > .files-pane,
+.session-detail.no-canvas > .run-resizer, .session-detail.no-canvas > .canvas-pane, .session-detail.no-canvas > .files-pane { display: none; }
 .session-detail.resizing { cursor: col-resize; user-select: none; }
 /* Разделитель не занимает места: полоса захвата лежит поверх границы холста. */
 .run-resizer { position: relative; z-index: 5; width: 7px; margin: 0 -3px 0 -4px; cursor: col-resize; touch-action: none; }
@@ -333,8 +330,10 @@ select option { background: var(--surface); color: var(--fg); }
 .run-resizer:focus-visible { outline: none; }
 .conversation { min-width: 0; min-height: 0; padding: 0 clamp(12px, 2vw, 24px) 16px; }
 .canvas-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); }
-.header-canvas-toggle { padding: 2px 10px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; letter-spacing: .06em; }
-.header-canvas-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.header-tabs { display: inline-flex; }
+.header-tabs button { padding: 2px 10px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; letter-spacing: .06em; }
+.header-tabs button + button { margin-left: -1px; }
+.header-tabs button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); position: relative; }
 .canvas-hint { position: absolute; left: 50%; bottom: 56px; width: min(440px, calc(100% - 32px)); margin: 0; padding: 8px 12px; border: 1px dashed var(--line); background: var(--surface); color: var(--muted); font-size: 12px; text-align: center; transform: translateX(-50%); pointer-events: none; }
 .agent-card-entry { padding: 0 5px; border: 1px solid var(--accent); color: var(--accent); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
 /* Переписка с агентами холста в чате сессии: поручение «→ QA» и ответ «⇠ QA» — короткими строками. */
@@ -442,3 +441,44 @@ select option { background: var(--surface); color: var(--fg); }
 .agent-card.current header { background: var(--accent); }
 .agent-card.current header strong, .agent-card.current header .agent-card-action { color: var(--accent-fg); }
 .agent-card.current .agent-card-entry { border-color: var(--accent-fg); color: var(--accent-fg); }
+
+/* Вкладка «Файлы»: дерево слева, просмотр файла справа. */
+.files-pane { display: grid; grid-template-columns: minmax(140px, 240px) minmax(0, 1fr); min-width: 0; min-height: 0; border-left: 1px solid var(--line); }
+.files-pane[hidden], .canvas-pane[hidden] { display: none; }
+.files-tree { display: flex; flex-direction: column; min-height: 0; padding: 6px 0; overflow: auto; border-right: 1px solid var(--line); }
+.files-item { display: flex; flex: 0 0 auto; align-items: center; }
+.files-item.drop, .files-tree.drop { background: var(--surface-2); outline: 1px dashed var(--accent); outline-offset: -1px; }
+.files-action { display: none; padding: 0 5px; border: 0; background: transparent; color: var(--muted); font-size: 11px; }
+.files-item:hover .files-action, .files-item:focus-within .files-action { display: block; }
+.files-action:hover { color: var(--accent); }
+.files-row { flex: 1; min-width: 0; padding: 3px 8px; border: 0; background: transparent; color: var(--fg); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-item:hover, .files-row:focus-visible { background: var(--surface-2); }
+.files-item.active { background: var(--surface-2); color: var(--accent); }
+.files-item.active .files-row { color: var(--accent); }
+.files-note { margin: 6px 10px; color: var(--muted); font-size: 12px; }
+.files-viewer { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.files-viewer-title { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-viewer-body { flex: 1; min-height: 0; padding: 12px 16px; overflow: auto; }
+.files-code { margin: 0; font-size: 12px; white-space: pre; tab-size: 4; }
+@media (max-width: 760px) { .files-pane { border-left: 0; border-top: 1px solid var(--line); } }
+.files-viewer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-viewer-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.files-viewer-actions button { padding: 2px 10px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; }
+.files-viewer-actions button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.files-editor { display: block; width: 100%; height: 100%; min-height: 200px; padding: 0; border: 0; outline: none; resize: none; background: transparent; color: var(--fg); font: 12px/1.5 var(--font-mono, monospace); white-space: pre; tab-size: 4; }
+
+/* Использование контекста и скорость генерации — над полем ввода. */
+.chat-usage { display: flex; align-items: center; gap: 14px; padding: 4px 10px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.chat-usage[hidden] { display: none; }
+.usage-context { display: inline-flex; align-items: center; gap: 8px; cursor: help; }
+.usage-meter { width: 90px; height: 6px; border: 1px solid var(--line); }
+.usage-fill { display: block; height: 100%; background: var(--accent); }
+.usage-context.warn .usage-fill { background: #d99a00; }
+.usage-context.full, .usage-context.full #usage-text { color: #d33; }
+.usage-context.full .usage-fill { background: #d33; }
+.usage-speed { cursor: help; }
+.tok-comment { color: var(--muted); font-style: italic; }
+.tok-string { color: var(--ok); }
+.tok-keyword { color: var(--accent); }
+.tok-number { color: var(--warn); }
+.tok-func, .tok-meta { color: var(--agent); }

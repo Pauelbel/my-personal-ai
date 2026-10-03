@@ -158,3 +158,17 @@ export const memoryApi = {
   ),
   update: (sessionId) => request(`${sessionPath(sessionId)}/memory/update`, { method: "POST" }),
 };
+
+export const filesApi = {
+  remove: (projectId, path) => request(`/projects/${encodeURIComponent(projectId)}/files?path=${encodeURIComponent(path)}`, { method: "DELETE" }),
+  move: (projectId, path, newPath) => request(
+    `/projects/${encodeURIComponent(projectId)}/files/move?path=${encodeURIComponent(path)}`,
+    { method: "POST", body: JSON.stringify({ new_path: newPath }) },
+  ),
+  list: (projectId, path = "") => request(`/projects/${encodeURIComponent(projectId)}/files?path=${encodeURIComponent(path)}`),
+  read: (projectId, path) => request(`/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}`),
+  write: (projectId, path, content) => request(
+    `/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}`,
+    { method: "PUT", body: JSON.stringify({ content }) },
+  ),
+};

@@ -3,6 +3,7 @@
 // Список агентов под чатом: агент сессии выбирается из всех агентов, а агенты холста идут отдельной
 // группой — выбор открывает переписку с выбранным агентом.
 import { showAgents } from "./agents-panel.js";
+import { renderFiles } from "./files-panel.js";
 import { agentsApi, catalogApi, sessionsApi } from "./api.js";
 import { initResizer } from "./resizer.js";
 import { loadSessions, selectSession } from "./sessions.js";
@@ -71,14 +72,22 @@ export function initSessionCanvas() {
     Object.assign(view, { x: 40, y: 40, zoom: 1 });
     applyView();
   });
-  elements.toggleCanvas.addEventListener("click", () => {
-    setCollapsed(!elements.detail.classList.contains("canvas-collapsed"));
-  });
+  for (const [button, tab] of [[elements.tabCanvas, "canvas"], [elements.tabFiles, "files"]]) {
+    // Щелчок по активной вкладке сворачивает панель, по другой — открывает её.
+    button.addEventListener("click", () => {
+      const hidden = elements.detail.classList.contains("canvas-collapsed");
+      const collapse = tab === activeTab && !hidden;
+      setTab(tab);
+      setCollapsed(collapse);
+      render();
+    });
+  }
   initResizer({
     handle: elements.canvasResizer, container: elements.detail, variable: "--chat-width",
     storageKey: "chat-width", defaultWidth: 560, min: 320, reserve: 320,
   });
   setCollapsed(loadCollapsed(), false);
+  setTab(loadTab(), false);
   initPanAndZoom();
   initPromptDialog();
   void loadAgents();
@@ -177,10 +186,11 @@ function optionGroup(label, options) {
 export function renderSessionCanvas() {
   // В переписке агента холст тот же, что у сессии-хозяйки: это одна команда.
   const owner = ownerSession();
-  elements.toggleCanvas.hidden = !owner || state.showingSettings || state.showingTools
+  elements.headerTabs.hidden = !owner || state.showingSettings || state.showingTools
     || state.showingMemory || state.showingPrompt || state.showingSkills;
   elements.detail.classList.toggle("no-canvas", !owner);
   renderAgentChatBar(selectedSession(), owner);
+  renderFiles();
   const key = owner ? `${owner.id}:${owner.agent_id}` : "";
   if (key !== openedKey) {
     openedKey = key;
@@ -252,12 +262,41 @@ function displayName(node) {
 
 function setCollapsed(value, save = true) {
   elements.detail.classList.toggle("canvas-collapsed", value);
-  elements.toggleCanvas.setAttribute("aria-pressed", String(!value));
+  syncTabs();
   if (!save) return;
   try {
     localStorage.setItem("canvas-collapsed", value ? "1" : "0");
   } catch {
     // Без хранилища состояние холста не запомнится.
+  }
+}
+
+let activeTab = "canvas";
+
+function setTab(tab, save = true) {
+  activeTab = tab;
+  syncTabs();
+  if (!save) return;
+  try {
+    localStorage.setItem("right-tab", tab);
+  } catch {
+    // Без хранилища вкладка не запомнится.
+  }
+}
+
+function syncTabs() {
+  const shown = !elements.detail.classList.contains("canvas-collapsed");
+  elements.canvasPane.hidden = activeTab !== "canvas";
+  elements.filesPane.hidden = activeTab !== "files";
+  elements.tabCanvas.setAttribute("aria-pressed", String(shown && activeTab === "canvas"));
+  elements.tabFiles.setAttribute("aria-pressed", String(shown && activeTab === "files"));
+}
+
+function loadTab() {
+  try {
+    return localStorage.getItem("right-tab") === "files" ? "files" : "canvas";
+  } catch {
+    return "canvas";
   }
 }
 

@@ -4,6 +4,7 @@ import {
   attachStreamingBubble, chooseWorkspace, handleMessageKeydown, loadCatalog, loadModels, saveConfig, sendMessage,
   showModel, stopStreaming, renderTurnRecovery, retryTurn,
 } from "./composer.js";
+import { initFiles } from "./files-panel.js";
 import { initFolderPicker } from "./folder-picker.js";
 import { renderMemoryPanel, saveMemory, showMemory, updateMemory } from "./memory-panel.js";
 import { initProjectDialog, openProjectDialog } from "./projects.js";
@@ -21,12 +22,21 @@ import { showTools } from "./tools-dialog.js";
 
 let renderedMessagesVersion = -1;
 
-function estimateTranscriptTokens(history) {
-  const bytes = history.reduce(
-    (total, message) => total + new TextEncoder().encode(message.content).length,
-    0,
-  );
-  return Math.ceil(bytes / 4);
+// Сколько контекстного окна занял последний запрос и как быстро модель его сгенерировала.
+function renderUsage(session) {
+  const used = session?.context_tokens;
+  const window = session?.context_window;
+  const format = (value) => value.toLocaleString("ru-RU");
+  elements.chatUsage.hidden = !session;
+  if (!session) return;
+  const share = used != null && window ? used / window : null;
+  elements.usageText.textContent = used == null ? "—"
+    : window ? `${format(used)} / ${format(window)} (${Math.round(share * 100)}%)` : format(used);
+  elements.usageFill.style.width = `${Math.min(share ?? 0, 1) * 100}%`;
+  elements.usageContext.classList.toggle("warn", share != null && share >= 0.8);
+  elements.usageContext.classList.toggle("full", share != null && share >= 1);
+  const speed = session.tokens_per_second;
+  elements.usageSpeed.textContent = speed == null ? "⚡ —" : `⚡ ${speed.toFixed(1)} ток/с`;
 }
 
 function renderApp() {
@@ -71,15 +81,7 @@ function renderApp() {
   elements.editTitle.textContent = headerTitle;
   elements.editTitle.title = selected && !showingPanel ? "Переименовать сессию" : headerTitle;
   elements.editTitle.disabled = !selected || showingPanel;
-  elements.tokenCount.hidden = !selected || showingPanel;
-  const lastCount = selected?.context_tokens;
-  elements.lastTokens.textContent = lastCount == null ? "—" : lastCount.toLocaleString("ru-RU");
-  elements.lastTokens.setAttribute("aria-label", `Последний запрос: ${elements.lastTokens.textContent} токенов`);
-  const totalCount = selected && state.messagesSessionId === selected.id
-    ? estimateTranscriptTokens(state.messages)
-    : null;
-  elements.totalTokens.textContent = totalCount == null ? "—" : `≈ ${totalCount.toLocaleString("ru-RU")}`;
-  elements.totalTokens.setAttribute("aria-label", `Вся переписка, приблизительно: ${elements.totalTokens.textContent} токенов`);
+  renderUsage(selected);
   elements.emptyState.hidden = Boolean(selected);
   elements.detail.hidden = !selected;
   elements.titleInput.hidden = !editingTitle || !selected || showingPanel;
@@ -175,6 +177,7 @@ initFolderPicker();
 initProjectDialog();
 initSkillDialog();
 initSessionCanvas();
+initFiles();
 // Ширина боковой панели тянется мышью и запоминается; рабочей области остаётся не меньше 480px.
 initResizer({
   handle: elements.sidebarResizer, container: elements.appShell, variable: "--sidebar-width",

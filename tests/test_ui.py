@@ -41,9 +41,9 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert 'class="app-header"' in page.text
     assert 'class="header-mascot"' in page.text
     assert 'class="header-folder"' not in page.text
-    assert 'id="header-tokens"' in page.text
-    assert 'id="last-tokens"' in page.text
-    assert 'id="total-tokens"' in page.text
+    assert 'id="header-tokens"' not in page.text
+    assert 'id="usage-text"' in page.text
+    assert 'id="usage-speed"' in page.text
     assert "Контекст: —" not in page.text
     assert 'id="edit-title"' in page.text
     assert 'id="title-input"' in page.text
@@ -88,8 +88,8 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert "border-radius: 8px" not in styles.text and "box-shadow: 0" not in styles.text
     assert script.status_code == 200
     assert "toolsApi.configure" in tools_script.text
-    assert "selected?.context_tokens" in script.text
-    assert "estimateTranscriptTokens(state.messages)" in script.text
+    assert "session?.context_tokens" in script.text
+    assert "tokens_per_second" in script.text
     assert 'field.addEventListener("change"' in script.text
     assert 'addEventListener("blur", renameSession)' in script.text
     assert 'addEventListener("keydown", handleMessageKeydown)' in script.text

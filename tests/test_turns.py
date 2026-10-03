@@ -53,7 +53,9 @@ def test_turn_uses_recent_messages_and_persists_reply(tmp_path) -> None:
         assert response.status_code == 200
         assert response.json()["content"] == "Ответ модели"
         assert client.get(f"/api/sessions/{session['id']}").json()["title"] == "Старое"
-        assert client.get(f"/api/sessions/{session['id']}").json()["context_tokens"] == 12
+        saved = client.get(f"/api/sessions/{session['id']}").json()
+        assert saved["context_tokens"] == 12
+        assert saved["context_window"] == settings.default_context_tokens
 
     model, context = provider.calls[0]
     assert model == "test-model"

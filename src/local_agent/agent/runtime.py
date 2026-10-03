@@ -208,10 +208,12 @@ class AgentRuntime:
                     + ("" if offered or not definitions else " · без инструментов (лимит раундов)")
                 )
                 requested = time.perf_counter()
+                first_token_at = None
                 waiting = True
                 async for item in stream_chat(provider, model, messages, offered):
                     if waiting and not isinstance(item, ChatResult):
                         waiting = False
+                        first_token_at = time.perf_counter()
                         yield _log(f"Первый токен через {time.perf_counter() - requested:.1f} с")
                     if isinstance(item, str):
                         partial.append(item)
@@ -222,6 +224,7 @@ class AgentRuntime:
                         result = item
                 if result is None:
                     raise AgentRuntimeError("Модель не вернула ответ")
+                generated_for = time.perf_counter() - (first_token_at or requested)
                 yield _log(_round_summary(result, time.perf_counter() - requested))
                 if not result.tool_calls:
                     break
@@ -301,9 +304,16 @@ class AgentRuntime:
         answer = await asyncio.to_thread(self._conversation.add_assistant_message, session_id, result.content)
         added += 1
         count = result.input_tokens
-        self._sessions.set_context_tokens(
-            session_id, count if isinstance(count, int) and count >= 0 else None
+        speed = (
+            result.output_tokens / generated_for
+            if isinstance(result.output_tokens, int) and result.output_tokens > 0 and generated_for > 0.05
+            else None
         )
+        self._sessions.set_usage(session_id, {
+            "context_tokens": count if isinstance(count, int) and count >= 0 else None,
+            "context_window": window,
+            "tokens_per_second": speed,
+        })
         logger.info(
             "Запрос к LLM выполнен request_id=%s session_id=%s agent_id=%s provider=%s model=%s input_tokens=%s output_tokens=%s latency_ms=%.1f",
             request_id, session_id, agent.id, provider_id, model,

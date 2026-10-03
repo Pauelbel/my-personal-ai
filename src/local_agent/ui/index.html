@@ -47,10 +47,9 @@
             <button class="header-title-button" id="edit-title" type="button" aria-label="Переименовать сессию" title="Переименовать сессию">Сессии</button>
             <input class="header-title-input" id="title-input" aria-label="Название сессии" maxlength="100" hidden />
           </h1>
-          <button class="header-canvas-toggle" id="toggle-canvas" type="button" aria-controls="canvas-pane" aria-pressed="true" title="Показать или скрыть холст агентов" hidden>◧ Холст</button>
-          <span class="header-tokens" id="header-tokens" hidden>
-            <span class="header-token-value" id="last-tokens" title="Входные токены последнего запроса по данным сервера модели" aria-label="Последний запрос: нет данных">—</span>
-            <span class="header-token-value" id="total-tokens" title="Приблизительное число токенов во всей сохранённой переписке; не размер текущего окна модели" aria-label="Вся переписка: нет данных">—</span>
+          <span class="header-tabs" id="header-tabs" role="group" aria-label="Правая панель" hidden>
+            <button id="tab-canvas" type="button" aria-controls="canvas-pane" aria-pressed="true" title="Холст агентов; повторный щелчок сворачивает панель">◧ Холст</button>
+            <button id="tab-files" type="button" aria-controls="files-pane" aria-pressed="false" title="Файлы проекта; повторный щелчок сворачивает панель">▤ Файлы</button>
           </span>
         </header>
 
@@ -71,6 +70,14 @@
               <div class="turn-recovery" id="turn-recovery" role="status" hidden>
                 <p id="turn-recovery-text"></p>
                 <button class="secondary-button" id="retry-turn" type="button">Повторить</button>
+              </div>
+              <div class="chat-usage" id="chat-usage" hidden>
+                <span class="usage-context" id="usage-context" title="Входные токены последнего запроса (по данным сервера модели) из размера контекстного окна">
+                  <span class="usage-label">Контекст</span>
+                  <span class="usage-meter" aria-hidden="true"><span class="usage-fill" id="usage-fill"></span></span>
+                  <span id="usage-text">—</span>
+                </span>
+                <span class="usage-speed" id="usage-speed" title="Скорость генерации последнего ответа: токены ответа в секунду после первого токена">⚡ —</span>
               </div>
               <div class="composer-shell">
                 <form class="composer" id="message-form">
@@ -112,6 +119,20 @@
                   <button id="zoom-reset" type="button" title="Сбросить масштаб">100%</button>
                   <button id="zoom-in" type="button" aria-label="Увеличить">＋</button>
                 </div>
+              </div>
+            </section>
+            <section class="files-pane" id="files-pane" aria-label="Файлы проекта" hidden>
+              <nav class="files-tree" id="files-tree" aria-label="Дерево файлов"></nav>
+              <div class="files-viewer">
+                <div class="files-viewer-title" id="files-viewer-title">
+                  <span class="files-viewer-name" id="files-viewer-name"></span>
+                  <span class="files-viewer-actions" id="files-viewer-actions" hidden>
+                    <span id="files-status" role="status"></span>
+                    <button id="files-edit" type="button" title="Переключить просмотр и редактирование">✎ Править</button>
+                    <button id="files-save" type="button" hidden>Сохранить</button>
+                  </span>
+                </div>
+                <div class="files-viewer-body" id="files-viewer-body"></div>
               </div>
             </section>
           </div>
