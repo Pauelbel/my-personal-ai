@@ -1,5 +1,5 @@
 // Переключатель темы применяет выбор сразу и запоминает его в браузере.
-const THEMES = ["light", "dark", "sunset"];
+const THEMES = ["light", "dark"];
 
 export function initTheme() {
   const saved = document.documentElement.dataset.theme;

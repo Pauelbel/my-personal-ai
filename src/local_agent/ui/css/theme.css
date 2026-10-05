@@ -4,56 +4,38 @@
    Палитра: коралловый #F78C6A, жёлтый #FFD167, мятный #06D7A0, синий #108AB1, глубокий #073A4B.
    Там, где исходный цвет плохо читается на светлом фоне, взят его затемнённый вариант. */
 
-/* Светлая: бумага с глубоким бирюзовым текстом и синими плашками. */
+/* Светлая: мягкий серо-голубой фон без чистого белого, текст Space Cadet #192853. */
 :root, html[data-theme="light"] {
   color-scheme: light;
-  --bg: #f3f8f8;
-  --surface: #ffffff;
-  --surface-2: #e2eff1;
-  --fg: #073a4b;
-  --muted: #4f7481;
-  --line: #c9dde2;
-  --line-strong: #073a4b;
-  --accent: #108ab1;
-  --accent-fg: #ffffff;
-  --agent: #f78c6a;
-  --danger: #d9643f;
-  --ok: #04a57b;
-  --warn: #c48a12;
+  --bg: #e6ecef;
+  --surface: #f1f5f7;
+  --surface-2: #dbe3e8;
+  --fg: #192853;
+  --muted: #5d6a88;
+  --line: #cbd5db;
+  --line-strong: #192853;
+  --accent: #2f4fa3;
+  --accent-fg: #f1f5f7;
+  --agent: #b88a0a;
+  --danger: #d0533a;
+  --ok: #178a62;
+  --warn: #a8740a;
 }
 
-/* Тёмная: глубокий океан #073A4B, синие рамки и мятный акцент. */
+/* Тёмная: почти чёрный графитовый фон с жёлтым акцентом #FFE14F; текст — Alice Blue #ECF4F7. */
 html[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #052b38;
-  --surface: #073a4b;
-  --surface-2: #0b4a5f;
-  --fg: #e4f3f1;
-  --muted: #86aeb9;
-  --line: #145a70;
-  --line-strong: #108ab1;
-  --accent: #06d7a0;
-  --accent-fg: #073a4b;
-  --agent: #f78c6a;
-  --danger: #f78c6a;
-  --ok: #06d7a0;
-  --warn: #ffd167;
-}
-
-/* «Закат»: тот же океан, но акцент коралловый, а рамки жёлтые. */
-html[data-theme="sunset"] {
-  color-scheme: dark;
-  --bg: #062f3e;
-  --surface: #073a4b;
-  --surface-2: #0d4659;
-  --fg: #fbf0e4;
-  --muted: #a9b9b6;
-  --line: #1d5466;
-  --line-strong: #ffd167;
-  --accent: #f78c6a;
-  --accent-fg: #073a4b;
-  --agent: #ffd167;
-  --danger: #f78c6a;
-  --ok: #06d7a0;
-  --warn: #ffd167;
+  --bg: #131416;
+  --surface: #1b1c1f;
+  --surface-2: #26272b;
+  --fg: #ecf4f7;
+  --muted: #9a9fa8;
+  --line: #2f3136;
+  --line-strong: #5b5e66;
+  --accent: #ffe14f;
+  --accent-fg: #131416;
+  --agent: #ffe14f;
+  --danger: #ff8f7a;
+  --ok: #6fe0b2;
+  --warn: #ffb454;
 }

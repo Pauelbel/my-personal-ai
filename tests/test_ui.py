@@ -72,17 +72,17 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert "Ctrl+Enter — новая строка" in page.text
     assert 'name="theme" value="light"' in page.text
     assert 'name="theme" value="dark"' in page.text
-    assert 'name="theme" value="sunset"' in page.text
+    assert 'name="theme" value="sunset"' not in page.text
     # Сессия удаляется только кнопкой в сайдбаре; «Удалить проект» живёт в диалоге проекта.
     assert "Удалить сессию" not in page.text
     assert styles.status_code == 200
     assert theme_styles.status_code == 200
     assert "composer-shell" in styles.text
     assert 'html[data-theme="dark"]' in theme_styles.text
-    assert 'html[data-theme="sunset"]' in theme_styles.text
+    assert 'html[data-theme="sunset"]' not in theme_styles.text
     # Темы задают только токены цвета, а форма компонентов общая: терминальный стиль без скруглений.
     for token in ("--bg", "--fg", "--line", "--line-strong", "--accent", "--accent-fg"):
-        assert theme_styles.text.count(f"{token}:") == 3
+        assert theme_styles.text.count(f"{token}:") == 2
     assert "monospace" in styles.text
     assert 'content: "❯"' in styles.text
     assert "border-radius: 8px" not in styles.text and "box-shadow: 0" not in styles.text
