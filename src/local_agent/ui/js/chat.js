@@ -1,6 +1,8 @@
 // Этот модуль показывает сообщения, вызовы инструментов и ответ агента, пока он ещё печатается.
 import { appendMarkdown } from "./markdown.js";
 
+const FLUSH_MS = 100;
+
 export function renderMessages(container, messages) {
   container.replaceChildren();
 
@@ -58,6 +60,10 @@ export class StreamingMessage {
     this.log.hidden = true;
     this.logCount = 0;
     this.reasoning = null;
+    // Фрагменты ответа и рассуждений копятся и выводятся не чаще раза в FLUSH_MS: иначе на каждый токен
+    // страница заново разбирает весь текст и пересчитывает раскладку, а набор текста в поле ввода тормозит.
+    this.pendingReasoning = "";
+    this.flushTimer = null;
     this.content.before(this.status, this.log);
     this.container.querySelector(".message-empty")?.remove();
     this.container.append(this.item);
@@ -80,18 +86,42 @@ export class StreamingMessage {
 
   // Текст до вызова инструмента уже сохранён отдельным сообщением: начинаем пузырь заново.
   reset(label) {
+    this.#cancelFlush();
     this.text = "";
+    this.pendingReasoning = "";
     this.content.replaceChildren();
     this.setStatus(label);
   }
 
   append(text) {
     this.text += text;
+    // Модель перестала думать и начала отвечать: лог больше не нужен на виду.
+    if (this.label) {
+      this.#toggleLog(false);
+      this.setStatus("");
+    }
+    this.#scheduleFlush();
+  }
+
+  #scheduleFlush() {
+    this.flushTimer ??= setTimeout(() => this.#flush(), FLUSH_MS);
+  }
+
+  #cancelFlush() {
+    clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+  }
+
+  #flush() {
+    this.flushTimer = null;
+    if (this.pendingReasoning && this.reasoning) {
+      this.reasoning.textContent += this.pendingReasoning;
+      this.#followLog();
+    }
+    this.pendingReasoning = "";
     this.content.replaceChildren();
     appendMarkdown(this.content, this.text);
-    // Модель перестала думать и начала отвечать: лог больше не нужен на виду.
-    if (this.label) this.#toggleLog(false);
-    this.setStatus("");
+    this.#scroll();
   }
 
   setStatus(label) {
@@ -117,8 +147,8 @@ export class StreamingMessage {
       this.reasoning.className = "log-reasoning";
       this.#appendLog(this.reasoning);
     }
-    this.reasoning.textContent += text;
-    this.#followLog();
+    this.pendingReasoning += text;
+    this.#scheduleFlush();
   }
 
   #appendLog(node) {
@@ -193,6 +223,7 @@ export class StreamingMessage {
   }
 
   finish() {
+    this.#cancelFlush();
     clearInterval(this.timer);
     this.item.remove();
   }
