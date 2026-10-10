@@ -125,6 +125,32 @@ def test_http_error_carries_server_explanation_and_vllm_window() -> None:
     assert window == 131072 and unknown is None
 
 
+def test_ollama_window_comes_from_loaded_models() -> None:
+    """Ollama не сообщает окно в /v1/models, только у загруженной модели в /api/ps."""
+    loaded = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/ps":
+            return httpx.Response(200, json={"models": loaded})
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"object": "list", "data": [{"id": "gemma4:12b", "object": "model"}]})
+        return httpx.Response(404, text="404 page not found")
+
+    async def exercise():
+        provider = OpenAICompatibleProvider(
+            "http://127.0.0.1:11434/v1", timeout_seconds=5, transport=httpx.MockTransport(respond),
+        )
+        try:
+            before_load = await provider.context_length("gemma4:12b")
+            # Модель загрузилась после первого запроса: окно видно сразу, без ожидания кэша.
+            loaded.append({"name": "gemma4:12b", "model": "gemma4:12b", "context_length": 4096})
+            return before_load, await provider.context_length("gemma4:12b"), await provider.context_length("other")
+        finally:
+            await provider.close()
+
+    assert asyncio.run(exercise()) == (None, 4096, None)
+
+
 async def _drain(stream):
     async for _ in stream:
         pass

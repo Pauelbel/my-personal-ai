@@ -19,7 +19,7 @@
 name: QA
 description: Проектирует тестирование по требованиям
 tools: list_files, read_file, search_files
-skills: explain-code, project-overview
+skills: test-cases, regression-scope, bug-report
 max_tool_rounds: 8
 ---
 Ты QA-инженер...

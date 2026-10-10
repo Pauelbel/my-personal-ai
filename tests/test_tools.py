@@ -38,7 +38,7 @@ def test_session_tools_persist(tmp_path):
         other = client.post("/api/sessions", json={}).json()
         tools = client.get(f"/api/sessions/{session['id']}/tools").json()
         assert [tool["id"] for tool in tools] == [
-            "list_files", "read_file", "search_files", "write_file", "edit_file", "git"
+            "list_files", "read_file", "search_files", "write_file", "edit_file", "git", "search_docs"
         ]
         assert not any(tool["enabled"] for tool in tools)
         updated = client.put(
@@ -52,7 +52,7 @@ def test_session_tools_persist(tmp_path):
         ).status_code == 404
     with TestClient(create_app(settings)) as client:
         tools = client.get(f"/api/sessions/{session['id']}/tools").json()
-        assert [tool["enabled"] for tool in tools] == [False, True, False, False, False, False]
+        assert [tool["enabled"] for tool in tools] == [False, True, False, False, False, False, False]
         other_tools = client.get(f"/api/sessions/{other['id']}/tools").json()
         assert not any(tool["enabled"] for tool in other_tools)
 
@@ -88,7 +88,7 @@ def test_model_only_receives_enabled_tools_and_result(tmp_path):
         ).json()
         # Новый проект начинает с инструментов чтения; выключаем их, чтобы проверить путь с нуля.
         defaults = [tool["id"] for tool in client.get(f"/api/sessions/{session['id']}/tools").json() if tool["enabled"]]
-        assert defaults == ["list_files", "read_file", "search_files", "git"]
+        assert defaults == ["list_files", "read_file", "search_files", "git", "search_docs"]
         for tool_id in defaults:
             client.put(f"/api/sessions/{session['id']}/tools/{tool_id}", json={"enabled": False})
         first = client.post(f"/api/sessions/{session['id']}/turns", json={"content": "Привет"})
@@ -159,7 +159,36 @@ def test_edit_file_stays_inside_workspace(tmp_path, path):
     assert (tmp_path / "outside.txt").read_text(encoding="utf-8") == "secret"
 
 
-@pytest.mark.parametrize("arguments", [{"old_text": "", "new_text": "y"}, {"old_text": "x", "new_text": None}])
+@pytest.mark.parametrize(("content", "old_text", "new_text", "expected"), [
+    # Строка таблицы остаётся, новые строки встают после неё.
+    ("| a |\n| b |\n", "| a |", "| new |", "| a |\n| new |\n| b |\n"),
+    # old_text — часть строки: вставка всё равно после всей строки.
+    ("| a | x |\n| b |\n", "| a", "| new |\n", "| a | x |\n| new |\n| b |\n"),
+    ("one\ntwo", "two", "three", "one\ntwo\nthree"),
+    ("one\ntwo\n", "one\n", "1\n2", "one\n1\n2\ntwo\n"),
+])
+def test_edit_file_inserts_after_line_without_replacing(tmp_path, content, old_text, new_text, expected):
+    (tmp_path / "note.md").write_text(content, encoding="utf-8")
+
+    result = edit(tmp_path, path="note.md", old_text=old_text, new_text=new_text, insert_after=True)
+
+    assert not result.is_error
+    assert (tmp_path / "note.md").read_text(encoding="utf-8") == expected
+
+
+def test_edit_file_insert_keeps_crlf(tmp_path):
+    (tmp_path / "win.md").write_bytes(b"one\r\ntwo\r\n")
+
+    assert not edit(tmp_path, path="win.md", old_text="one", new_text="new", insert_after=True).is_error
+    assert (tmp_path / "win.md").read_bytes() == b"one\r\nnew\r\ntwo\r\n"
+
+
+@pytest.mark.parametrize("arguments", [
+    {"old_text": "", "new_text": "y"},
+    {"old_text": "x", "new_text": None},
+    {"old_text": "x", "new_text": "\n", "insert_after": True},
+    {"old_text": "x", "new_text": "y", "insert_after": "yes"},
+])
 def test_edit_file_validates_arguments(tmp_path, arguments):
     (tmp_path / "file.txt").write_text("x\n", encoding="utf-8")
 

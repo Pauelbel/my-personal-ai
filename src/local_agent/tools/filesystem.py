@@ -237,6 +237,7 @@ class EditFileTool:
     description = (
         "Заменить фрагмент текста в существующем файле рабочей папки. old_text должен встречаться "
         "в файле ровно один раз — добавьте соседние строки, чтобы фрагмент стал уникальным. "
+        "Чтобы добавить строки, не меняя существующие, передайте insert_after: true. "
         "Пользователь подтверждает каждую правку."
     )
     requires_approval = True
@@ -246,6 +247,10 @@ class EditFileTool:
             "path": {"type": "string", "description": "Относительный путь к файлу"},
             "old_text": {"type": "string", "description": "Точный фрагмент, который нужно заменить"},
             "new_text": {"type": "string", "description": "Новый текст вместо фрагмента; пустая строка удаляет его"},
+            "insert_after": {
+                "type": "boolean",
+                "description": "true — вставить new_text новыми строками после строки с old_text, ничего не заменяя",
+            },
         },
         "required": ["path", "old_text", "new_text"],
         "additionalProperties": False,
@@ -265,6 +270,11 @@ class EditFileTool:
                 raise ValueError("old_text должен быть непустой строкой")
             if not isinstance(new_text, str):
                 raise ValueError("new_text должен быть строкой")
+            insert_after = arguments.get("insert_after", False)
+            if not isinstance(insert_after, bool):
+                raise ValueError("insert_after должен быть true или false")
+            if insert_after and not new_text.strip("\r\n"):
+                raise ValueError("Для вставки нужен непустой new_text")
             root = _workspace_root(workspace)
             target = _inside_workspace(workspace, arguments.get("path"))
             _deny_protected_write(target, protected_root)
@@ -283,7 +293,19 @@ class EditFileTool:
                 raise ValueError("Фрагмент old_text не найден в файле; сверьтесь с read_file")
             if count > 1:
                 raise ValueError(f"Фрагмент old_text встречается {count} раз(а); добавьте соседние строки")
-            data = content.replace(old_text, new_text, 1).encode("utf-8")
+            if insert_after:
+                # Вставка идёт после всей строки с фрагментом: модели не нужно повторять старый текст,
+                # и вставка не разрежет строку, даже если old_text — только её часть.
+                start = content.index(old_text) + len(old_text)
+                if not old_text.endswith(newline):
+                    line_end = content.find(newline, start)
+                    start = len(content) if line_end == -1 else line_end + len(newline)
+                added = new_text.strip("\r\n") + newline
+                if start == len(content) and not content.endswith(newline):
+                    added = newline + added.removesuffix(newline)
+                data = (content[:start] + added + content[start:]).encode("utf-8")
+            else:
+                data = content.replace(old_text, new_text, 1).encode("utf-8")
             if len(data) > MAX_WRITE_BYTES:
                 raise ValueError("После правки файл больше 256 КБ")
             target.write_bytes(data)

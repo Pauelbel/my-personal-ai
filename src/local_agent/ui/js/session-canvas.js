@@ -34,7 +34,7 @@ const CARD_MIN_HEIGHT = 120;
 // Длинные списки инструментов и навыков сворачиваются до стольких строк и кнопки «ещё N».
 const VISIBLE_ROWS = 4;
 const TOOL_GLYPHS = {
-  list_files: "▦", read_file: "▤", search_files: "⌕", write_file: "✎", edit_file: "✎", git: "⎇",
+  list_files: "▦", read_file: "▤", search_files: "⌕", write_file: "✎", edit_file: "✎", git: "⎇", search_docs: "❡",
 };
 
 let agents = [];

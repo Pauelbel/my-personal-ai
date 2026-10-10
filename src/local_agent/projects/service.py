@@ -14,7 +14,7 @@ from local_agent.storage.json.projects import JsonProjectRepository
 logger = logging.getLogger(__name__)
 
 # Папку выбирают, чтобы агент мог её читать: чтение включено сразу. Запись и правка — только вручную.
-DEFAULT_PROJECT_TOOLS = ("git", "list_files", "read_file", "search_files")
+DEFAULT_PROJECT_TOOLS = ("git", "list_files", "read_file", "search_files", "search_docs")
 
 
 class ProjectError(ValueError):

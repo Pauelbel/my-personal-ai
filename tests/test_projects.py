@@ -40,7 +40,7 @@ def test_sessions_share_project_folder_tools_and_last_model(tmp_path):
     assert second["model"] == "m2"
     # Чтение включено у нового проекта сразу; переключатели в одной сессии видны во всех.
     assert [tool["id"] for tool in second_tools if tool["enabled"]] == [
-        "list_files", "read_file", "search_files", "write_file"
+        "list_files", "read_file", "search_files", "write_file", "search_docs"
     ]
 
 

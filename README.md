@@ -56,7 +56,7 @@ uv --version
    Copy-Item .env.example .env
    ```
 
-   В macOS/Linux: `cp .env.example .env`. Затем заполните `.env` — см. [Настройки](#настройки) ниже. Обязательно проверьте `LM_STUDIO_BASE_URL` и `DEFAULT_MODEL`.
+   В macOS/Linux: `cp .env.example .env`. Затем заполните `.env` — см. [Настройки](#настройки) ниже. Обязательно проверьте `LLM_BASE_URL` и `DEFAULT_MODEL`.
 
 2. Установите зависимости и запустите:
 
@@ -89,7 +89,8 @@ node tests/test_markdown.mjs
 
 | Переменная | По умолчанию | Что задаёт |
 | --- | --- | --- |
-| `LM_STUDIO_BASE_URL` | `http://127.0.0.1:1234/v1` | Адрес API-сервера LM Studio (виден в LM Studio на вкладке сервера) |
+| `LLM_BASE_URL` | `http://127.0.0.1:1234/v1` | Адрес основного OpenAI-compatible сервера: Ollama — `http://127.0.0.1:11434/v1`, LM Studio — `http://127.0.0.1:1234/v1`. Старое имя `LM_STUDIO_BASE_URL` тоже читается |
+| `LLM_NAME` | `Локальный сервер` | Подпись основного сервера в списке провайдеров |
 | `DEFAULT_MODEL` | пусто | ID модели по умолчанию — должен совпадать с моделью, загруженной в LM Studio (в `.env.example` для примера указана `google/gemma-4-12b`); если пусто, модель выбирается в интерфейсе |
 | `LLM_PROVIDERS` | — | Дополнительные OpenAI-compatible серверы, JSON-список (пример ниже) |
 | `LLM_TIMEOUT_SECONDS` | `120` | Сколько ждать ответа модели |
@@ -100,11 +101,11 @@ node tests/test_markdown.mjs
 LLM_PROVIDERS=[{"id":"ollama","name":"Ollama","base_url":"http://127.0.0.1:11434/v1"}]
 ```
 
-**Внешний сервер вместо LM Studio** (vLLM, корпоративный шлюз и т. п.) подключается так же — через `LM_STUDIO_BASE_URL` или `LLM_PROVIDERS`:
+**Внешний сервер вместо LM Studio** (vLLM, корпоративный шлюз и т. п.) подключается так же — через `LLM_BASE_URL` или `LLM_PROVIDERS`:
 
 - адрес указывается **с `/v1` на конце**: приложение само дописывает к нему `chat/completions` и `models`;
 - `DEFAULT_MODEL` — ID модели **ровно** из ответа `GET <адрес>/v1/models`, без префиксов провайдера. Например, если сервер отдаёт `"id": "/llm_models_download/Qwen_Qwen3-8-FP8"`, то и в `.env` пишется `DEFAULT_MODEL=/llm_models_download/Qwen_Qwen3-8-FP8`. С неверным ID сервер отвечает 404, и приложение показывает его пояснение, например «model does not exist»;
-- если серверу нужен ключ, задайте его через `LLM_PROVIDERS` в поле `"api_key"` — у `LM_STUDIO_BASE_URL` ключа нет;
+- если серверу нужен ключ, задайте его через `LLM_PROVIDERS` в поле `"api_key"` — у `LLM_BASE_URL` ключа нет;
 - модель запоминается в сессии и в проекте: после смены `DEFAULT_MODEL` выберите модель в списке под чатом. Список моделей берётся с сервера; агент с холста начинает с модели своей сессии, и в его чате её можно сменить отдельно;
 - размер окна модели приложение узнаёт от LM Studio или из поля `max_model_len`, которое отдаёт vLLM; если сервер его не сообщает, берётся `DEFAULT_CONTEXT_TOKENS`.
 
@@ -140,6 +141,7 @@ LLM_PROVIDERS=[{"id":"ollama","name":"Ollama","base_url":"http://127.0.0.1:11434
 | `SESSIONS_PATH` | `data/sessions` | Сессии: настройки, резюме и холст агентов; переписки агентов с холста — скрытые сессии |
 | `CONVERSATIONS_PATH` | `data/conversations` | Полная история разговоров (JSONL) |
 | `MEMORY_PATH` | `data/memory` | Долговременная память (Markdown) |
+| `DOC_INDEX_PATH` | `data/doc_index` | Индексы инструмента `search_docs` по Markdown-документации; по файлу на рабочую папку, обновляются сами |
 
 **Сервер**
 

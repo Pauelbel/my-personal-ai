@@ -127,7 +127,11 @@ class OpenAICompatibleProvider:
         length = await self._window(self._native_root + "api/v0/models", model, "loaded_context_length", "max_context_length")
         if length is None:
             length = await self._window("models", model, "max_model_len")
-        self._context_cache[model] = (time.monotonic(), length)
+        if length is None:
+            length = await self._ollama_window(model)
+        # Ollama ещё не загрузила модель — окно станет известно после первого запроса, не запоминаем пустой ответ.
+        if length is not None:
+            self._context_cache[model] = (time.monotonic(), length)
         return length
 
     async def _window(self, url: str, model: str, *fields: str) -> int | None:
@@ -141,6 +145,19 @@ class OpenAICompatibleProvider:
                     return value if isinstance(value, int) and value > 0 else None
         except (httpx.HTTPError, ValueError, AttributeError):
             # Сервер этого не умеет: runtime возьмёт DEFAULT_CONTEXT_TOKENS.
+            return None
+        return None
+
+    async def _ollama_window(self, model: str) -> int | None:
+        """Ollama сообщает окно только у загруженной модели, в /api/ps; обычно оно меньше максимума модели."""
+        try:
+            response = await self._client.get(self._native_root + "api/ps")
+            response.raise_for_status()
+            for item in response.json().get("models", []):
+                if model in (item.get("model"), item.get("name")):
+                    value = item.get("context_length")
+                    return value if isinstance(value, int) and value > 0 else None
+        except (httpx.HTTPError, ValueError, AttributeError):
             return None
         return None
 

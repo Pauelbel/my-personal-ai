@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,9 +17,14 @@ class ProviderConfig(BaseModel):
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 
-    lm_studio_base_url: str = "http://127.0.0.1:1234/v1"
+    # Основной OpenAI-compatible сервер: Ollama, LM Studio, vLLM. LM_STUDIO_BASE_URL — старое имя, читается для совместимости.
+    llm_base_url: str = Field(
+        default="http://127.0.0.1:1234/v1",
+        validation_alias=AliasChoices("LLM_BASE_URL", "LM_STUDIO_BASE_URL"),
+    )
+    llm_name: str = "Локальный сервер"
     llm_providers: list[ProviderConfig] = Field(default_factory=list)
     default_model: str = ""
     agents_path: Path = Path("data/agents")
@@ -28,6 +33,7 @@ class Settings(BaseSettings):
     projects_path: Path = Path("data/projects")
     conversations_path: Path = Path("data/conversations")
     memory_path: Path = Path("data/memory")
+    doc_index_path: Path = Path("data/doc_index")
     # Шаг — один ход одного агента холста; на нём ход команды останавливается, даже если агенты не договорились.
     max_run_steps: int = Field(default=20, gt=0)
     memory_model: str = ""

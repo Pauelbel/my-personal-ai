@@ -38,6 +38,7 @@ from local_agent.storage.json.projects import JsonProjectRepository
 from local_agent.storage.json.sessions import JsonSessionRepository
 from local_agent.storage.jsonl.conversation import JsonlConversationStore
 from local_agent.team.coordinator import TeamCoordinator
+from local_agent.tools.docs import SearchDocsTool
 from local_agent.tools.filesystem import (
     EditFileTool,
     ListFilesTool,
@@ -52,7 +53,7 @@ from local_agent.tools.registry import ToolRegistry
 def build_providers(settings: Settings, lm_studio: LLMProvider | None) -> LLMRegistry:
     providers: dict[str, LLMProvider] = {
         "lm_studio": lm_studio or OpenAICompatibleProvider(
-            settings.lm_studio_base_url, settings.llm_timeout_seconds
+            settings.llm_base_url, settings.llm_timeout_seconds, name=settings.llm_name
         ),
     }
     for config in settings.llm_providers:
@@ -106,7 +107,7 @@ def create_app(
         app.state.tool_registry = ToolRegistry([
             ListFilesTool(), ReadFileTool(), SearchFilesTool(),
             WriteFileTool(active_settings.memory_path), EditFileTool(active_settings.memory_path),
-            GitTool(),
+            GitTool(), SearchDocsTool(active_settings.doc_index_path),
         ])
         app.state.agent_registry = AgentRegistry(load_agents(active_settings.agents_path))
         app.state.skill_registry = SkillRegistry(load_skills(active_settings.skills_path))
