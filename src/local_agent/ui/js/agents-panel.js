@@ -43,7 +43,7 @@ function listButton(text, active, onClick) {
   return button;
 }
 
-export async function showAgents({ create = false } = {}) {
+export async function showAgents({ create = false, agentId = null } = {}) {
   state.showingTools = false;
   state.showingSettings = false;
   state.showingMemory = false;
@@ -64,9 +64,9 @@ export async function showAgents({ create = false } = {}) {
     startCreate();
     return;
   }
-  // По умолчанию открываем агента текущей сессии: его промпт и уходит в модель.
+  // Открываем агента, о котором спросили (⚙ на холсте), иначе — агента текущей сессии: его промпт и уходит в модель.
   const current = state.sessions.find((session) => session.id === state.selectedId)?.agent_id;
-  selectAgent([selectedAgentId, current].find((id) => agents.some((agent) => agent.id === id)) || agents[0]?.id);
+  selectAgent([agentId, selectedAgentId, current].find((id) => agents.some((agent) => agent.id === id)) || agents[0]?.id);
 }
 
 function selectAgent(agentId) {

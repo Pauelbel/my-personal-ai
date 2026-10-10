@@ -15,43 +15,38 @@
   </head>
   <body>
     <div class="app-shell">
-      <aside class="sidebar" aria-label="Навигация">
-        <div class="sidebar-tools">
-          <button class="tools-button" id="show-customization" type="button">⚒ Кастомизация</button>
-        </div>
-
-        <button class="new-session" id="new-session" type="button">
-          <span aria-hidden="true">＋</span> Новая сессия
-        </button>
-
-        <div class="sidebar-section-heading">
-          <span>Сессии</span>
-          <span class="heading-actions">
-            <button class="heading-button" id="new-project" type="button" title="Новый проект с рабочей папкой">＋ Проект</button>
-          </span>
-        </div>
-        <nav class="session-list" id="session-list" aria-label="Сессии"></nav>
-
-        <div class="sidebar-footer">
-          <button class="settings-button" id="show-settings" type="button">
-            <span aria-hidden="true">⚙</span> Настройки
-          </button>
-        </div>
-      </aside>
-      <div class="run-resizer sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Ширина боковой панели" title="Потяните, чтобы изменить ширину; двойной щелчок — по умолчанию" tabindex="0"></div>
-
       <main class="main-area">
+        <!-- Вся навигация — в шапке: слева сессия, в центре правая панель, справа служебные страницы. -->
         <header class="app-header">
-          <img class="header-mascot" src="/ui/assets/meepo-mascot.png" width="30" height="30" alt="" aria-hidden="true" />
-          <h1 id="page-title">
-            <button class="header-title-button" id="edit-title" type="button" aria-label="Переименовать сессию" title="Переименовать сессию">Сессии</button>
-            <input class="header-title-input" id="title-input" aria-label="Название сессии" maxlength="100" hidden />
-          </h1>
-          <span class="header-tabs" id="header-tabs" role="group" aria-label="Правая панель" hidden>
-            <button id="tab-canvas" type="button" aria-controls="canvas-pane" aria-pressed="true" title="Холст агентов; повторный щелчок сворачивает панель">◧ Холст</button>
-            <button id="tab-files" type="button" aria-controls="files-pane" aria-pressed="false" title="Файлы проекта; повторный щелчок сворачивает панель">▤ Файлы</button>
-          </span>
+          <div class="header-group header-session">
+            <img class="header-mascot" src="/ui/assets/meepo-mascot.png" width="30" height="30" alt="" aria-hidden="true" />
+            <button class="header-button" id="show-sessions" type="button" aria-expanded="false" aria-controls="sessions-drawer" title="Сессии и проекты"><span aria-hidden="true">☰</span><span class="header-label">Сессии</span></button>
+            <span class="header-separator" aria-hidden="true">·</span>
+            <h1 id="page-title">
+              <button class="header-title-button" id="edit-title" type="button" aria-label="Переименовать сессию" title="Переименовать сессию"><span class="header-title-text" id="title-text">Сессии</span><span class="header-title-edit" aria-hidden="true">✎</span></button>
+              <input class="header-title-input" id="title-input" aria-label="Название сессии" maxlength="100" hidden />
+            </h1>
+            <button class="header-folder" id="session-folder" type="button" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5h6l2 2h10v10.5H3z"/></svg><span class="header-folder-path" id="session-folder-path"></span></button>
+            <button class="header-button" id="new-session" type="button" title="Новая сессия в проекте текущей сессии"><span aria-hidden="true">＋</span><span class="header-label">Сессия</span></button>
+          </div>
+          <div class="header-group header-tabs" id="header-tabs" role="group" aria-label="Правая панель" hidden>
+            <button class="header-button" id="tab-canvas" type="button" aria-controls="canvas-pane" aria-pressed="true" title="Холст агентов"><span aria-hidden="true">◧</span><span class="header-label">Холст</span></button>
+            <button class="header-button" id="tab-files" type="button" aria-controls="files-pane" aria-pressed="false" title="Файлы проекта"><span aria-hidden="true">▤</span><span class="header-label">Файлы</span></button>
+          </div>
+          <div class="header-group header-pages">
+            <button class="header-button" id="show-customization" type="button" aria-pressed="false" title="Кастомизация: инструменты, память, агенты и навыки"><span aria-hidden="true">⚒</span><span class="header-label">Кастомизация</span></button>
+            <button class="header-button" id="show-settings" type="button" aria-pressed="false" title="Настройки"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M19.2 10.5L21.9 10.8L21.9 13.2L19.2 13.5L18.2 16.0L19.9 18.2L18.2 19.9L16.0 18.2L13.5 19.2L13.2 21.9L10.8 21.9L10.5 19.2L8.0 18.2L5.8 19.9L4.1 18.2L5.8 16.0L4.8 13.5L2.1 13.2L2.1 10.8L4.8 10.5L5.8 8.0L4.1 5.8L5.8 4.1L8.0 5.8L10.5 4.8L10.8 2.1L13.2 2.1L13.5 4.8L16.0 5.8L18.2 4.1L19.9 5.8L18.2 8.0z"/><circle cx="12" cy="12" r="3"/></svg><span class="header-label">Настройки</span></button>
+          </div>
         </header>
+
+        <!-- Сессии выезжают слева поверх чата: выбор, создание и удаление сессий и проектов. -->
+        <aside class="sessions-drawer" id="sessions-drawer" aria-label="Сессии и проекты" hidden>
+          <div class="drawer-heading">
+            <span>Сессии</span>
+            <button class="heading-button" id="new-project" type="button" title="Новый проект с рабочей папкой">＋ Проект</button>
+          </div>
+          <nav class="session-list" id="session-list" aria-label="Сессии"></nav>
+        </aside>
 
         <div class="notice" id="notice" role="status" hidden></div>
 
@@ -59,7 +54,7 @@
           <div class="empty-state" id="empty-state">
             <div class="empty-icon" aria-hidden="true">✳</div>
             <h2>Начните с новой сессии</h2>
-            <p>Создайте разговор, чтобы он появился в боковой панели и сохранился после перезапуска.</p>
+            <p>Создайте разговор, чтобы он появился в списке сессий (☰ Сессии) и сохранился после перезапуска.</p>
             <button class="primary-button" id="empty-new-session" type="button">Создать сессию</button>
           </div>
 
@@ -90,8 +85,6 @@
                   <label class="config-field" for="session-provider"><span class="visually-hidden">Провайдер</span><select id="session-provider"><option value="lm_studio">LM Studio</option></select></label>
                   <span class="config-divider" aria-hidden="true"></span>
                   <label class="config-field model-field" for="session-model" title="Модель этого чата: меняется сразу, со следующего сообщения"><span class="visually-hidden">Модель</span><select id="session-model" required></select></label>
-                  <span class="config-divider" aria-hidden="true"></span>
-                  <button class="config-field workspace-field workspace-button" id="session-workspace" type="button"><span aria-hidden="true">⌂</span><span id="workspace-label">Выбрать папку…</span></button>
                   <button class="composer-memory" id="update-memory-chat" type="button" title="Обработать новые сообщения этой сессии">Обновить память</button>
                   <button class="composer-send" id="save-message" type="submit" form="message-form" aria-label="Отправить сообщение" title="Отправить">↑</button>
                 </div>
@@ -311,19 +304,35 @@
         </div>
       </form>
     </dialog>
-    <dialog class="tools-dialog skill-dialog" id="agent-prompt-dialog" aria-labelledby="agent-prompt-title">
-      <form id="agent-prompt-form">
+    <dialog class="tools-dialog skill-dialog" id="agent-node-dialog" aria-labelledby="agent-node-title">
+      <form id="agent-node-form">
         <div class="tools-dialog-header">
-          <h2 id="agent-prompt-title">Инструкции агента</h2>
-          <button class="tools-close" id="agent-prompt-close" type="button" aria-label="Закрыть">×</button>
+          <h2 id="agent-node-title">Настройки агента</h2>
+          <button class="tools-close" id="agent-node-close" type="button" aria-label="Закрыть">×</button>
         </div>
-        <p id="agent-prompt-note">Изменения действуют во всех командах и сессиях этого агента со следующего хода.</p>
-        <label class="visually-hidden" for="agent-prompt-text">Системный промпт</label>
-        <textarea class="agent-prompt-text" id="agent-prompt-text" rows="16" required></textarea>
-        <p class="dialog-error" id="agent-prompt-error" role="alert" hidden></p>
+        <label class="dialog-field">Имя на холсте — так его видят соседи<input id="agent-node-name" maxlength="100" autocomplete="off" /></label>
+        <p class="agent-node-about" id="agent-node-about"></p>
+        <div id="agent-node-prompt-field">
+          <label class="dialog-field" for="agent-node-prompt">Инструкции</label>
+          <textarea class="agent-prompt-text" id="agent-node-prompt" rows="7"></textarea>
+        </div>
+        <div class="agent-node-lists">
+          <section aria-labelledby="agent-node-tools-title">
+            <span class="section-label" id="agent-node-tools-title">Инструменты</span>
+            <ul class="agent-node-list" id="agent-node-tools"></ul>
+          </section>
+          <section aria-labelledby="agent-node-skills-title">
+            <span class="section-label" id="agent-node-skills-title">Навыки</span>
+            <ul class="agent-node-list" id="agent-node-skills"></ul>
+          </section>
+        </div>
+        <p>Инструкции, инструменты и навыки — общие для всех сессий этого агента и действуют со следующего хода. Инструменты и навыки меняются в настройках агента.</p>
+        <p class="dialog-error" id="agent-node-error" role="alert" hidden></p>
         <div class="dialog-actions">
-          <button class="secondary-button" id="agent-prompt-cancel" type="button">Отмена</button>
-          <button class="primary-button" id="agent-prompt-save" type="submit">Сохранить</button>
+          <button class="danger-button" id="agent-node-remove" type="button">Убрать с холста</button>
+          <button class="secondary-button" id="agent-node-agents" type="button">Все настройки агента…</button>
+          <button class="secondary-button" id="agent-node-cancel" type="button">Отмена</button>
+          <button class="primary-button" id="agent-node-save" type="submit">Сохранить</button>
         </div>
       </form>
     </dialog>

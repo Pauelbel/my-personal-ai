@@ -18,6 +18,10 @@ class SendMessageTool:
         self.sent: list[tuple[str, str]] = []
 
     @property
+    def recipients(self) -> dict[str, str]:
+        return dict(self._recipients)
+
+    @property
     def description(self) -> str:
         return (
             "Написать другому участнику команды. Разрешённые получатели:\n"

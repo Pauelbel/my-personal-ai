@@ -82,22 +82,17 @@ def test_session_model_can_be_selected_after_creation(tmp_path) -> None:
         session = client.post("/api/sessions", json={"model": ""}).json()
         configured = client.put(
             f"/api/sessions/{session['id']}/config",
-            json={
-                "provider": "lm_studio",
-                "model": "test-model",
-                "workspace": str(tmp_path),
-            },
+            json={"provider": "lm_studio", "model": "test-model"},
         )
         assert configured.status_code == 200
         assert configured.json()["model"] == "test-model"
-        assert configured.json()["workspace"] == str(tmp_path.resolve())
         response = client.post(
             f"/api/sessions/{session['id']}/turns", json={"content": "Привет"}
         )
         assert response.status_code == 200
         changed = client.put(
             f"/api/sessions/{session['id']}/config",
-            json={"provider": "lm_studio", "model": "another-model", "workspace": None},
+            json={"provider": "lm_studio", "model": "another-model"},
         )
         assert changed.json()["context_tokens"] is None
 

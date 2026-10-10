@@ -1,6 +1,7 @@
 /* Терминальный интерфейс: моноширинный шрифт, тонкие линии, без скруглений и теней.
    Все цвета — токены темы из theme.css; здесь только раскладка и форма компонентов. */
 :root {
+  --header-height: 36px;
   --font: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, "SFMono-Regular", monospace;
   font: 13px/1.55 var(--font);
   color: var(--fg);
@@ -25,20 +26,20 @@ code { font-family: var(--font); }
 * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 
 /* Подписи разделов: капс с разрядкой, как заголовки панелей в терминале. */
-.section-label, .sidebar-section-heading, .sidebar-group-label, .dialog-field, .team-toolbar label, .theme-settings legend {
+.section-label, .drawer-heading, .dialog-field, .team-toolbar label, .theme-settings legend {
   color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
 }
 
 /* Кнопки: рамка в линию; главная — инвертированная плашка. */
-.primary-button, .secondary-button, .danger-button, .heading-button, .new-session, .tools-button,
+.primary-button, .secondary-button, .danger-button, .heading-button,
 .skill-header-actions button, .skill-view-controls button, .skill-dialog-actions button, .approval-actions button,
 .composer-memory, .memory-file-button, .run-bar button, .code-copy, #show-skill-archive {
   margin: 0; padding: 5px 12px; border: 1px solid var(--line-strong); border-radius: 0; background: transparent;
   color: var(--fg); font-size: 12px; letter-spacing: .06em; text-align: left;
 }
-.primary-button, .new-session { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
-.primary-button:hover:not(:disabled), .new-session:hover:not(:disabled) { filter: brightness(1.1); }
-.secondary-button:hover:not(:disabled), .heading-button:hover, .tools-button:hover, .skill-header-actions button:hover,
+.primary-button { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.primary-button:hover:not(:disabled) { filter: brightness(1.1); }
+.secondary-button:hover:not(:disabled), .heading-button:hover, .skill-header-actions button:hover,
 .skill-view-controls button:hover:not(:disabled), .skill-dialog-actions button:hover, .composer-memory:hover:not(:disabled),
 .memory-file-button:hover, .run-bar button:hover, .code-copy:hover, .approval-actions .secondary-button:hover { background: var(--surface-2); }
 .danger-button { margin-right: auto !important; border-color: var(--danger); color: var(--danger); }
@@ -49,22 +50,44 @@ input, select, textarea {
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
 select option { background: var(--surface); color: var(--fg); }
 
-/* Каркас: боковая панель и рабочая область разделены одной линией. */
-.app-shell { min-height: 100vh; display: grid; grid-template-columns: var(--sidebar-width, 280px) auto minmax(0, 1fr); }
-.app-shell.resizing { cursor: col-resize; user-select: none; }
-/* Полоса захвата лежит поверх правой границы сайдбара и тянется во всю высоту окна. */
-.run-resizer.sidebar-resizer { position: sticky; top: 0; height: 100vh; }
-.sidebar { position: sticky; top: 0; height: 100vh; min-height: 0; display: flex; flex-direction: column; padding: 12px 0 0; border-right: 1px solid var(--line); background: var(--surface); }
-.sidebar-tools { padding: 0 12px 8px; }
-.tools-button, .new-session { display: block; width: calc(100% - 24px); margin: 0 12px 8px; padding: 7px 12px; }
-.sidebar-tools .tools-button { width: 100%; margin: 0; }
-.tools-button.active { border-color: var(--accent); color: var(--accent); }
-.new-session span { margin-right: 6px; }
-.sidebar-section-heading { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 0; padding: 8px 16px; border-top: 1px solid var(--line); }
-.heading-actions { display: flex; align-items: center; gap: 6px; }
+/* Каркас: шапка во всю ширину, под ней рабочая область. */
+.app-shell { min-height: 100vh; }
+.main-area { min-width: 0; padding: 0 clamp(16px, 3vw, 40px) 40px; }
+
+/* Шапка: одна строка. Слева сессия, в центре вкладки правой панели, справа служебные страницы. */
+.app-header { position: sticky; top: 0; z-index: 7; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px; height: var(--header-height); margin: 0 calc(-1 * clamp(16px, 3vw, 40px)); padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.header-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* Колонки заданы явно: без скрытых вкладок служебные кнопки не съезжают в центр. */
+.header-session { grid-column: 1; }
+.header-tabs { grid-column: 2; gap: 0; }
+.header-pages { grid-column: 3; justify-self: end; }
+.header-mascot { flex: 0 0 20px; width: 20px; height: 20px; object-fit: contain; image-rendering: pixelated; }
+.header-separator { flex: 0 0 auto; color: var(--muted); }
+.header-button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; letter-spacing: .06em; white-space: nowrap; }
+.header-button:hover:not(:disabled) { border-color: var(--line-strong); color: var(--fg); }
+.header-button[aria-pressed="true"], .header-button[aria-expanded="true"] { position: relative; border-color: var(--accent); color: var(--accent); }
+.header-tabs .header-button + .header-button { margin-left: -1px; }
+.app-header h1 { display: flex; flex: 0 1 auto; min-width: 0; margin: 0; font-size: 12px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; white-space: nowrap; }
+.header-title-button { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; padding: 2px 6px; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; text-transform: inherit; }
+.header-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header-title-edit { flex: 0 0 auto; color: var(--muted); letter-spacing: 0; }
+.header-title-button:disabled .header-title-edit { display: none; }
+.header-title-button:not(:disabled):hover { background: var(--surface-2); }
+.header-title-button:not(:disabled):hover .header-title-edit { color: var(--accent); }
+.header-title-button:disabled { opacity: 1; }
+.header-title-input { width: min(100%, 360px); height: 24px; padding: 2px 8px; font-size: 12px; }
+/* Рабочая папка сессии: путь обрезается слева, чтобы была видна сама папка, а не начало пути. */
+.header-folder { display: inline-flex; flex: 0 2 auto; align-items: center; gap: 6px; min-width: 96px; max-width: 280px; height: 24px; padding: 0 8px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 11px; }
+.header-folder svg { flex: 0 0 auto; color: var(--accent); }
+.header-folder:hover { border-color: var(--line); color: var(--fg); }
+.header-folder-path { min-width: 0; overflow: hidden; direction: rtl; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Сессии выезжают слева поверх чата и не сдвигают его. */
+.sessions-drawer { position: fixed; z-index: 6; top: var(--header-height); bottom: 0; left: 0; display: flex; flex-direction: column; width: min(260px, 100vw); border-right: 1px solid var(--line); background: var(--surface); }
+.drawer-heading { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--line); }
 .heading-button { padding: 1px 6px; font-size: 11px; letter-spacing: .04em; text-transform: none; border-color: var(--line); color: var(--muted); }
 .heading-button:hover { color: var(--fg); border-color: var(--line-strong); }
-.session-list { display: grid; align-content: start; overflow-y: auto; min-height: 60px; }
+.session-list { display: grid; flex: 1; align-content: start; min-height: 0; padding-bottom: 8px; overflow-y: auto; }
 .project-row { display: grid; grid-template-columns: minmax(0, 1fr) 26px 26px; align-items: center; margin-top: 4px; }
 .project-toggle { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 8px 5px 16px; border: 0; background: transparent; color: var(--fg); font-weight: 600; text-align: left; }
 .project-arrow { flex: 0 0 10px; color: var(--muted); font-size: 10px; }
@@ -75,12 +98,10 @@ select option { background: var(--surface); color: var(--fg); }
 .project-row:hover .project-action, .project-row:focus-within .project-action { opacity: 1; }
 .project-action:hover { color: var(--fg); }
 .project-empty { margin: 0 0 4px 44px; color: var(--muted); font-size: 11px; }
-.sidebar-group-label { margin: 12px 0 2px; padding: 0 16px; }
 .session-row { display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; }
-.session-row.in-project .session-item { padding-left: 34px; }
+.session-row .session-item { padding-left: 34px; }
 .session-row:has(.session-item.active) { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--accent); }
-.session-item, .settings-button { width: 100%; border: 0; background: transparent; color: var(--muted); text-align: left; }
-.session-item { display: flex; align-items: center; gap: 10px; padding: 5px 8px 5px 16px; font-size: 12px; }
+.session-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 5px 8px 5px 16px; border: 0; background: transparent; color: var(--muted); font-size: 12px; text-align: left; }
 .session-item::before { content: "○"; flex: 0 0 auto; color: var(--muted); font-size: 10px; }
 .session-item:hover, .session-item.active { color: var(--fg); }
 .session-item.active::before { content: "●"; color: var(--accent); }
@@ -92,21 +113,7 @@ select option { background: var(--surface); color: var(--fg); }
 @media (hover: none) {
   .session-delete-button, .project-action { opacity: 1; pointer-events: auto; }
 }
-.sidebar-empty { margin: 10px 16px; color: var(--muted); font-size: 12px; }
-.sidebar-footer { margin-top: auto; border-top: 1px solid var(--line); }
-.settings-button { padding: 9px 16px; font-size: 12px; }
-.settings-button:hover { background: var(--surface-2); color: var(--fg); }
-.settings-button span { margin-right: 8px; }
-
-/* Шапка: одна строка с капсом, как заголовок окна терминала. */
-.main-area { min-width: 0; padding: 0 clamp(16px, 3vw, 40px) 40px; }
-.app-header { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; gap: 12px; min-height: 44px; margin: 0 calc(-1 * clamp(16px, 3vw, 40px)); padding: 0 clamp(16px, 3vw, 40px); border-bottom: 1px solid var(--line); background: var(--bg); }
-.header-mascot { flex: 0 0 22px; width: 22px; height: 22px; object-fit: contain; image-rendering: pixelated; }
-.app-header h1 { flex: 1; min-width: 0; margin: 0; overflow: hidden; font-size: 12px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; text-overflow: ellipsis; white-space: nowrap; }
-.header-title-button { display: block; max-width: 100%; padding: 4px 6px; margin-left: -6px; overflow: hidden; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; text-transform: inherit; }
-.header-title-button:not(:disabled):hover { background: var(--surface-2); }
-.header-title-button:disabled { opacity: 1; }
-.header-title-input { width: min(100%, 420px); padding: 4px 8px; font-size: 12px; }
+.sessions-empty { margin: 10px 16px; color: var(--muted); font-size: 12px; }
 
 .content-panel { max-width: 980px; margin: 20px auto 0; }
 .customization-panel { max-width: 1280px; }
@@ -199,10 +206,6 @@ select option { background: var(--surface); color: var(--fg); }
 .config-field:focus-within { background: var(--surface-2); }
 .model-field { flex: 0 1 220px; }
 .model-field select { width: 100%; }
-.workspace-field { flex: 1 1 170px; }
-.workspace-button { padding: 2px 6px; border: 0; background: transparent; color: var(--accent); cursor: pointer; }
-.workspace-button #workspace-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-button:hover:not(:disabled) { background: var(--surface-2); }
 .config-divider { color: var(--muted); }
 .config-divider::before { content: ">"; }
 .composer-memory { flex: 0 0 auto; padding: 2px 8px; border-color: var(--line); color: var(--muted); font-size: 11px; }
@@ -313,13 +316,12 @@ select option { background: var(--surface); color: var(--fg); }
 .folder-item:hover, .folder-item:focus-visible { background: var(--surface-2); }
 .folder-empty { margin: 10px; color: var(--muted); }
 
-/* Сессия: чат слева, холст агентов справа — во всю высоту под шапкой. Холст можно свернуть. */
+/* Сессия: чат слева, правая панель (холст или файлы) справа — обе видны всегда, во всю высоту под шапкой. */
 .content-panel:has(> .session-detail:not([hidden])) { max-width: none; margin: 0 calc(-1 * clamp(16px, 3vw, 40px)); }
 .main-area:has(.session-detail:not([hidden])) { padding-bottom: 0; }
-.session-detail { display: grid; grid-template-columns: var(--chat-width, 560px) auto minmax(0, 1fr); height: calc(100vh - 45px); }
-.session-detail.canvas-collapsed, .session-detail.no-canvas { grid-template-columns: minmax(0, 1fr); }
-.session-detail.canvas-collapsed .conversation, .session-detail.no-canvas .conversation { width: min(100%, 980px); margin: 0 auto; }
-.session-detail.canvas-collapsed > .run-resizer, .session-detail.canvas-collapsed > .canvas-pane, .session-detail.canvas-collapsed > .files-pane,
+.session-detail { display: grid; grid-template-columns: var(--chat-width, 560px) auto minmax(0, 1fr); height: calc(100vh - var(--header-height)); }
+.session-detail.no-canvas { grid-template-columns: minmax(0, 1fr); }
+.session-detail.no-canvas .conversation { width: min(100%, 980px); margin: 0 auto; }
 .session-detail.no-canvas > .run-resizer, .session-detail.no-canvas > .canvas-pane, .session-detail.no-canvas > .files-pane { display: none; }
 .session-detail.resizing { cursor: col-resize; user-select: none; }
 /* Разделитель не занимает места: полоса захвата лежит поверх границы холста. */
@@ -329,10 +331,6 @@ select option { background: var(--surface); color: var(--fg); }
 .run-resizer:focus-visible { outline: none; }
 .conversation { min-width: 0; min-height: 0; padding: 0 clamp(12px, 2vw, 24px) 16px; }
 .canvas-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); }
-.header-tabs { display: inline-flex; }
-.header-tabs button { padding: 2px 10px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; letter-spacing: .06em; }
-.header-tabs button + button { margin-left: -1px; }
-.header-tabs button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); position: relative; }
 .canvas-hint { position: absolute; left: 50%; bottom: 56px; width: min(440px, calc(100% - 32px)); margin: 0; padding: 8px 12px; border: 1px dashed var(--line); background: var(--surface); color: var(--muted); font-size: 12px; text-align: center; transform: translateX(-50%); pointer-events: none; }
 .agent-card-entry { padding: 0 5px; border: 1px solid var(--accent); color: var(--accent); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
 /* Переписка с агентами холста в чате сессии: поручение «→ QA» и ответ «⇠ QA» — короткими строками. */
@@ -368,35 +366,21 @@ select option { background: var(--surface); color: var(--fg); }
 .zoom-controls button + button { border-left: 1px solid var(--line); }
 .zoom-controls button:hover { background: var(--surface-2); }
 
-/* Карточка агента: окно с заголовком и сворачиваемыми секциями. */
-.agent-card { position: absolute; width: 280px; border: 1px solid var(--line-strong); background: var(--surface); font-size: 12px; cursor: default; user-select: none; }
-/* Работающий агент обведён пунктиром статуса, выбранный в чате — залит цветом акцента. */
+/* Карточка агента — одна строка: имя целиком, метка «вход», индикатор работы и ⚙ с настройками. */
+.agent-card { position: absolute; width: max-content; max-width: 360px; border: 1px solid var(--line-strong); background: var(--surface); font-size: 12px; cursor: default; user-select: none; }
+/* Работающий агент обведён пунктиром статуса и мигает точкой, выбранный в чате — залит цветом акцента. */
 .agent-card.running { outline: 1px dashed var(--warn); outline-offset: 3px; }
 .agent-card:not(.current) { cursor: pointer; }
 .agent-card:not(.current):hover { border-color: var(--accent); }
-.agent-card header { display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 10px; border-bottom: 1px solid var(--line); cursor: grab; touch-action: none; }
+.agent-card header { display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 10px; cursor: grab; touch-action: none; }
 .agent-card header:active { cursor: grabbing; }
-.agent-card header strong { flex: 1; min-width: 0; overflow: hidden; color: var(--accent); text-overflow: ellipsis; white-space: nowrap; }
-.agent-card-badge { color: var(--warn); font-size: 11px; white-space: nowrap; }
-.agent-card-badge::before { content: "● "; animation: pulse 1.2s steps(2) infinite; }
-.agent-card-action { padding: 0 5px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 11px; }
+/* Имя не сокращается; многоточие — только у очень длинного имени, упёршегося в предел ширины карточки. */
+.agent-card header strong { min-width: 0; overflow: hidden; color: var(--accent); text-overflow: ellipsis; white-space: nowrap; }
+.agent-card-badge { flex: 0 0 auto; color: var(--warn); font-size: 11px; }
+.agent-card-badge::before { content: "●"; animation: pulse 1.2s steps(2) infinite; }
+.agent-card-action { flex: 0 0 auto; padding: 0 5px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 11px; }
 .agent-card-action:hover { border-color: var(--line); color: var(--fg); }
-.agent-card-section + .agent-card-section { border-top: 1px solid var(--line); }
-.agent-card-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 10px; border: 0; background: transparent; color: var(--muted); font-size: 10px; letter-spacing: .14em; text-align: left; text-transform: uppercase; }
-.agent-card-toggle:hover { color: var(--fg); }
-.agent-card-chevron { width: 1ch; }
-.agent-card-count { margin-left: auto; letter-spacing: 0; }
-.agent-card-body { padding: 0 10px 8px; }
-.agent-card-body p { margin: 4px 0 0; color: var(--fg); font-size: 12px; line-height: 1.45; }
-.agent-card-meta { display: block; color: var(--muted); font-size: 11px; }
-.agent-card-missing { color: var(--danger); }
-.agent-card-prompt { max-height: 84px; overflow-y: auto; padding-left: 8px; border-left: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 1.5; white-space: pre-wrap; user-select: text; }
-.agent-card-edit { display: block; margin: 6px 0 0 auto; border-color: var(--line); }
-.agent-card-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 3px 0; border: 0; background: transparent; color: var(--fg); font-size: 12px; text-align: left; }
-.agent-card-row + .agent-card-row { border-top: 1px solid var(--line); }
-.agent-card-glyph { width: 1.4ch; color: var(--muted); text-align: center; }
-.agent-card-more { color: var(--accent); }
-.agent-card-empty { color: var(--muted); font-size: 11px; }
+.agent-card-settings { display: grid; place-items: center; margin-left: auto; padding: 2px 3px; }
 /* Порты на всех четырёх сторонах; видны, пока курсор над карточкой. */
 .agent-card-port { position: absolute; width: 13px; height: 13px; padding: 0; border: 1px solid var(--accent); border-radius: 50%; background: var(--surface); cursor: crosshair; touch-action: none; opacity: 0; transition: opacity .12s; }
 .agent-card:hover .agent-card-port, .agent-card-port:focus-visible { opacity: 1; }
@@ -406,39 +390,50 @@ select option { background: var(--surface); color: var(--fg); }
 .port-bottom { bottom: -7px; left: 50%; transform: translateX(-50%); }
 .port-left { top: 50%; left: -7px; transform: translateY(-50%); }
 @media (hover: none) { .agent-card-port { opacity: 1; } }
-/* Растянутая карточка: заголовок на месте, секции прокручиваются, инструкции занимают всё доступное место. */
-.agent-card { display: flex; flex-direction: column; }
-.agent-card-content { flex: 1; min-height: 0; }
-.agent-card.sized .agent-card-content { overflow-y: auto; }
-.agent-card.sized .agent-card-prompt { max-height: none; }
-.agent-card-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; padding: 0; border: 0; background: transparent; cursor: nwse-resize; touch-action: none; opacity: 0; }
-.agent-card-resize::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-right: 1px solid var(--accent); border-bottom: 1px solid var(--accent); }
-.agent-card:hover .agent-card-resize, .agent-card-resize:focus-visible { opacity: 1; }
-@media (hover: none) { .agent-card-resize { opacity: 1; } }
 .agent-card.drop-target { outline: 1px dashed var(--accent); outline-offset: 5px; }
-.agent-prompt-text { width: 100%; min-height: 320px; padding: 10px; resize: vertical; line-height: 1.55; }
+/* Окно настроек агента с холста. */
+.agent-prompt-text { width: 100%; min-height: 140px; padding: 10px; resize: vertical; line-height: 1.55; }
+.agent-node-about { color: var(--fg); }
+.agent-card-missing { color: var(--danger); }
+.agent-node-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.agent-node-list { max-height: 124px; margin: 4px 0 0; padding: 0; overflow-y: auto; border: 1px solid var(--line); list-style: none; font-size: 12px; }
+.agent-node-list li { display: flex; gap: 8px; padding: 3px 8px; overflow-wrap: anywhere; }
+.agent-node-list li + li { border-top: 1px solid var(--line); }
+.agent-node-list li.empty { color: var(--muted); }
+.agent-node-glyph { flex: 0 0 1.4ch; color: var(--muted); text-align: center; }
 
+/* Узкое окно: колонки друг под другом (сверху чат, снизу правая панель), в шапке справа и в центре — только значки. */
+@media (max-width: 900px) {
+  .app-header { grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+  .header-mascot { display: none; }
+  .header-tabs .header-label, .header-pages .header-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .header-tabs .header-button, .header-pages .header-button { padding: 0 8px; }
+  .session-detail { grid-template-columns: 1fr; grid-template-rows: minmax(420px, 70vh) minmax(420px, 1fr); height: auto; }
+  .canvas-pane, .files-pane { border-left: 0; border-top: 1px solid var(--line); }
+  .run-resizer { display: none; }
+}
+@media (max-width: 560px) {
+  .header-folder { min-width: 0; }
+  .header-folder-path { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .header-session .header-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .header-session .header-button { padding: 0 8px; }
+  .header-separator { display: none; }
+  .agent-node-lists { grid-template-columns: 1fr; }
+}
 @media (max-width: 700px) {
-  .app-shell { grid-template-columns: 1fr; }
-  .sidebar-resizer { display: none; }
-  .sidebar { position: static; height: auto; max-height: 48vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .main-area { padding: 0 12px 24px; }
-  .app-header { margin: 0 -12px; padding: 0 12px; }
+  .app-header { margin: 0 -12px; }
   .memory-workspace { grid-template-columns: 1fr; }
   .memory-editor textarea { min-height: 300px; }
-  .session-detail { grid-template-columns: 1fr; grid-template-rows: minmax(420px, 70vh) minmax(420px, 1fr); height: auto; }
-  .canvas-pane { border-left: 0; border-top: 1px solid var(--line); }
-  .run-resizer { display: none; }
   .composer-config { align-items: stretch; }
   .config-divider { display: none; }
   .config-field { flex: 1 1 130px; }
-  .workspace-field { flex-basis: 100%; }
 }
 .skill-users { margin: 0 0 8px; color: var(--accent); font-size: 12px; }
 /* Карточка агента, с которым сейчас идёт разговор в чате. */
 .agent-card.current { border-color: var(--accent); outline: 1px solid var(--accent); }
 .agent-card.current header { background: var(--accent); }
-.agent-card.current header strong, .agent-card.current header .agent-card-action { color: var(--accent-fg); }
+.agent-card.current header strong, .agent-card.current header .agent-card-action, .agent-card.current .agent-card-badge { color: var(--accent-fg); }
 .agent-card.current .agent-card-entry { border-color: var(--accent-fg); color: var(--accent-fg); }
 
 /* Вкладка «Файлы»: дерево слева, просмотр файла справа. */
@@ -459,7 +454,6 @@ select option { background: var(--surface); color: var(--fg); }
 .files-viewer-title { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-viewer-body { flex: 1; min-height: 0; padding: 12px 16px; overflow: auto; }
 .files-code { margin: 0; font-size: 12px; white-space: pre; tab-size: 4; }
-@media (max-width: 760px) { .files-pane { border-left: 0; border-top: 1px solid var(--line); } }
 .files-viewer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-viewer-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .files-viewer-actions button { padding: 2px 10px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; }
@@ -472,9 +466,9 @@ select option { background: var(--surface); color: var(--fg); }
 .usage-context { display: inline-flex; align-items: center; gap: 8px; cursor: help; }
 .usage-meter { width: 90px; height: 6px; border: 1px solid var(--line); }
 .usage-fill { display: block; height: 100%; background: var(--accent); }
-.usage-context.warn .usage-fill { background: #d99a00; }
-.usage-context.full, .usage-context.full #usage-text { color: #d33; }
-.usage-context.full .usage-fill { background: #d33; }
+.usage-context.warn .usage-fill { background: var(--warn); }
+.usage-context.full, .usage-context.full #usage-text { color: var(--danger); }
+.usage-context.full .usage-fill { background: var(--danger); }
 .usage-speed { cursor: help; }
 .tok-comment { color: var(--muted); font-style: italic; }
 .tok-string { color: var(--ok); }

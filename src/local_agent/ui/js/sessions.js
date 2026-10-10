@@ -4,6 +4,7 @@ import { clearError, elements, render, setMessages, showError, state } from "./s
 
 export function selectSession(id) {
   state.showingTools = false;
+  state.sessionsOpen = false;
   state.selectedId = id;
   state.editingTitle = false;
   setMessages([], null);
@@ -51,6 +52,7 @@ export async function createSession(projectId = null) {
   try {
     const session = await sessionsApi.create(state.preferredModel, projectId);
     state.selectedId = session.id;
+    state.sessionsOpen = false;
     state.editingTitle = false;
     setMessages([], null);
     elements.messageInput.value = "";

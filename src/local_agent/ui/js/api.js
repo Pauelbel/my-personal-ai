@@ -23,7 +23,7 @@ async function responseError(response) {
 const sessionPath = (sessionId) => `/sessions/${encodeURIComponent(sessionId)}`;
 
 export const sessionsApi = {
-  // Служебные сессии запуска тоже нужны: их открывают из ленты, а сайдбар их прячет.
+  // Служебные сессии запуска тоже нужны: их открывают из ленты, а панель сессий их прячет.
   list: () => request("/sessions?include_hidden=true"),
   create: (model, projectId = null) => request(
     "/sessions",

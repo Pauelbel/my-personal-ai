@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     skills_path: Path = Path("data/skills")
     sessions_path: Path = Path("data/sessions")
     projects_path: Path = Path("data/projects")
+    # Папка системного проекта «Черновики»: в нём живут быстрые разговоры без своей папки.
+    drafts_path: Path = Path("data/drafts")
     conversations_path: Path = Path("data/conversations")
     memory_path: Path = Path("data/memory")
     doc_index_path: Path = Path("data/doc_index")

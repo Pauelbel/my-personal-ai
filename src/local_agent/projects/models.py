@@ -4,6 +4,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+# Системный проект «Черновики»: создаётся при старте, его нельзя удалить. Сюда попадают сессии,
+# созданные без проекта, и сессии удалённых проектов.
+DRAFTS_PROJECT_ID = "drafts"
+DRAFTS_PROJECT_NAME = "Черновики"
+
 
 class Project(BaseModel):
     id: str

@@ -1,8 +1,8 @@
-// Диалог проекта: создание, переименование, смена папки и удаление.
+// Диалог проекта: создание, переименование, смена папки и удаление. «Черновики» удалить нельзя.
 import { projectsApi } from "./api.js";
 import { pickFolder } from "./folder-picker.js";
 import { createSession, loadSessions } from "./sessions.js";
-import { clearError, elements, showError } from "./state.js";
+import { DRAFTS_PROJECT_ID, clearError, elements, showError } from "./state.js";
 
 let editing = null;
 let folder = null;
@@ -12,7 +12,7 @@ export function openProjectDialog(project = null) {
   folder = project?.workspace ?? null;
   elements.projectDialogTitle.textContent = project ? "Настройки проекта" : "Новый проект";
   elements.projectSave.textContent = project ? "Сохранить" : "Создать";
-  elements.projectDelete.hidden = !project;
+  elements.projectDelete.hidden = !project || project.id === DRAFTS_PROJECT_ID;
   elements.projectName.value = project?.name ?? "";
   elements.projectError.hidden = true;
   renderFolder();
@@ -74,10 +74,10 @@ async function save() {
 }
 
 async function remove() {
-  if (!editing) return;
+  if (!editing || editing.id === DRAFTS_PROJECT_ID) return;
   const confirmed = window.confirm(
     `Удалить проект «${editing.name}»? Папка и файлы на диске не трогаются. `
-    + "Сессии проекта останутся в разделе «Без проекта», но без доступа к файлам.",
+    + "Сессии проекта перейдут в «Черновики».",
   );
   if (!confirmed) return;
   try {

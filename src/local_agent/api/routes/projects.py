@@ -77,5 +77,10 @@ def delete_project(
     project_id: str,
     service: Annotated[ProjectService, Depends(get_project_service)],
 ) -> None:
-    if not service.delete(project_id):
+    # Сессии удалённого проекта переходят в «Черновики»; сами «Черновики» удалить нельзя.
+    try:
+        deleted = service.delete(project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
         raise HTTPException(status_code=404, detail="Проект не найден")

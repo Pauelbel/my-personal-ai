@@ -95,8 +95,12 @@ def test_next_turn_reloads_and_workspace_switch_does_not_leak(tmp_path):
 
         def turn(workspace: Path | None):
             if workspace not in sessions:
+                # Без папки — сессия «Черновиков»: правила других проектов в неё не попадают.
+                project_id = client.post("/api/projects", json={
+                    "name": workspace.name, "workspace": str(workspace),
+                }).json()["id"] if workspace else None
                 session = client.post("/api/sessions", json={
-                    "model": "test-model", "workspace": str(workspace) if workspace else None,
+                    "model": "test-model", "project_id": project_id,
                 }).json()
                 sessions[workspace] = session["id"]
             url = f"/api/sessions/{sessions[workspace]}"

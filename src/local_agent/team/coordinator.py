@@ -144,7 +144,7 @@ class TeamCoordinator:
         child = self._sessions.create(
             title=f"{self._name(session, node.id)} · {session.title}", agent_id=agent.id,
             model=model, provider=provider,
-            workspace=None, project_id=session.project_id, parent_id=session.id, node_id=node.id, hidden=True,
+            project_id=session.project_id, parent_id=session.id, node_id=node.id, hidden=True,
         )
         self._sessions.set_node_session(session.id, node.id, child.id)
         session.node_sessions[node.id] = child.id

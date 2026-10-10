@@ -48,6 +48,7 @@ from local_agent.tools.filesystem import (
 )
 from local_agent.tools.git import GitTool
 from local_agent.tools.registry import ToolRegistry
+from local_agent.tools.testgen import GenerateTestCasesTool
 
 
 def build_providers(settings: Settings, lm_studio: LLMProvider | None) -> LLMRegistry:
@@ -88,6 +89,8 @@ def create_app(
             on_deleted=(conversation_store.delete, memory_store.forget),
         )
         app.state.project_service = ProjectService(project_repository, app.state.session_service)
+        # «Черновики» нужны до миграции: в них переходят сессии без проекта.
+        app.state.project_service.ensure_drafts(active_settings.drafts_path)
         app.state.project_service.adopt_sessions()
         app.state.conversation_service = ConversationService(
             conversation_store,
@@ -107,7 +110,7 @@ def create_app(
         app.state.tool_registry = ToolRegistry([
             ListFilesTool(), ReadFileTool(), SearchFilesTool(),
             WriteFileTool(active_settings.memory_path), EditFileTool(active_settings.memory_path),
-            GitTool(), SearchDocsTool(active_settings.doc_index_path),
+            GitTool(), SearchDocsTool(active_settings.doc_index_path), GenerateTestCasesTool(),
         ])
         app.state.agent_registry = AgentRegistry(load_agents(active_settings.agents_path))
         app.state.skill_registry = SkillRegistry(load_skills(active_settings.skills_path))

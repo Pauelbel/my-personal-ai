@@ -75,9 +75,16 @@ def settings(root, **overrides):
     )
 
 
+def project_id(client, root):
+    """Проект с папкой root/project: файлы агенты команды пишут в неё. Новая сессия проекта берёт его модель."""
+    return client.post("/api/projects", json={
+        "name": "Проект", "workspace": str(root / "project"), "model": "main-model",
+    }).json()["id"]
+
+
 def open_session(client, root, canvas=TEAM):
     """Сессия проекта с холстом команды и фактом в личной памяти."""
-    session = client.post("/api/sessions", json={"model": "main-model", "workspace": str(root / "project")}).json()
+    session = client.post("/api/sessions", json={"model": "main-model", "project_id": project_id(client, root)}).json()
     saved = client.put(f"/api/sessions/{session['id']}/canvas", json=canvas)
     assert saved.status_code == 200 and saved.json()["errors"] == []
     name = client.get("/api/memory").json()[0]["name"]
@@ -210,6 +217,10 @@ def test_session_agent_delegates_and_gets_results_back(root, approved):
     assert provider.tools_of("qa-model")[0] == {"read_file", "send_message", "use_skill"}
     # У AQA нет стрелок: писать ему некому, а навыков нет.
     assert provider.tools_of("aqa-model")[0] == {"read_file", "write_file"}
+    # Соседи по стрелкам перечислены в системном промпте: без этого агент делает их работу сам.
+    systems = {model: messages[0].content for model, messages, _ in provider.calls}
+    assert "Участники:\n- qa: QA. Проектирует тестирование" in systems["main-model"]
+    assert "- aqa: AQA. Пишет автотесты" in systems["qa-model"] and "Участники:" not in systems["aqa-model"]
     # Агенты с холста не видят личную память пользователя, агент сессии — видит.
     assert MEMORY_FACT in provider.calls[0][1][0].content
     assert all(MEMORY_FACT not in messages[0].content for model, messages, _ in provider.calls if model != "main-model")
@@ -322,7 +333,7 @@ def test_agent_replies_do_not_count_as_user_messages_for_memory(root):
 def test_every_new_session_starts_with_the_main_agent(root):
     provider = TeamProvider({"main-model": [send("qa", "Задача"), "Передал", "Итог"], "qa-model": ["Готово"]})
     with TestClient(create_app(settings(root), llm_provider=provider)) as client:
-        first = client.post("/api/sessions", json={"model": "main-model", "workspace": str(root / "project")}).json()
+        first = client.post("/api/sessions", json={"model": "main-model", "project_id": project_id(client, root)}).json()
         # Проект запоминает агента, выбранного в его сессии, но новая сессия всё равно начинает с основного.
         client.put(f"/api/sessions/{first['id']}/config", json={"provider": "lm_studio", "model": "main-model", "agent_id": "qa"})
         fresh = client.post("/api/sessions", json={"project_id": first["project_id"]}).json()

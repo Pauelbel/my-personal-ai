@@ -1,13 +1,12 @@
-// Поле ввода: настройки сессии (агент, провайдер, модель, папка), отправка с потоковым ответом и «Стоп».
+// Поле ввода: настройки сессии (агент, провайдер, модель), отправка с потоковым ответом и «Стоп».
+// Папку сессии здесь не выбирают: она у проекта и меняется в его настройках (✎ у проекта).
 import { catalogApi, sessionsApi, turnsApi } from "./api.js";
 import { StreamingMessage } from "./chat.js";
-import { pickFolder } from "./folder-picker.js";
-import { openProjectDialog } from "./projects.js";
 import { turnRecovery } from "./recovery.js";
 import { nodeName, showRunState } from "./session-canvas.js";
 import { loadSessions } from "./sessions.js";
 import {
-  clearError, elements, render, selectedProject, setMessages, showError, state,
+  clearError, elements, render, setMessages, showError, state,
 } from "./state.js";
 
 let pendingConfigSave = Promise.resolve();
@@ -80,8 +79,6 @@ export function saveConfig() {
   const config = {
     provider: elements.provider.value,
     model,
-    // Папка задаётся проектом; сессия меняет её только через chooseWorkspace.
-    workspace: null,
     agent_id: null,
   };
   const operation = pendingConfigSave.then(async () => {
@@ -105,31 +102,6 @@ export function saveConfig() {
   });
   pendingConfigSave = operation.then(() => undefined);
   return operation;
-}
-
-// Кнопка папки: в проекте открывает его настройки, без проекта — выбор папки,
-// после которого сессия переходит в проект этой папки.
-export async function chooseWorkspace() {
-  const sessionId = state.selectedId;
-  if (!sessionId || state.streaming) return;
-  const project = selectedProject();
-  if (project) {
-    openProjectDialog(project);
-    return;
-  }
-  const folder = await pickFolder();
-  if (!folder || state.selectedId !== sessionId) return;
-  try {
-    await sessionsApi.configure(sessionId, {
-      provider: elements.provider.value,
-      model: elements.model.value.trim() || state.preferredModel,
-      workspace: folder,
-      agent_id: null,
-    });
-    await loadSessions();
-  } catch (error) {
-    showError(error);
-  }
 }
 
 export function renderTurnRecovery() {

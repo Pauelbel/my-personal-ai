@@ -28,13 +28,10 @@ const SIDES = {
   top: { x: 0, y: -1 }, right: { x: 1, y: 0 }, bottom: { x: 0, y: 1 }, left: { x: -1, y: 0 },
 };
 const SAVE_DELAY_MS = 400;
-// Меньше карточку не сжать: заголовок с кнопками и хотя бы одна секция должны помещаться.
-const CARD_MIN_WIDTH = 220;
-const CARD_MIN_HEIGHT = 120;
-// Длинные списки инструментов и навыков сворачиваются до стольких строк и кнопки «ещё N».
-const VISIBLE_ROWS = 4;
+// Шестерёнка в одну линию: символ ⚙ в моноширинном шрифте слишком мелкий для кнопки.
+const GEAR_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M19.2 10.5L21.9 10.8L21.9 13.2L19.2 13.5L18.2 16.0L19.9 18.2L18.2 19.9L16.0 18.2L13.5 19.2L13.2 21.9L10.8 21.9L10.5 19.2L8.0 18.2L5.8 19.9L4.1 18.2L5.8 16.0L4.8 13.5L2.1 13.2L2.1 10.8L4.8 10.5L5.8 8.0L4.1 5.8L5.8 4.1L8.0 5.8L10.5 4.8L10.8 2.1L13.2 2.1L13.5 4.8L16.0 5.8L18.2 4.1L19.9 5.8L18.2 8.0z"/><circle cx="12" cy="12" r="3"/></svg>';
 const TOOL_GLYPHS = {
-  list_files: "▦", read_file: "▤", search_files: "⌕", write_file: "✎", edit_file: "✎", git: "⎇", search_docs: "❡",
+  list_files: "▦", read_file: "▤", search_files: "⌕", write_file: "✎", edit_file: "✎", git: "⎇", search_docs: "❡", generate_test_cases: "☑",
 };
 
 let agents = [];
@@ -44,9 +41,8 @@ let sessionId = null;
 let openedKey = "";
 let saveTimer = null;
 const view = { x: 40, y: 40, zoom: 1 };
-// Свёрнутые секции и раскрытые списки карточек: `${nodeId}:${section}`.
-const collapsed = new Set();
-const expanded = new Set();
+// Чьи настройки открыты в окне ⚙: сессия и узел холста.
+let settingsNode = null;
 // Ход команды: какой агент сейчас работает.
 let runView = { activeNode: null, label: "" };
 
@@ -73,12 +69,10 @@ export function initSessionCanvas() {
     applyView();
   });
   for (const [button, tab] of [[elements.tabCanvas, "canvas"], [elements.tabFiles, "files"]]) {
-    // Щелчок по активной вкладке сворачивает панель, по другой — открывает её.
+    // Правая панель видна всегда: щелчок по активной вкладке ничего не меняет.
     button.addEventListener("click", () => {
-      const hidden = elements.detail.classList.contains("canvas-collapsed");
-      const collapse = tab === activeTab && !hidden;
+      if (tab === activeTab) return;
       setTab(tab);
-      setCollapsed(collapse);
       render();
     });
   }
@@ -86,10 +80,9 @@ export function initSessionCanvas() {
     handle: elements.canvasResizer, container: elements.detail, variable: "--chat-width",
     storageKey: "chat-width", defaultWidth: 560, min: 320, reserve: 320,
   });
-  setCollapsed(loadCollapsed(), false);
   setTab(loadTab(), false);
   initPanAndZoom();
-  initPromptDialog();
+  initNodeDialog();
   void loadAgents();
 }
 
@@ -144,7 +137,7 @@ async function chooseSessionAgent(agentId) {
     if (owner.agent_id !== agentId) {
       if (state.streaming) throw new Error("дождитесь конца ответа");
       const updated = await sessionsApi.configure(owner.id, {
-        provider: owner.provider, model: owner.model || state.preferredModel, workspace: null, agent_id: agentId,
+        provider: owner.provider, model: owner.model || state.preferredModel, agent_id: agentId,
       });
       state.sessions = state.sessions.map((session) => session.id === updated.id ? updated : session);
     }
@@ -260,17 +253,6 @@ function displayName(node) {
   return node.name || agentOf(node)?.name || "Основной агент";
 }
 
-function setCollapsed(value, save = true) {
-  elements.detail.classList.toggle("canvas-collapsed", value);
-  syncTabs();
-  if (!save) return;
-  try {
-    localStorage.setItem("canvas-collapsed", value ? "1" : "0");
-  } catch {
-    // Без хранилища состояние холста не запомнится.
-  }
-}
-
 let activeTab = "canvas";
 
 function setTab(tab, save = true) {
@@ -285,11 +267,10 @@ function setTab(tab, save = true) {
 }
 
 function syncTabs() {
-  const shown = !elements.detail.classList.contains("canvas-collapsed");
   elements.canvasPane.hidden = activeTab !== "canvas";
   elements.filesPane.hidden = activeTab !== "files";
-  elements.tabCanvas.setAttribute("aria-pressed", String(shown && activeTab === "canvas"));
-  elements.tabFiles.setAttribute("aria-pressed", String(shown && activeTab === "files"));
+  elements.tabCanvas.setAttribute("aria-pressed", String(activeTab === "canvas"));
+  elements.tabFiles.setAttribute("aria-pressed", String(activeTab === "files"));
 }
 
 function loadTab() {
@@ -300,13 +281,6 @@ function loadTab() {
   }
 }
 
-function loadCollapsed() {
-  try {
-    return localStorage.getItem("canvas-collapsed") === "1";
-  } catch {
-    return false;
-  }
-}
 
 function agentOf(node) {
   const agentId = node.id === ENTRY ? ownerSession()?.agent_id : node.agent_id;
@@ -324,7 +298,7 @@ function addNode(agent) {
   const offset = graph.nodes.length % 5 * 24;
   graph.nodes.push({
     id: nodeId(agent.id, suffix), name: numberedName(agent.name, suffix), agent_id: agent.id,
-    x: Math.round((bounds.width / 2 - view.x) / view.zoom - 140 + offset),
+    x: Math.round((bounds.width / 2 - view.x) / view.zoom - 80 + offset),
     y: Math.round((bounds.height / 3 - view.y) / view.zoom + offset),
   });
   scheduleSave();
@@ -335,11 +309,12 @@ const nodeId = (agentId, suffix) => suffix === 1 ? agentId : `${agentId}-${suffi
 const numberedName = (name, suffix) => suffix === 1 ? name : `${name} ${suffix}`;
 
 function removeNode(node) {
-  if (!window.confirm(`Убрать «${node.name}» с холста вместе с его связями?`)) return;
+  if (!window.confirm(`Убрать «${node.name}» с холста вместе с его связями?`)) return false;
   graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
   graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
   scheduleSave();
   drawGraph();
+  return true;
 }
 
 function renameNode(node) {
@@ -404,15 +379,14 @@ function drawGraph() {
   highlightCurrent();
 }
 
+// Карточка — одна строка: имя целиком, метка «вход», индикатор работы и ⚙ с настройками агента.
 function card(node) {
-  const agent = agentOf(node);
   const item = document.createElement("article");
   item.className = "agent-card";
   item.classList.toggle("running", runView.activeNode === node.id);
   item.dataset.nodeId = node.id;
   item.style.left = `${node.x}px`;
   item.style.top = `${node.y}px`;
-  applySize(item, node);
 
   const header = document.createElement("header");
   const title = document.createElement("strong");
@@ -421,43 +395,25 @@ function card(node) {
   title.addEventListener("dblclick", () => renameNode(node));
   header.append(title);
   if (node.id === ENTRY) header.append(span("agent-card-entry", "вход"));
-  if (runView.activeNode === node.id) header.append(span("agent-card-badge", runView.label));
-  // Агента сессии с холста не убрать: через него в команду приходят сообщения пользователя.
-  if (node.id !== ENTRY) header.append(headerButton("×", `Убрать «${node.name}» с холста`, () => removeNode(node)));
+  if (runView.activeNode === node.id) {
+    // Что делает агент («работает», «ждёт подтверждения») — в подсказке к точке.
+    const badge = span("agent-card-badge", "");
+    badge.title = runView.label;
+    badge.setAttribute("aria-label", runView.label);
+    header.append(badge);
+  }
+  const settings = headerButton("", `Настройки «${displayName(node)}»`, () => openNodeSettings(node));
+  settings.classList.add("agent-card-settings");
+  settings.innerHTML = GEAR_ICON;
+  header.append(settings);
   makeDraggable(header, item, node);
-  // Щелчок по карточке открывает в чате разговор с этим агентом. Кнопки, порты, уголок и выделение
-  // текста промпта живут своей жизнью, а щелчок после перетаскивания — это конец перетаскивания.
+  // Щелчок по карточке открывает в чате разговор с этим агентом. Кнопки и порты живут своей жизнью,
+  // а щелчок после перетаскивания — это конец перетаскивания.
   item.addEventListener("click", (event) => {
-    if (item.dataset.dragged || event.target.closest("button, .agent-card-prompt")) return;
-    if (window.getSelection()?.toString()) return;
+    if (item.dataset.dragged || event.target.closest("button")) return;
     void openAgentChat(node.id);
   });
-  // Секции прокручиваются под заголовком, если карточку сделали ниже содержимого.
-  const content = document.createElement("div");
-  content.className = "agent-card-content";
-  item.append(header, content);
-
-  if (!agent) {
-    content.append(section(node, "agent", "Агент", null, [span("agent-card-missing", `Агент ${node.agent_id || "сессии"} не найден`)]));
-  } else {
-    const about = [span("agent-card-meta", agent.name)];
-    if (agent.description) about.push(paragraph(agent.description));
-    const prompt = document.createElement("div");
-    prompt.className = "agent-card-prompt";
-    prompt.textContent = agent.system_prompt;
-    const edit = headerButton("Изменить", "Изменить инструкции агента", () => openPromptEditor(agent));
-    edit.classList.add("agent-card-edit");
-    const skills = agent.skills === null ? null : agent.skills;
-    content.append(
-      section(node, "agent", "Агент", null, about),
-      section(node, "prompt", "Инструкции", null, [prompt, edit]),
-      section(node, "tools", "Инструменты", agent.tools.length,
-        rows(node, "tools", agent.tools.map((tool) => [TOOL_GLYPHS[tool] || "⚒", tool]), "нет инструментов")),
-      section(node, "skills", "Навыки", skills?.length ?? "все",
-        skills === null ? [row("◆", "все навыки каталога")] : rows(node, "skills", skills.map((skill) => ["◆", skill]), "без навыков")),
-    );
-  }
-
+  item.append(header);
   // Связь тянется с любой стороны карточки — с той, что ближе к получателю.
   for (const side of Object.keys(SIDES)) {
     const port = document.createElement("button");
@@ -468,114 +424,12 @@ function card(node) {
     makeConnector(port, node, side);
     item.append(port);
   }
-  const grip = document.createElement("button");
-  grip.type = "button";
-  grip.className = "agent-card-resize";
-  grip.title = "Потяните, чтобы изменить размер; двойной щелчок — по содержимому";
-  grip.setAttribute("aria-label", `Размер карточки «${node.name}»`);
-  makeResizable(grip, item, node);
-  item.append(grip);
-  return item;
-}
-
-function applySize(item, node) {
-  item.style.width = node.width ? `${node.width}px` : "";
-  item.style.height = node.height ? `${node.height}px` : "";
-  item.classList.toggle("sized", Boolean(node.height));
-}
-
-function makeResizable(grip, item, node) {
-  grip.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    grip.setPointerCapture(event.pointerId);
-    const start = { x: event.clientX, y: event.clientY, width: item.offsetWidth, height: item.offsetHeight };
-    // Высоту фиксируем, только если карточку тянули вниз или вверх: иначе она по-прежнему растёт с содержимым.
-    let vertical = Boolean(node.height);
-    const move = (moved) => {
-      const dy = (moved.clientY - start.y) / view.zoom;
-      vertical ||= Math.abs(dy) > 3;
-      node.width = Math.round(Math.max(CARD_MIN_WIDTH, start.width + (moved.clientX - start.x) / view.zoom));
-      if (vertical) node.height = Math.round(Math.max(CARD_MIN_HEIGHT, start.height + dy));
-      applySize(item, node);
-      drawEdges();
-    };
-    const stop = () => {
-      grip.removeEventListener("pointermove", move);
-      if (node.width !== start.width || node.height !== start.height) scheduleSave();
-    };
-    grip.addEventListener("pointermove", move);
-    grip.addEventListener("pointerup", stop, { once: true });
-    grip.addEventListener("pointercancel", stop, { once: true });
-  });
-  grip.addEventListener("dblclick", () => {
-    delete node.width;
-    delete node.height;
-    applySize(item, node);
-    drawEdges();
-    scheduleSave();
-  });
-}
-
-function section(node, key, title, count, content) {
-  const id = `${node.id}:${key}`;
-  const block = document.createElement("section");
-  block.className = "agent-card-section";
-  const toggle = document.createElement("button");
-  toggle.type = "button";
-  toggle.className = "agent-card-toggle";
-  toggle.setAttribute("aria-expanded", String(!collapsed.has(id)));
-  toggle.append(span("agent-card-chevron", collapsed.has(id) ? "▸" : "▾"), title);
-  if (count !== null) toggle.append(span("agent-card-count", String(count)));
-  toggle.addEventListener("click", () => {
-    if (collapsed.has(id)) collapsed.delete(id);
-    else collapsed.add(id);
-    drawGraph();
-  });
-  block.append(toggle);
-  if (!collapsed.has(id)) {
-    const body = document.createElement("div");
-    body.className = "agent-card-body";
-    body.append(...content);
-    block.append(body);
-  }
-  return block;
-}
-
-function rows(node, key, items, emptyText) {
-  if (!items.length) return [span("agent-card-empty", emptyText)];
-  const id = `${node.id}:${key}`;
-  const all = expanded.has(id) || items.length <= VISIBLE_ROWS;
-  const shown = all ? items : items.slice(0, VISIBLE_ROWS - 1);
-  const result = shown.map(([glyph, text]) => row(glyph, text));
-  if (!all) {
-    const more = headerButton(`Ещё ${items.length - shown.length}`, "Показать все", () => {
-      expanded.add(id);
-      drawGraph();
-    });
-    more.className = "agent-card-row agent-card-more";
-    result.push(more);
-  }
-  return result;
-}
-
-function row(glyph, text) {
-  const item = document.createElement("div");
-  item.className = "agent-card-row";
-  item.append(span("agent-card-glyph", glyph), text);
   return item;
 }
 
 function span(className, text) {
   const item = document.createElement("span");
   item.className = className;
-  item.textContent = text;
-  return item;
-}
-
-function paragraph(text) {
-  const item = document.createElement("p");
   item.textContent = text;
   return item;
 }
@@ -591,40 +445,108 @@ function headerButton(text, title, onClick) {
   return button;
 }
 
-function initPromptDialog() {
-  let editing = null;
-  elements.agentPromptForm.addEventListener("submit", async (event) => {
+// Настройки агента с холста: имя на холсте и инструкции; инструменты и навыки видны списком,
+// а меняются во вкладке «Кастомизация → Агенты». Отсюда же агента убирают с холста.
+function initNodeDialog() {
+  elements.nodeForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    const agent = agents.find((item) => item.id === elements.agentPromptForm.dataset.agentId);
-    const text = elements.agentPromptText.value.trim();
-    if (!agent || !text || editing) return;
-    editing = true;
-    elements.agentPromptSave.disabled = true;
-    try {
-      const saved = await agentsApi.savePrompt(agent.id, text);
-      agent.system_prompt = saved.system_prompt;
-      elements.agentPromptDialog.close();
-      drawGraph();
-    } catch (error) {
-      elements.agentPromptError.textContent = error.message;
-      elements.agentPromptError.hidden = false;
-    } finally {
-      editing = null;
-      elements.agentPromptSave.disabled = false;
-    }
+    void saveNodeSettings();
   });
-  for (const button of [elements.agentPromptCancel, elements.agentPromptClose]) {
-    button.addEventListener("click", () => elements.agentPromptDialog.close());
+  elements.nodeRemove.addEventListener("click", () => {
+    const node = editedNode();
+    if (node && removeNode(node)) elements.nodeDialog.close();
+  });
+  elements.nodeAgents.addEventListener("click", () => {
+    const agent = editedNode() && agentOf(editedNode());
+    elements.nodeDialog.close();
+    if (agent) void showAgents({ agentId: agent.id });
+  });
+  for (const button of [elements.nodeCancel, elements.nodeClose]) {
+    button.addEventListener("click", () => elements.nodeDialog.close());
+  }
+  elements.nodeDialog.addEventListener("close", () => { settingsNode = null; });
+}
+
+// Узел, чьи настройки открыты; если за это время открыли другую сессию, его уже нет.
+function editedNode() {
+  if (!settingsNode || settingsNode.sessionId !== sessionId) return null;
+  return graph?.nodes.find((node) => node.id === settingsNode.nodeId) ?? null;
+}
+
+function openNodeSettings(node) {
+  const agent = agentOf(node);
+  settingsNode = { sessionId, nodeId: node.id };
+  elements.nodeTitle.textContent = `Настройки · ${displayName(node)}`;
+  elements.nodeName.value = node.name;
+  // У карточки «вход» имя можно не задавать: тогда она называется по агенту сессии.
+  elements.nodeName.placeholder = node.id === ENTRY ? displayName(node) : "";
+  elements.nodeName.required = node.id !== ENTRY;
+  elements.nodeAbout.replaceChildren();
+  if (agent) {
+    const name = document.createElement("strong");
+    name.textContent = agent.name;
+    elements.nodeAbout.append(name, ` · ${agent.id}`);
+    if (agent.description) elements.nodeAbout.append(document.createElement("br"), agent.description);
+  } else {
+    elements.nodeAbout.append(span("agent-card-missing", `Агент ${node.agent_id || "сессии"} не найден`));
+  }
+  elements.nodePrompt.value = agent?.system_prompt ?? "";
+  elements.nodePromptField.hidden = !agent;
+  fillList(elements.nodeTools, (agent?.tools ?? []).map((tool) => [TOOL_GLYPHS[tool] || "⚒", tool]), "нет инструментов");
+  fillList(elements.nodeSkills, agent?.skills === null ? [["◆", "все навыки каталога"]]
+    : (agent?.skills ?? []).map((skill) => ["◆", skill]), "без навыков");
+  elements.nodeAgents.hidden = !agent;
+  // Агента сессии с холста не убрать: через него в команду приходят сообщения пользователя.
+  elements.nodeRemove.hidden = node.id === ENTRY;
+  elements.nodeError.hidden = true;
+  elements.nodeDialog.showModal();
+  elements.nodeName.focus();
+}
+
+function fillList(list, items, emptyText) {
+  list.replaceChildren(...(items.length ? items : [["", emptyText]]).map(([glyph, text]) => {
+    const item = document.createElement("li");
+    item.append(span("agent-node-glyph", glyph), text);
+    item.classList.toggle("empty", !items.length);
+    return item;
+  }));
+}
+
+async function saveNodeSettings() {
+  const node = editedNode();
+  if (!node) {
+    elements.nodeDialog.close();
+    return;
+  }
+  const agent = agentOf(node);
+  const name = elements.nodeName.value.trim();
+  const prompt = elements.nodePrompt.value.trim();
+  if (agent && !prompt) {
+    showNodeError("Инструкции агента не могут быть пустыми");
+    return;
+  }
+  elements.nodeSave.disabled = true;
+  try {
+    // Инструкции общие для всех сессий агента, имя — только на этом холсте.
+    if (agent && prompt !== agent.system_prompt) {
+      agent.system_prompt = (await agentsApi.savePrompt(agent.id, prompt)).system_prompt;
+    }
+    if (name !== node.name && (name || node.id === ENTRY)) {
+      node.name = name;
+      scheduleSave();
+    }
+    elements.nodeDialog.close();
+    drawGraph();
+  } catch (error) {
+    showNodeError(error.message);
+  } finally {
+    elements.nodeSave.disabled = false;
   }
 }
 
-function openPromptEditor(agent) {
-  elements.agentPromptForm.dataset.agentId = agent.id;
-  elements.agentPromptTitle.textContent = `Инструкции · ${agent.name}`;
-  elements.agentPromptText.value = agent.system_prompt;
-  elements.agentPromptError.hidden = true;
-  elements.agentPromptDialog.showModal();
-  elements.agentPromptText.focus();
+function showNodeError(message) {
+  elements.nodeError.textContent = message;
+  elements.nodeError.hidden = false;
 }
 
 function makeDraggable(handle, item, node) {

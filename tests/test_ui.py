@@ -1,5 +1,7 @@
 """Проверка UI подтверждает, что backend отдаёт страницу и её локальные ресурсы."""
 
+import re
+
 from fastapi.testclient import TestClient
 
 from local_agent.api.app import create_app
@@ -27,6 +29,10 @@ def test_ui_files_are_served(tmp_path) -> None:
         sidebar_script = client.get("/ui/js/sidebar.js")
         memory_script = client.get("/ui/js/memory.js")
         tools_script = client.get("/ui/js/tools-dialog.js")
+        app_script = client.get("/ui/js/app.js")
+        canvas_script = client.get("/ui/js/session-canvas.js")
+        composer_script = client.get("/ui/js/composer.js")
+        projects_script = client.get("/ui/js/projects.js")
 
     assert page.status_code == 200
     assert page.headers["cache-control"] == "no-cache"
@@ -40,7 +46,6 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert 'class="topbar"' not in page.text
     assert 'class="app-header"' in page.text
     assert 'class="header-mascot"' in page.text
-    assert 'class="header-folder"' not in page.text
     assert 'id="header-tokens"' not in page.text
     assert 'id="usage-text"' in page.text
     assert 'id="usage-speed"' in page.text
@@ -50,7 +55,6 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert 'id="title-form"' not in page.text
     assert 'class="header-edit"' not in page.text
     assert 'class="session-context"' not in page.text
-    assert page.text.index('id="show-customization"') < page.text.index('id="new-session"')
     assert 'id="customization-panel"' in page.text
     assert 'id="tools-panel"' in page.text
     assert 'id="tools-dialog"' not in page.text
@@ -110,3 +114,29 @@ def test_ui_files_are_served(tmp_path) -> None:
     assert "имя — Алексей" in memory_script.text
     assert "отвечать по-русски" in memory_script.text
     assert "разрабатывает Meepo Agent" in memory_script.text
+
+    # Боковой панели нет: вся навигация в шапке, сессии выезжают отдельной панелью.
+    for removed in ('class="sidebar"', 'id="sidebar-resizer"', 'id="session-workspace"', 'id="workspace-label"'):
+        assert removed not in page.text
+    header = page.text[page.text.index('<header class="app-header">'):page.text.index("</header>")]
+    # Рядом с названием — рабочая папка сессии (папка проекта); щелчок открывает настройки проекта.
+    order = ["show-sessions", "edit-title", "session-folder", "new-session", "tab-canvas", "tab-files", "show-customization", "show-settings"]
+    positions = [header.index(f'id="{item}"') for item in order]
+    assert positions == sorted(positions)
+    assert 'aria-controls="sessions-drawer"' in header and 'aria-expanded="false"' in header
+    drawer = page.text[page.text.index('id="sessions-drawer"'):page.text.index("</aside>")]
+    assert 'id="new-project"' in drawer and 'id="session-list"' in drawer
+    for removed in (".sidebar", ".workspace-button", ".workspace-field", "canvas-collapsed"):
+        assert removed not in styles.text
+    assert ".sessions-drawer" in styles.text and "--header-height: 36px" in styles.text
+    assert "@media (max-width: 900px)" in styles.text
+    # Цвета задаются только токенами темы.
+    assert not re.findall(r"(?<![\w-])#[0-9a-fA-F]{3,8}(?=[;\s,)])", styles.text)
+    assert 'storageKey: "sidebar-width"' not in app_script.text
+    assert "Без проекта" not in sidebar_script.text and "DRAFTS_PROJECT_ID" in sidebar_script.text
+    assert "canvas-collapsed" not in canvas_script.text and "expanded-cards" not in canvas_script.text
+    # Карточка агента — одна строка, настройки открываются окном по ⚙.
+    assert 'id="agent-node-dialog"' in page.text and 'id="agent-prompt-dialog"' not in page.text
+    assert "openNodeSettings" in canvas_script.text and "agent-card-resize" not in styles.text
+    assert "chooseWorkspace" not in composer_script.text and "pickFolder" not in composer_script.text
+    assert "перейдут в «Черновики»" in projects_script.text and "Без проекта" not in projects_script.text

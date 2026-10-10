@@ -40,10 +40,13 @@ class OpenAICompatibleProvider:
         self, model: str, messages: list[ChatMessage],
         tools: list[dict[str, object]] | None = None,
         response_format: dict[str, object] | None = None,
+        options: dict[str, object] | None = None,
     ) -> ChatResult:
         payload = self._payload(model, messages, tools, stream=False)
         if response_format:
             payload["response_format"] = response_format
+        # Дополнительные поля запроса OpenAI API: temperature, reasoning_effort и т. п.
+        payload.update(options or {})
         data = await self._request("POST", "chat/completions", json=payload)
         try:
             message = data["choices"][0]["message"]

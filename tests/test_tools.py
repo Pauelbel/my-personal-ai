@@ -34,11 +34,13 @@ class ToolCallingProvider:
 def test_session_tools_persist(tmp_path):
     settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
     with TestClient(create_app(settings)) as client:
+        # Обе сессии без проекта попадают в «Черновики»: у них нет инструментов, и переключатель общий.
         session = client.post("/api/sessions", json={}).json()
         other = client.post("/api/sessions", json={}).json()
         tools = client.get(f"/api/sessions/{session['id']}/tools").json()
         assert [tool["id"] for tool in tools] == [
-            "list_files", "read_file", "search_files", "write_file", "edit_file", "git", "search_docs"
+            "list_files", "read_file", "search_files", "write_file", "edit_file", "git", "search_docs",
+            "generate_test_cases",
         ]
         assert not any(tool["enabled"] for tool in tools)
         updated = client.put(
@@ -52,9 +54,9 @@ def test_session_tools_persist(tmp_path):
         ).status_code == 404
     with TestClient(create_app(settings)) as client:
         tools = client.get(f"/api/sessions/{session['id']}/tools").json()
-        assert [tool["enabled"] for tool in tools] == [False, True, False, False, False, False, False]
+        assert [tool["enabled"] for tool in tools] == [False, True, False, False, False, False, False, False]
         other_tools = client.get(f"/api/sessions/{other['id']}/tools").json()
-        assert not any(tool["enabled"] for tool in other_tools)
+        assert [tool["id"] for tool in other_tools if tool["enabled"]] == ["read_file"]
 
 
 def test_file_tools_stay_inside_workspace(tmp_path):
@@ -82,9 +84,10 @@ def test_model_only_receives_enabled_tools_and_result(tmp_path):
     settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
     provider = ToolCallingProvider()
     with TestClient(create_app(settings, llm_provider=provider)) as client:
+        project = client.post("/api/projects", json={"name": "Проект", "workspace": str(workspace)}).json()
         session = client.post(
             "/api/sessions",
-            json={"model": "test-model", "workspace": str(workspace)},
+            json={"model": "test-model", "project_id": project["id"]},
         ).json()
         # Новый проект начинает с инструментов чтения; выключаем их, чтобы проверить путь с нуля.
         defaults = [tool["id"] for tool in client.get(f"/api/sessions/{session['id']}/tools").json() if tool["enabled"]]
@@ -100,11 +103,11 @@ def test_model_only_receives_enabled_tools_and_result(tmp_path):
         assert second.json()["content"] == "Файл прочитан"
         assert provider.calls[1][1][0]["function"]["name"] == "read_file"
         assert provider.calls[2][0][-1].content == "Содержимое"
-        no_workspace = client.post(
+        draft = client.post(
             "/api/sessions", json={"model": "test-model"}
         ).json()
         assert client.post(
-            f"/api/sessions/{no_workspace['id']}/turns", json={"content": "Прочитай файл"}
+            f"/api/sessions/{draft['id']}/turns", json={"content": "Прочитай файл"}
         ).status_code == 200
         assert provider.calls[3][1] is None
         client.put(f"/api/sessions/{session['id']}/tools/read_file", json={"enabled": False})

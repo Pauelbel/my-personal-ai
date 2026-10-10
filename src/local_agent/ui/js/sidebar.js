@@ -1,4 +1,6 @@
-// Боковая панель: проекты со своими сессиями, затем сессии без проекта.
+// Список в выезжающей панели сессий: проекты как папки, под каждым — его сессии.
+// Сессия всегда в проекте; «Черновики» стоят первыми.
+import { DRAFTS_PROJECT_ID } from "./state.js";
 
 // Контурная папка в одну линию — как остальные значки интерфейса.
 const FOLDER_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" '
@@ -7,16 +9,18 @@ const FOLDER_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none"
 export function renderSidebar(container, options) {
   const { projects, sessions, selectedId, collapsed } = options;
   container.replaceChildren();
-  const known = new Set(projects.map((project) => project.id));
-  const groups = projects.map((project) => ({
+  const ordered = [
+    ...projects.filter((project) => project.id === DRAFTS_PROJECT_ID),
+    ...projects.filter((project) => project.id !== DRAFTS_PROJECT_ID),
+  ];
+  const groups = ordered.map((project) => ({
     project,
     sessions: sessions.filter((session) => session.project_id === project.id),
   }));
-  const loose = sessions.filter((session) => !known.has(session.project_id));
 
-  if (groups.length === 0 && loose.length === 0) {
+  if (groups.length === 0) {
     const empty = document.createElement("p");
-    empty.className = "sidebar-empty";
+    empty.className = "sessions-empty";
     empty.textContent = options.emptyText;
     container.append(empty);
     return;
@@ -28,22 +32,13 @@ export function renderSidebar(container, options) {
     const expanded = !collapsed.has(group.project.id) || hasSelected;
     container.append(projectRow(group, expanded, options));
     if (!expanded) continue;
-    for (const session of group.sessions) container.append(sessionRow(session, options, true));
+    for (const session of group.sessions) container.append(sessionRow(session, options));
     if (group.sessions.length === 0) {
       const hint = document.createElement("p");
       hint.className = "project-empty";
       hint.textContent = "Сессий нет — нажмите ＋";
       container.append(hint);
     }
-  }
-  if (loose.length > 0) {
-    if (groups.length > 0) {
-      const label = document.createElement("div");
-      label.className = "sidebar-group-label";
-      label.textContent = "Без проекта";
-      container.append(label);
-    }
-    for (const session of loose) container.append(sessionRow(session, options, false));
   }
 }
 
@@ -77,10 +72,9 @@ function projectRow({ project }, expanded, options) {
   return row;
 }
 
-function sessionRow(session, options, inProject) {
+function sessionRow(session, options) {
   const row = document.createElement("div");
   row.className = "session-row";
-  row.classList.toggle("in-project", inProject);
 
   const button = document.createElement("button");
   button.type = "button";

@@ -47,7 +47,7 @@ export function renderFiles() {
   const tree = elements.filesTree;
   tree.replaceChildren();
   if (!projectId) {
-    tree.append(note("Сессия без проекта: файлов нет. Выберите папку под полем ввода."));
+    tree.append(note("Проект сессии не найден: файлов нет."));
     return;
   }
   const root = children.get("");

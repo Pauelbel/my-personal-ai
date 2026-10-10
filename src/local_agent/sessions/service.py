@@ -1,7 +1,7 @@
 """Сервис создаёт сессии и предоставляет их API без знания формата хранения.
 
-Сессия проекта берёт рабочую папку и инструменты из проекта: сервис всегда отдаёт её
-уже с этими значениями, поэтому runtime и инструменты о проектах не знают.
+Каждая сессия принадлежит проекту и берёт из него рабочую папку и инструменты: сервис всегда
+отдаёт её уже с этими значениями, поэтому runtime и инструменты о проектах не знают.
 """
 
 from collections.abc import Callable, Iterable
@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from local_agent.projects.models import Project
+from local_agent.projects.models import DRAFTS_PROJECT_ID, Project
 from local_agent.sessions.models import Session
 from local_agent.sessions.repository import SessionRepository
 from local_agent.storage.json.projects import JsonProjectRepository
@@ -48,14 +48,12 @@ class SessionService:
         agent_id: str,
         model: str,
         provider: str,
-        workspace: str | None,
         project_id: str | None = None,
         parent_id: str | None = None,
         node_id: str | None = None,
         hidden: bool = False,
     ) -> Session:
-        # У сессии проекта своей папки нет: её задаёт проект.
-        workspace = None if project_id else self._validate_workspace(workspace)
+        # Своей папки у сессии нет: её задаёт проект. Без проекта сессия попадает в «Черновики».
         now = datetime.now(UTC)
         session = Session(
             id=uuid4().hex,
@@ -65,8 +63,7 @@ class SessionService:
             agent_id=agent_id,
             model=model,
             provider=provider,
-            workspace=workspace,
-            project_id=project_id,
+            project_id=project_id or DRAFTS_PROJECT_ID,
             parent_id=parent_id,
             node_id=node_id,
             hidden=hidden,
@@ -82,7 +79,6 @@ class SessionService:
         *,
         provider: str,
         model: str,
-        workspace: str | None,
         agent_id: str | None = None,
     ) -> Session | None:
         session = self._repository.get(session_id)
@@ -94,9 +90,6 @@ class SessionService:
             "model": model,
             "updated_at": datetime.now(UTC),
         }
-        # Папку сессии проекта меняют в настройках проекта, а не в сессии.
-        if project is None:
-            updates["workspace"] = self._validate_workspace(workspace)
         if (provider, model) != (session.provider, session.model):
             updates.update(context_tokens=None, context_window=None, tokens_per_second=None)
         if agent_id is not None:
@@ -109,10 +102,6 @@ class SessionService:
                 "updated_at": datetime.now(UTC),
             })
         return self._effective(updated)
-
-    @staticmethod
-    def _validate_workspace(workspace: str | None) -> str | None:
-        return validate_workspace(workspace) if workspace else None
 
     def set_tool_enabled(self, session_id: str, tool_id: str, enabled: bool) -> Session | None:
         session = self.get(session_id)
@@ -129,9 +118,8 @@ class SessionService:
             return self.get(session_id)
         return self._repository.patch(session_id, {"enabled_tools": sorted(tools)})
 
-    def assign_project(self, session_id: str, project_id: str | None) -> Session | None:
-        """Своя папка сессии сбрасывается в обе стороны: в проекте её задаёт проект, а без
-        проекта доступ к файлам нужно выдать заново, а не унаследовать молча."""
+    def assign_project(self, session_id: str, project_id: str) -> Session | None:
+        """Переносит сессию в проект; устаревшая своя папка сессии при этом стирается."""
         return self._effective(
             self._repository.patch(session_id, {"project_id": project_id, "workspace": None})
         )

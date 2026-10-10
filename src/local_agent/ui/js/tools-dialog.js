@@ -8,7 +8,7 @@ function renderToolDialog() {
   const project = selectedProject();
   elements.toolsIntro.textContent = project
     ? `Настройка действует во всех сессиях проекта «${project.name}». Инструменты работают только внутри папки проекта; запись и правка файлов каждый раз подтверждаются.`
-    : "Сессия без проекта: файлов у неё нет, поэтому инструменты модели не предлагаются. Выберите папку под полем ввода — сессия перейдёт в проект этой папки.";
+    : "Проект сессии не найден, поэтому инструменты модели не предлагаются.";
   elements.toolsList.replaceChildren();
   for (const tool of availableTools) {
     const label = document.createElement("label");
@@ -56,7 +56,7 @@ export async function showTools() {
   renderToolDialog();
   render();
   if (!state.selectedId) {
-    elements.toolsIntro.textContent = "Выберите сессию проекта в боковой панели, чтобы настроить инструменты. Память, агенты и навыки — в соседних вкладках.";
+    elements.toolsIntro.textContent = "Откройте сессию проекта (☰ Сессии), чтобы настроить инструменты. Память, агенты и навыки — в соседних вкладках.";
     return;
   }
   const sessionId = state.selectedId;

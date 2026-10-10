@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from local_agent.agent.models import Agent
+from local_agent.llm.base import LLMProvider
 from local_agent.llm.models import ToolCall
 from local_agent.sessions.models import Session
 from local_agent.tools.base import Tool, ToolResult
@@ -32,8 +33,12 @@ class ToolExecutor:
         session: Session,
         request_id: str,
         builtins: Sequence[Tool] = (),
+        llm: tuple[LLMProvider, str] | None = None,
     ) -> "ToolExecutor":
         tools = cls.allowed_tools(registry, agent, session)
+        if llm is not None:
+            # Инструментам, которые сами обращаются к модели, достаётся провайдер и модель этого хода.
+            tools = [tool.bind(*llm) if hasattr(tool, "bind") else tool for tool in tools]
         return cls(tools, Path(session.workspace) if session.workspace else None, request_id, builtins)
 
     @staticmethod

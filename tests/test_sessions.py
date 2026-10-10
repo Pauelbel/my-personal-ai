@@ -7,18 +7,22 @@ from local_agent.config.settings import Settings
 
 
 def test_session_persists_after_app_restart(tmp_path) -> None:
-    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", projects_path=tmp_path / "projects", _env_file=None)
+    (tmp_path / "code").mkdir()
 
     with TestClient(create_app(settings)) as client:
+        project = client.post("/api/projects", json={"name": "Код", "workspace": str(tmp_path / "code")}).json()
         created = client.post(
             "/api/sessions",
-            json={"title": "Первый проект", "workspace": str(tmp_path)},
+            json={"title": "Первый проект", "project_id": project["id"]},
         )
         assert created.status_code == 201
         session = created.json()
         assert session["title"] == "Первый проект"
         assert session["agent_id"] == "default"
-        assert session["workspace"] == str(tmp_path.resolve())
+        assert session["project_id"] == project["id"]
+        # Папка у сессии одна — папка проекта; своей папки сессия в API не отдаёт.
+        assert "workspace" not in session
 
     with TestClient(create_app(settings)) as client:
         fetched = client.get(f"/api/sessions/{session['id']}")
@@ -30,6 +34,31 @@ def test_session_persists_after_app_restart(tmp_path) -> None:
     assert listed.status_code == 200
     assert listed.json() == [session]
     assert missing.status_code == 404
+
+
+def test_session_without_project_goes_to_drafts(tmp_path) -> None:
+    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", projects_path=tmp_path / "projects", drafts_path=tmp_path / "drafts", _env_file=None)
+
+    with TestClient(create_app(settings)) as client:
+        session = client.post("/api/sessions", json={}).json()
+        # Старое поле папки в запросе больше ничего не значит: сессия всё равно попадает в «Черновики».
+        with_folder = client.post("/api/sessions", json={"workspace": str(tmp_path)}).json()
+        unknown = client.post("/api/sessions", json={"project_id": "nope"})
+        projects = client.get("/api/projects").json()
+        tools = client.get(f"/api/sessions/{session['id']}/tools").json()
+
+    assert session["project_id"] == with_folder["project_id"] == "drafts"
+    assert unknown.status_code == 400
+    [drafts] = projects
+    assert drafts["id"] == "drafts" and drafts["name"] == "Черновики"
+    assert drafts["workspace"] == str((tmp_path / "drafts").resolve())
+    assert (tmp_path / "drafts").is_dir()
+    # В черновиках агент не читает файлы, пока пользователь сам не включит инструменты.
+    assert drafts["enabled_tools"] == []
+    assert not any(tool["enabled"] for tool in tools)
+
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/projects").json() == projects
 
 
 def test_session_can_be_renamed(tmp_path) -> None:

@@ -24,6 +24,11 @@ def settings(tmp_path):
     )
 
 
+def project_session(client, workspace):
+    project = client.post("/api/projects", json={"name": "Проект", "workspace": str(workspace)}).json()
+    return client.post("/api/sessions", json={"model": "test", "project_id": project["id"]}).json()
+
+
 class WorkflowProvider:
     def __init__(self):
         self.step = 0
@@ -54,9 +59,7 @@ def test_skill_write_approval_and_new_dialog(tmp_path, approved):
     workspace.mkdir()
     provider = WorkflowProvider()
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={
-            "model": "test", "workspace": str(workspace),
-        }).json()
+        session = project_session(client, workspace)
         session_id = session["id"]
         assert client.put(f"/api/sessions/{session_id}/tools/write_file", json={
             "enabled": True,
@@ -157,9 +160,7 @@ def test_provider_failure_and_tool_error_allow_retry(tmp_path):
     provider = RecoveryProvider()
     provider.mode = "unavailable"
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={
-            "model": "test", "workspace": str(workspace),
-        }).json()
+        session = project_session(client, workspace)
         url = f"/api/sessions/{session['id']}"
         failed = client.post(url + "/turns", json={"content": "Прочитай файл"})
         assert failed.status_code == 503

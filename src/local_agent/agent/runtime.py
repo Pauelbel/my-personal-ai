@@ -20,6 +20,7 @@ from local_agent.memory.models import Message
 from local_agent.memory.service import MemoryService, MemoryServiceError
 from local_agent.sessions.service import SessionService
 from local_agent.tools.base import Tool, ToolResult
+from local_agent.tools.messaging import SendMessageTool
 from local_agent.tools.registry import ToolRegistry
 from local_agent.tools.skills import UseSkillTool
 
@@ -155,6 +156,7 @@ class AgentRuntime:
         skills = skill_tool.skills()
         executor = ToolExecutor.for_session(
             self._tools, agent, session, request_id, builtins=[*([skill_tool] if skills else []), *extra_tools],
+            llm=(provider, model),
         )
         definitions = executor.definitions()
         loaded_window = await context_length(provider, model)
@@ -172,6 +174,7 @@ class AgentRuntime:
             build_system_prompt(
                 agent.system_prompt, memory_context, session.summary, today=date.today(), skills=skills,
                 project_context=project_context,
+                team=next((tool.recipients for tool in extra_tools if isinstance(tool, SendMessageTool)), None),
             ),
             history,
             max_messages=self._limits.max_context_messages,

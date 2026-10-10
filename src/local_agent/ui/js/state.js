@@ -2,11 +2,13 @@
 const $ = (selector) => document.querySelector(selector);
 const initialView = loadView();
 
+// Системный проект «Черновики»: его нельзя удалить, в панели сессий он стоит первым.
+export const DRAFTS_PROJECT_ID = "drafts";
+
 export const elements = {
   list: $("#session-list"),
-  sidebar: $(".sidebar"),
-  sidebarResizer: $("#sidebar-resizer"),
-  appShell: $(".app-shell"),
+  sessionsButton: $("#show-sessions"),
+  sessionsDrawer: $("#sessions-drawer"),
   newButton: $("#new-session"),
   toolsButton: $("#show-tools"),
   customizationButton: $("#show-customization"),
@@ -84,12 +86,13 @@ export const elements = {
   emptyState: $("#empty-state"),
   detail: $("#session-detail"),
   editTitle: $("#edit-title"),
+  titleText: $("#title-text"),
   titleInput: $("#title-input"),
+  sessionFolder: $("#session-folder"),
+  sessionFolderPath: $("#session-folder-path"),
   agent: $("#session-agent"),
   provider: $("#session-provider"),
   model: $("#session-model"),
-  workspace: $("#session-workspace"),
-  workspaceLabel: $("#workspace-label"),
   newProjectButton: $("#new-project"),
   projectDialog: $("#project-dialog"),
   projectForm: $("#project-form"),
@@ -135,14 +138,21 @@ export const elements = {
   zoomIn: $("#zoom-in"),
   zoomOut: $("#zoom-out"),
   zoomReset: $("#zoom-reset"),
-  agentPromptDialog: $("#agent-prompt-dialog"),
-  agentPromptForm: $("#agent-prompt-form"),
-  agentPromptTitle: $("#agent-prompt-title"),
-  agentPromptText: $("#agent-prompt-text"),
-  agentPromptError: $("#agent-prompt-error"),
-  agentPromptSave: $("#agent-prompt-save"),
-  agentPromptCancel: $("#agent-prompt-cancel"),
-  agentPromptClose: $("#agent-prompt-close"),
+  nodeDialog: $("#agent-node-dialog"),
+  nodeForm: $("#agent-node-form"),
+  nodeTitle: $("#agent-node-title"),
+  nodeName: $("#agent-node-name"),
+  nodeAbout: $("#agent-node-about"),
+  nodePromptField: $("#agent-node-prompt-field"),
+  nodePrompt: $("#agent-node-prompt"),
+  nodeTools: $("#agent-node-tools"),
+  nodeSkills: $("#agent-node-skills"),
+  nodeError: $("#agent-node-error"),
+  nodeRemove: $("#agent-node-remove"),
+  nodeAgents: $("#agent-node-agents"),
+  nodeCancel: $("#agent-node-cancel"),
+  nodeClose: $("#agent-node-close"),
+  nodeSave: $("#agent-node-save"),
   turnRecovery: $("#turn-recovery"),
   turnRecoveryText: $("#turn-recovery-text"),
   retryTurn: $("#retry-turn"),
@@ -155,7 +165,7 @@ export const state = {
   sessions: [],
   turnFailures: new Map(),
   projects: [],
-  // Свёрнутые в сайдбаре проекты; запоминаются в этом браузере.
+  // Свёрнутые в панели сессий проекты; запоминаются в этом браузере.
   collapsedProjects: loadCollapsed(),
   messages: [],
   messagesSessionId: null,
@@ -167,6 +177,8 @@ export const state = {
   showingPrompt: initialView === "prompt",
   showingSkills: initialView === "skills",
   editingTitle: false,
+  // Выезжающая панель сессий; выбор и создание сессии её закрывают.
+  sessionsOpen: false,
   actionsDisabled: false,
   // Идёт ли сейчас ответ модели: тогда кнопка отправки превращается в «Стоп».
   streaming: false,

@@ -1,4 +1,7 @@
-"""Сервис проектов создаёт и меняет проекты и связывает с ними сессии."""
+"""Сервис проектов создаёт и меняет проекты и связывает с ними сессии.
+
+Каждая сессия живёт в проекте; системный проект «Черновики» принимает сессии, у которых своего нет.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from local_agent.projects.models import Project
+from local_agent.projects.models import DRAFTS_PROJECT_ID, DRAFTS_PROJECT_NAME, Project
 from local_agent.sessions.service import InvalidWorkspaceError, SessionService, validate_workspace
 from local_agent.storage.json.projects import JsonProjectRepository
 
@@ -44,19 +47,18 @@ class ProjectService:
             enabled_tools=list(DEFAULT_PROJECT_TOOLS) if enabled_tools is None else enabled_tools,
         ))
 
-    def for_workspace(self, workspace: str, *, agent_id: str, provider: str, model: str) -> Project:
-        """Проект этой папки; если его нет — создаётся с именем папки."""
-        try:
-            resolved = validate_workspace(workspace)
-        except InvalidWorkspaceError as exc:
-            raise ProjectError(str(exc)) from exc
-        for project in self._repository.list():
-            if project.workspace == resolved:
-                return project
-        return self.create(
-            name=Path(resolved).name or resolved, workspace=resolved,
-            agent_id=agent_id, provider=provider, model=model,
-        )
+    def ensure_drafts(self, folder: Path) -> Project:
+        """Создаёт «Черновики», если их ещё нет. Существующий проект не трогается: имя и папку
+        пользователь мог поменять в настройках проекта."""
+        if project := self._repository.get(DRAFTS_PROJECT_ID):
+            return project
+        folder.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(UTC)
+        # Инструментов нет: в черновиках агент не читает файлы, пока пользователь сам их не включит.
+        return self._repository.save(Project(
+            id=DRAFTS_PROJECT_ID, name=DRAFTS_PROJECT_NAME, workspace=str(folder.resolve()),
+            created_at=now, updated_at=now, enabled_tools=[],
+        ))
 
     def update(self, project_id: str, *, name: str, workspace: str) -> Project | None:
         if self._repository.get(project_id) is None:
@@ -68,16 +70,37 @@ class ProjectService:
         })
 
     def delete(self, project_id: str) -> bool:
-        """Сессии проекта не удаляются: они остаются в разделе «Без проекта», но без доступа к папке."""
+        """Сессии проекта не удаляются, а переходят в «Черновики» с их папкой и инструментами."""
+        if project_id == DRAFTS_PROJECT_ID:
+            raise ProjectError(f"Проект «{DRAFTS_PROJECT_NAME}» нельзя удалить")
         if self._repository.get(project_id) is None:
             return False
         for session in self._sessions.list():
             if session.project_id == project_id:
-                self._sessions.assign_project(session.id, None)
+                self._sessions.assign_project(session.id, DRAFTS_PROJECT_ID)
         return self._repository.delete(project_id)
 
     def adopt_sessions(self) -> None:
-        """Сессии со своей рабочей папкой (созданные до проектов) переходят в проект этой папки."""
+        """Миграция при старте: у каждой сессии должен быть существующий проект.
+
+        Сессия со своей папкой (созданная до проектов) переходит в проект этой папки, остальные —
+        в «Черновики». Скрытая сессия агента с холста идёт за своей сессией-хозяйкой.
+        """
+        self._adopt_folders()
+        known = {project.id for project in self._repository.list()}
+        sessions = self._sessions.list()
+        project_of = {session.id: session.project_id for session in sessions}
+        # Сначала обычные сессии, затем скрытые: им нужен уже известный проект хозяйки.
+        for session in sorted(sessions, key=lambda item: item.parent_id is not None):
+            if session.project_id in known:
+                continue
+            parent_project = project_of.get(session.parent_id)
+            project_id = parent_project if parent_project in known else DRAFTS_PROJECT_ID
+            self._sessions.assign_project(session.id, project_id)
+            project_of[session.id] = project_id
+
+    def _adopt_folders(self) -> None:
+        """Сессии со своей рабочей папкой переходят в проект этой папки; если его нет — он создаётся."""
         by_folder = {project.workspace: project for project in self._repository.list()}
         for session in self._sessions.list():
             if session.project_id or not session.workspace:
