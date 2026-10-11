@@ -1,6 +1,7 @@
 """Модель сессии хранит настройки разговора независимо от HTTP и формата хранения."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +19,7 @@ class Session(BaseModel):
     # Устарело: своя папка была у сессий до проектов, поле читается только из старых JSON для миграции.
     # Сервис подставляет сюда папку проекта для runtime и инструментов; не сохраняется и не уходит в API.
     workspace: str | None = Field(default=None, exclude=True)
-    # Каждая сессия принадлежит проекту; None бывает только у старых записей до миграции при старте.
+    # Разговор принадлежит проекту; None — у служебной сессии вики и у старых записей до миграции при старте.
     project_id: str | None = None
     # Последний запрос: входные токены, размер окна модели и скорость генерации (токенов в секунду).
     context_tokens: int | None = None
@@ -36,3 +37,5 @@ class Session(BaseModel):
     task: dict | None = None
     # Дочерние сессии не показываются в общем списке.
     hidden: bool = False
+    # chat — разговор в проекте; wiki — служебная сессия вики (lint): без проекта, видна только на вкладке «Вики».
+    kind: Literal["chat", "wiki"] = "chat"

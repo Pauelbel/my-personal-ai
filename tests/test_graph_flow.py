@@ -1,7 +1,7 @@
 """Ход на графе: компактный реестр, activate, interrupt вместо подтверждения, resume после перезапуска."""
 
 from fastapi.testclient import TestClient
-from tests.fakes import ScriptedProvider, call, events_of
+from tests.fakes import ScriptedProvider, call, events_of, post_session
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
@@ -11,14 +11,14 @@ def settings(tmp_path) -> Settings:
     return Settings(
         agents_path=tmp_path / "agents", skills_path=tmp_path / "skills", sessions_path=tmp_path / "sessions",
         projects_path=tmp_path / "projects", conversations_path=tmp_path / "conversations",
-        memory_path=tmp_path / "memory", drafts_path=tmp_path / "drafts", memory_auto_update_messages=0,
+        memory_path=tmp_path / "memory", memory_auto_update_messages=0,
         mcp_enabled=False, _env_file=None,
     )
 
 
 def project_session(client, workspace) -> dict:
     project = client.post("/api/projects", json={"name": "Проект", "workspace": str(workspace)}).json()
-    return client.post("/api/sessions", json={"model": "test", "project_id": project["id"]}).json()
+    return post_session(client, {"model": "test", "project_id": project["id"]}).json()
 
 
 def workspace_with_note(tmp_path):
@@ -35,7 +35,7 @@ def test_registry_is_compact_and_activate_binds_schemas(tmp_path):
         session = project_session(client, workspace)
         events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Что в git?"}))
         project = client.get("/api/projects").json()
-        other = client.post("/api/sessions", json={"model": "test", "project_id": session["project_id"]}).json()
+        other = post_session(client, {"model": "test", "project_id": session["project_id"]}).json()
         client.post(f"/api/sessions/{other['id']}/turns/stream", json={"content": "Снова"})
 
     assert events[-1]["type"] == "done"
@@ -52,7 +52,7 @@ def test_registry_is_compact_and_activate_binds_schemas(tmp_path):
 def test_answer_keeps_turn_summary(tmp_path):
     provider = ScriptedProvider(call("activate", names=["git"]), "Готово")
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
         events = events_of(client.post(url + "/turns/stream", json={"content": "Подключи git"}))
         history = client.get(url + "/messages").json()
@@ -83,7 +83,7 @@ def test_read_only_project_hides_tools_that_change_files(tmp_path):
 def test_retry_does_not_duplicate_the_unanswered_message(tmp_path):
     provider = ScriptedProvider("", "", "", "Ответ")
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
         failed = events_of(client.post(url + "/turns/stream", json={"content": "Привет"}))
         retried = events_of(client.post(url + "/turns/stream", json={"content": "Привет", "retry": True}))
@@ -141,7 +141,7 @@ def test_message_while_waiting_is_a_reply_to_the_card(tmp_path):
 def test_missing_capability_is_reported_not_invented(tmp_path):
     provider = ScriptedProvider(call("search_jira", query="баги"), "Инструмента для Jira нет, могу предложить создать")
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Найди баги"}))
 
     [result] = [event["message"] for event in events if event["type"] == "tool_result"]
@@ -149,21 +149,23 @@ def test_missing_capability_is_reported_not_invented(tmp_path):
 
 
 def test_incomplete_call_is_returned_to_model_before_the_card(tmp_path):
-    provider = ScriptedProvider(call("wiki_write", content="# Заметка"), call("wiki_write", path="ai/note.md", content="# Заметка"))
+    edit = {"kind": "fix", "notes": ["заметка.md"], "problem": "Опечатка", "change": "Исправить"}
+    provider = ScriptedProvider(call("wiki_propose_edits"), call("wiki_propose_edits", edits=[edit]))
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
-        events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Заметку"}))
+        client.app.state.wiki_service.write("заметка.md", "# Заметка\n\nТекст")
+        session = post_session(client, {"model": "test"}).json()
+        events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "/lint"}))
 
     [result] = [event["message"] for event in events if event["type"] == "tool_result"]
-    assert "Не хватает параметров: path" in result["content"] and "ai/rag.md" in result["content"]
+    assert "непустой список правок" in result["content"] and "edits (array, обязательный)" in result["content"]
     # Карточку пользователь видит только для исправленного вызова.
-    assert events[-1]["type"] == "interrupt" and events[-1]["pending"]["title"].endswith("ai/note.md")
+    assert events[-1]["type"] == "interrupt" and events[-1]["pending"]["title"].endswith("правок — 1")
 
 
 def test_empty_model_answer_is_retried(tmp_path):
     provider = ScriptedProvider("", "", "Ответ со второй попытки")
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Привет"}))
 
     assert events[-1]["type"] == "done" and events[-1]["message"]["content"] == "Ответ со второй попытки"

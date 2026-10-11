@@ -1,6 +1,7 @@
 """Проверка хода агента подтверждает ограниченный контекст и сохранение ответа."""
 
 from fastapi.testclient import TestClient
+from tests.fakes import post_session
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
@@ -41,7 +42,7 @@ def test_turn_uses_recent_messages_and_persists_reply(tmp_path) -> None:
 
     with TestClient(create_app(settings, llm_provider=provider)) as client:
         assert client.get("/api/models").json()["models"] == ["test-model"]
-        session = client.post("/api/sessions", json={"model": "test-model"}).json()
+        session = post_session(client, {"model": "test-model"}).json()
         for content in ("Старое", "Предыдущее"):
             assert client.post(
                 f"/api/sessions/{session['id']}/messages", json={"content": content}
@@ -79,7 +80,7 @@ def test_session_model_can_be_selected_after_creation(tmp_path) -> None:
     provider = FakeProvider()
 
     with TestClient(create_app(settings, llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": ""}).json()
+        session = post_session(client, {"model": ""}).json()
         configured = client.put(
             f"/api/sessions/{session['id']}/config",
             json={"provider": "lm_studio", "model": "test-model"},
@@ -101,7 +102,7 @@ def test_failed_model_call_keeps_user_message(tmp_path) -> None:
     settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings, llm_provider=FailingProvider())) as client:
-        session = client.post("/api/sessions", json={"model": "test-model"}).json()
+        session = post_session(client, {"model": "test-model"}).json()
         response = client.post(
             f"/api/sessions/{session['id']}/turns", json={"content": "Привет"}
         )

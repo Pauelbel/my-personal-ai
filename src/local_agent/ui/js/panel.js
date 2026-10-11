@@ -6,6 +6,7 @@ import { lineDiff, renderDiff } from "./diff.js";
 const STATUS = { queued: "в очереди", running: "работает", waiting: "ждёт решения", done: "готово", failed: "ошибка" };
 const KIND = { tool: "Инструмент", skill: "Скилл", agent: "Саб-агент" };
 const ACTIVE = new Set(["queued", "running", "waiting"]);
+const EDIT_KIND = { merge: "слить дубли", contradiction: "противоречие", outdated: "устарело", fix: "исправить" };
 const DOCK_ROWS = 5;
 
 // onDecision(card, {action, text}) отправляет решение; onOpen(sessionId) открывает сессию;
@@ -39,11 +40,13 @@ function cardNode(card, onDecision, onOpen, readFile, busy) {
   where.style.cursor = "pointer";
   where.addEventListener("click", () => onOpen(card.owner_id));
   node.append(where, el("div", "title", pending.title || titleOf(pending)));
+  // Правки вики после lint — список с галочками: применятся только отмеченные.
+  const checks = pending.kind === "wiki_lint" ? editsBody(node, pending.edits || []) : null;
   if (pending.kind === "proposal") proposalBody(node, pending.proposal || {});
-  else callBody(node, pending, (path) => readFile(card, path));
+  else if (!checks) callBody(node, pending, (path) => readFile(card, path));
 
   const actions = el("div", "actions");
-  const approve = button("Утвердить", "primary");
+  const approve = button(checks ? "Применить отмеченные" : "Утвердить", "primary");
   const reject = button("Отклонить");
   const reply = button("Ответить");
   const text = el("textarea");
@@ -53,11 +56,17 @@ function cardNode(card, onDecision, onOpen, readFile, busy) {
   send.hidden = true;
   const all = [approve, reject, reply, send];
   for (const item of all) item.disabled = busy;
+  if (checks) {
+    const sync = () => { approve.disabled = busy || !checks.some((box) => box.checked); };
+    for (const box of checks) box.addEventListener("change", sync);
+  }
   const decide = async (decision) => {
     for (const item of all) item.disabled = true;
     await onDecision(card, decision);
   };
-  approve.addEventListener("click", () => decide({ action: "approve" }));
+  approve.addEventListener("click", () => decide(checks
+    ? { action: "approve", selected: checks.flatMap((box, index) => (box.checked ? [index + 1] : [])) }
+    : { action: "approve" }));
   reject.addEventListener("click", () => decide({ action: "reject" }));
   reply.addEventListener("click", () => {
     text.hidden = send.hidden = false;
@@ -109,6 +118,27 @@ async function fileChange(name, args, readFile) {
   details.open = true;
   details.append(el("summary", "", label), renderDiff(ops));
   return details;
+}
+
+function editsBody(node, edits) {
+  const list = el("div", "edits");
+  const boxes = edits.map((edit, index) => {
+    const row = el("label", "edit");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = true;
+    const text = el("div", "edit-text");
+    text.append(
+      el("div", "edit-head", `${index + 1}. ${EDIT_KIND[edit.kind] || edit.kind} · ${edit.notes.join(", ")}`),
+      el("div", "edit-problem", edit.problem),
+      el("div", "edit-change", `→ ${edit.change}`),
+    );
+    row.append(box, text);
+    list.append(row);
+    return box;
+  });
+  node.append(list);
+  return boxes;
 }
 
 function proposalBody(node, proposal) {

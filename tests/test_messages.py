@@ -1,6 +1,7 @@
 """Проверка истории подтверждает сохранение сообщений после перезапуска приложения."""
 
 from fastapi.testclient import TestClient
+from tests.fakes import post_session
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
@@ -16,7 +17,7 @@ def test_messages_persist_after_app_restart(tmp_path) -> None:
     )
 
     with TestClient(create_app(settings)) as client:
-        session = client.post("/api/sessions", json={}).json()
+        session = post_session(client, {}).json()
         created = client.post(
             f"/api/sessions/{session['id']}/messages",
             json={"content": "  Привет, агент!  "},

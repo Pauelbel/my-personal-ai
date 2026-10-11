@@ -4,6 +4,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.fakes import post_session
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
@@ -133,7 +134,7 @@ def test_update_memory_uses_only_new_messages_and_memory_model(tmp_path) -> None
     )
 
     with TestClient(create_app(settings, llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "chat-model"}).json()
+        session = post_session(client, {"model": "chat-model"}).json()
         created = client.post(
             f"/api/sessions/{session['id']}/messages",
             json={"content": "Мне удобны небольшие изменения"},
@@ -170,7 +171,7 @@ def test_memory_service_updates_existing_line_without_id(tmp_path) -> None:
         client.put("/api/memory/preferences.md", json={
             "content": "# Предпочтения\n\n- Обращаться к пользователю дружище\n",
         })
-        session = client.post("/api/sessions", json={"model": "chat-model"}).json()
+        session = post_session(client, {"model": "chat-model"}).json()
         client.post(f"/api/sessions/{session['id']}/messages", json={"content": "Теперь обращайся по имени"})
         response = client.post(f"/api/sessions/{session['id']}/memory/update")
         content = client.get("/api/memory/preferences.md").json()["content"]
@@ -193,7 +194,7 @@ def test_invalid_model_response_does_not_advance_checkpoint(tmp_path) -> None:
     )
 
     with TestClient(create_app(settings, llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "chat-model"}).json()
+        session = post_session(client, {"model": "chat-model"}).json()
         client.post(
             f"/api/sessions/{session['id']}/messages",
             json={"content": "Устойчивое предпочтение"},
@@ -240,7 +241,7 @@ def test_rejected_patch_changes_nothing_and_keeps_checkpoint(tmp_path) -> None:
     with TestClient(create_app(settings, llm_provider=provider)) as client:
         before = {item["name"]: client.get(f"/api/memory/{item['name']}").json()["content"]
                   for item in client.get("/api/memory").json()}
-        session = client.post("/api/sessions", json={"model": "chat-model"}).json()
+        session = post_session(client, {"model": "chat-model"}).json()
         client.post(f"/api/sessions/{session['id']}/messages", json={"content": "Отвечай коротко"})
         first = client.post(f"/api/sessions/{session['id']}/memory/update")
         second = client.post(f"/api/sessions/{session['id']}/memory/update")
@@ -268,7 +269,7 @@ def test_update_requires_memory_or_session_model(tmp_path) -> None:
     )
 
     with TestClient(create_app(settings, llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": ""}).json()
+        session = post_session(client, {"model": ""}).json()
         client.post(
             f"/api/sessions/{session['id']}/messages",
             json={"content": "Устойчивое предпочтение"},

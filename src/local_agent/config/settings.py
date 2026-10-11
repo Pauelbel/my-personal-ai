@@ -31,8 +31,6 @@ class Settings(BaseSettings):
     skills_path: Path = Path("data/skills")
     sessions_path: Path = Path("data/sessions")
     projects_path: Path = Path("data/projects")
-    # Папка системного проекта «Черновики»: в нём живут быстрые разговоры без своей папки.
-    drafts_path: Path = Path("data/drafts")
     conversations_path: Path = Path("data/conversations")
     memory_path: Path = Path("data/memory")
     # Пусто — рядом с остальными данными, в папке над sessions_path (обычно data/).
@@ -54,6 +52,8 @@ class Settings(BaseSettings):
     # Сколько символов памяти (профиль и найденные записи) попадает в промпт.
     max_memory_context_chars: int = Field(default=800, gt=0)
     memory_auto_update_messages: int = Field(default=10, ge=0)
+    # Чат вики помнит столько последних реплик пользователя вместе с ответами; всё раньше забывается.
+    wiki_context_messages: int = Field(default=3, ge=1)
     log_level: str = "INFO"
     max_context_messages: int = Field(default=20, gt=0)
     default_context_tokens: int = Field(default=8192, gt=0)

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from tests.fakes import post_session
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
@@ -28,9 +29,9 @@ def test_sessions_share_project_folder_and_last_model(tmp_path):
     workspace = folder(tmp_path)
     with TestClient(create_app(settings(tmp_path))) as client:
         project = client.post("/api/projects", json={"name": "Код", "workspace": str(workspace), "model": "m1"}).json()
-        first = client.post("/api/sessions", json={"project_id": project["id"]}).json()
+        first = post_session(client, {"project_id": project["id"]}).json()
         client.put(f"/api/sessions/{first['id']}/config", json={"provider": "lm_studio", "model": "m2"})
-        second = client.post("/api/sessions", json={"project_id": project["id"]}).json()
+        second = post_session(client, {"project_id": project["id"]}).json()
 
     assert first["project_id"] == second["project_id"] == project["id"]
     assert second["model"] == "m2"
@@ -49,49 +50,50 @@ def test_project_folder_must_exist_be_absolute_and_unique(tmp_path):
     assert relative.status_code == 400
 
 
-def test_deleting_project_moves_sessions_to_drafts(tmp_path):
+def test_deleting_project_deletes_its_sessions_but_not_the_folder(tmp_path):
     workspace = folder(tmp_path)
+    other = folder(tmp_path, "other")
     with TestClient(create_app(settings(tmp_path))) as client:
         project = client.post("/api/projects", json={"name": "Код", "workspace": str(workspace)}).json()
-        session = client.post("/api/sessions", json={"project_id": project["id"]}).json()
+        kept = client.post("/api/projects", json={"workspace": str(other)}).json()
+        session = post_session(client, {"project_id": project["id"]}).json()
+        survivor = post_session(client, {"project_id": kept["id"]}).json()
         deleted = client.delete(f"/api/projects/{project['id']}")
-        after = client.get(f"/api/sessions/{session['id']}").json()
+        gone = client.get(f"/api/sessions/{session['id']}")
+        sessions = client.get("/api/sessions").json()
         projects = client.get("/api/projects").json()
 
-    assert deleted.status_code == 204
-    assert [item["id"] for item in projects] == ["drafts"]
-    # В «Черновиках» действует их папка, а доступа к папке удалённого проекта больше нет.
-    assert after["project_id"] == "drafts"
+    assert deleted.status_code == 204 and gone.status_code == 404
+    assert [item["id"] for item in sessions] == [survivor["id"]]
+    assert [item["id"] for item in projects] == [kept["id"]]
     assert workspace.exists()
 
 
-def test_drafts_can_be_renamed_but_not_deleted(tmp_path):
+def test_no_system_projects_and_empty_legacy_drafts_are_dropped(tmp_path):
     with TestClient(create_app(settings(tmp_path))) as client:
-        drafts = client.get("/api/projects").json()[0]
-        deleted = client.delete("/api/projects/drafts")
-        renamed = client.put("/api/projects/drafts", json={"name": "Наброски", "workspace": drafts["workspace"]})
+        assert client.get("/api/projects").json() == []
+    # Пустые «Черновики» из прежней версии при старте убираются, с сессиями — остаются обычным проектом.
+    now = datetime.now(UTC).isoformat()
+    (tmp_path / "projects" / "drafts.json").write_text(json.dumps({
+        "id": "drafts", "name": "drafts", "workspace": str(folder(tmp_path, "drafts")), "created_at": now, "updated_at": now,
+    }), encoding="utf-8")
     with TestClient(create_app(settings(tmp_path))) as client:
-        projects = client.get("/api/projects").json()
-
-    assert deleted.status_code == 400 and "нельзя удалить" in deleted.json()["detail"]
-    assert renamed.status_code == 200
-    # Переименованные «Черновики» при перезапуске не создаются заново.
-    assert [(item["id"], item["name"]) for item in projects] == [("drafts", "Наброски")]
+        assert client.get("/api/projects").json() == []
 
 
 def test_session_folder_is_not_changed_from_session_config(tmp_path):
     workspace = folder(tmp_path)
     with TestClient(create_app(settings(tmp_path))) as client:
-        session = client.post("/api/sessions", json={}).json()
+        session = post_session(client, {}).json()
         configured = client.put(
             f"/api/sessions/{session['id']}/config",
             json={"provider": "lm_studio", "model": "m", "workspace": str(workspace)},
         ).json()
         projects = client.get("/api/projects").json()
 
-    # Папку меняют только в настройках проекта: сессия остаётся в «Черновиках», нового проекта нет.
-    assert configured["project_id"] == "drafts" and configured["model"] == "m"
-    assert [item["id"] for item in projects] == ["drafts"]
+    # Папку меняют только в настройках проекта: сессия остаётся в своём проекте, нового проекта нет.
+    assert configured["project_id"] == session["project_id"] and configured["model"] == "m"
+    assert [item["id"] for item in projects] == [session["project_id"]]
 
 
 def write_session(tmp_path: Path, session_id: str, **fields) -> None:
@@ -107,9 +109,9 @@ def test_legacy_sessions_get_a_project_on_start(tmp_path):
     workspace = folder(tmp_path)
     # 1. Своя папка → проект этой папки, с инструментами сессии.
     write_session(tmp_path, "with-folder", workspace=str(workspace), enabled_tools=["read_file"])
-    # 2. Ни проекта, ни папки → «Черновики».
+    # 2. Ни проекта, ни папки → последний изменённый проект.
     write_session(tmp_path, "plain", workspace=None)
-    # 3. Проекта, на который ссылается сессия, больше нет → «Черновики».
+    # 3. Проекта, на который ссылается сессия, больше нет → тоже он.
     write_session(tmp_path, "orphan", workspace=None, project_id="gone")
     # Своя папка, которой уже нет на диске, тоже не теряет сессию.
     write_session(tmp_path, "lost-folder", workspace=str(tmp_path / "removed"))
@@ -122,10 +124,10 @@ def test_legacy_sessions_get_a_project_on_start(tmp_path):
     with TestClient(create_app(settings(tmp_path))) as client:
         again = client.get("/api/projects").json()
 
-    [project] = [item for item in projects if item["id"] != "drafts"]
+    [project] = projects
     assert project["workspace"] == str(workspace.resolve())
     assert {key: item["project_id"] for key, item in sessions.items()} == {
-        "with-folder": project["id"], "plain": "drafts", "orphan": "drafts", "lost-folder": "drafts",
+        "with-folder": project["id"], "plain": project["id"], "orphan": project["id"], "lost-folder": project["id"],
         "node": project["id"],
     }
     assert again == projects

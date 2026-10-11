@@ -11,7 +11,8 @@ router = APIRouter(prefix="/attention", tags=["attention"])
 def attention(request: Request, session_id: str | None = None) -> dict:
     """session_id — открытая сессия: её карточки и задачи её саб-агентов идут первыми, остальные следом."""
     state = request.app.state
-    sessions = state.session_service.list()
+    # Карточки и ход проверки вики видны на вкладке «Вики», а не в общей панели.
+    sessions = [session for session in state.session_service.list() if session.kind == "chat"]
     titles = {session.id: session.title for session in sessions}
     by_id = {session.id: session for session in sessions}
     cards, tasks = [], []

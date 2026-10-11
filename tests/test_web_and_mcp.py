@@ -45,3 +45,18 @@ def test_default_config_is_written_once(tmp_path):
     assert set(manager.config()["servers"]) == {"search", "browser"}
     (tmp_path / "mcp.json").write_text('{"servers": {}}', encoding="utf-8")
     assert manager.config()["servers"] == {}
+
+
+def test_mcp_tool_description_is_translated_from_config():
+    from types import SimpleNamespace
+
+    from local_agent.capabilities.mcp import BROWSER_DESCRIPTIONS, MCPTool
+
+    def tool(name, description):
+        return SimpleNamespace(name=name, title=None, description=description, input_schema={}, annotations=None)
+
+    translated = MCPTool("browser", None, tool("browser_click", "Perform click on a web page"), set(), BROWSER_DESCRIPTIONS)
+    original = MCPTool("browser", None, tool("browser_new_thing", "Brand new  tool"), set(), BROWSER_DESCRIPTIONS)
+    assert translated.description == "Кликнуть по элементу на веб-странице"
+    # Инструмента нет в переводах — остаётся описание сервера.
+    assert original.description == "Brand new tool"

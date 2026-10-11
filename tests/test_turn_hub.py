@@ -4,6 +4,7 @@ import asyncio
 import time
 
 from fastapi.testclient import TestClient
+from tests.fakes import post_session
 from tests.test_graph_flow import settings
 
 from local_agent.api.app import create_app
@@ -42,7 +43,7 @@ def wait_idle(client, url) -> dict:
 def test_turn_can_be_followed_again_and_queue_goes_after_answer(tmp_path):
     provider = GatedProvider()
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
         hub = client.app.state.turn_hub
         # Ничего не идёт: сообщение из очереди уходит сразу.
@@ -74,7 +75,7 @@ def test_turn_can_be_followed_again_and_queue_goes_after_answer(tmp_path):
 def test_stopped_turn_keeps_the_queue_for_the_user(tmp_path):
     provider = GatedProvider()
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
         client.post(url + "/queue", json={"content": "Долгий"})
         item = client.post(url + "/queue", json={"content": "Потом"}).json()
@@ -95,7 +96,7 @@ def test_session_changes_are_published(tmp_path):
     with TestClient(create_app(settings(tmp_path))) as client:
         bus = client.app.state.events
         queue = client.portal.call(_subscribe, bus)
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         client.put(f"/api/sessions/{session['id']}/title", json={"title": "Новое имя"})
         events = client.portal.call(_drain, queue)
         bus.unsubscribe(queue)

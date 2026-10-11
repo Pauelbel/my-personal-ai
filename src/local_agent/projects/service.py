@@ -1,6 +1,6 @@
 """Сервис проектов создаёт и меняет проекты и связывает с ними сессии.
 
-Каждая сессия живёт в проекте; системный проект «Черновики» принимает сессии, у которых своего нет.
+Каждая сессия живёт в проекте: без проекта сессию не создать, с удалением проекта удаляются и его сессии.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from local_agent.projects.models import DRAFTS_PROJECT_ID, Project
+from local_agent.projects.models import Project
 from local_agent.sessions.service import InvalidWorkspaceError, SessionService, validate_workspace
 from local_agent.storage.json.projects import JsonProjectRepository
 
@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 # Так выбор папки подписывает домашнюю папку. Раньше подпись становилась названием проекта,
 # даже если потом выбрали папку глубже: такие названия при старте меняются на имя папки.
 HOME_LABEL = "Домашняя папка ({})"
+# Раньше сессии без проекта попадали в системный проект «Черновики». Пустой такой проект при старте удаляется.
+LEGACY_DRAFTS_ID = "drafts"
 
 # Папку выбирают, чтобы агент мог её читать: чтение включено сразу. Запись и правка — только вручную.
 
@@ -47,18 +49,6 @@ class ProjectService:
             agent_id=agent_id, provider=provider, model=model,
         ))
 
-    def ensure_drafts(self, folder: Path) -> Project:
-        """Создаёт «Черновики», если их ещё нет. Существующий проект не трогается: имя и папку
-        пользователь мог поменять в настройках проекта."""
-        if project := self._repository.get(DRAFTS_PROJECT_ID):
-            return project
-        folder.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(UTC)
-        return self._repository.save(Project(
-            id=DRAFTS_PROJECT_ID, name=folder_name(str(folder.resolve())), workspace=str(folder.resolve()),
-            created_at=now, updated_at=now,
-        ))
-
     def update(self, project_id: str, *, name: str, workspace: str, mode: str | None = None) -> Project | None:
         if self._repository.get(project_id) is None:
             return None
@@ -73,35 +63,46 @@ class ProjectService:
         return self._repository.patch(project_id, updates)
 
     def delete(self, project_id: str) -> bool:
-        """Сессии проекта не удаляются, а переходят в «Черновики» с их папкой и инструментами."""
-        if project_id == DRAFTS_PROJECT_ID:
-            raise ProjectError("Проект черновиков нельзя удалить: в него попадают сессии без проекта")
+        """Проект удаляется вместе с сессиями и их историей; папка на диске остаётся."""
         if self._repository.get(project_id) is None:
             return False
         for session in self._sessions.list():
-            if session.project_id == project_id:
-                self._sessions.assign_project(session.id, DRAFTS_PROJECT_ID)
+            if session.project_id == project_id and not session.parent_id:
+                # Дочерние сессии саб-агентов удаляются вместе с основной.
+                self._sessions.delete(session.id)
         return self._repository.delete(project_id)
 
     def adopt_sessions(self) -> None:
         """Миграция при старте: у каждой сессии должен быть существующий проект.
 
         Сессия со своей папкой (созданная до проектов) переходит в проект этой папки, остальные —
-        в «Черновики». Дочерняя сессия саб-агента идёт за сессией, которая поручила ему задачу.
+        в последний изменённый проект. Дочерняя сессия саб-агента идёт за сессией, которая поручила
+        ему задачу. Пока проектов нет, такие сессии ждут: их подберёт старт после создания проекта.
         """
         self._adopt_folders()
         self._shorten_home_labels()
-        known = {project.id for project in self._repository.list()}
+        self._drop_empty_drafts()
+        projects = self._repository.list()
+        known = {project.id for project in projects}
+        fallback = max(projects, key=lambda project: project.updated_at).id if projects else None
         sessions = self._sessions.list()
         project_of = {session.id: session.project_id for session in sessions}
         # Сначала обычные сессии, затем скрытые: им нужен уже известный проект хозяйки.
         for session in sorted(sessions, key=lambda item: item.parent_id is not None):
-            if session.project_id in known:
+            if session.project_id in known or session.kind == "wiki":
                 continue
             parent_project = project_of.get(session.parent_id)
-            project_id = parent_project if parent_project in known else DRAFTS_PROJECT_ID
+            project_id = parent_project if parent_project in known else fallback
+            if project_id is None:
+                continue
             self._sessions.assign_project(session.id, project_id)
             project_of[session.id] = project_id
+
+    def _drop_empty_drafts(self) -> None:
+        if self._repository.get(LEGACY_DRAFTS_ID) is None:
+            return
+        if not any(session.project_id == LEGACY_DRAFTS_ID for session in self._sessions.list()):
+            self._repository.delete(LEGACY_DRAFTS_ID)
 
     def _shorten_home_labels(self) -> None:
         label = HOME_LABEL.format(Path.home().name)

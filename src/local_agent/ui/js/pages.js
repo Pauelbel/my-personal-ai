@@ -2,6 +2,7 @@
 // Списки — деревья в стиле терминала (tree.js), возможности разложены по вкладкам.
 import { api } from "./api.js";
 import { el, renderMarkdown } from "./chat.js";
+import { createGraph } from "./graph.js";
 import { guide, rowAction, stem, treeRow } from "./tree.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -16,26 +17,55 @@ function branch(items, lines, build) {
 
 // ---------- вики ----------
 
-let wikiCurrent = null;
+const INDEX_PAGE = "index.md";
+// Открытая заметка запоминается: после перезагрузки страницы она открывается снова.
+let wikiCurrent = recall("wiki-page");
 const wikiClosed = new Set();
 // Последний показанный список: после открытия страницы он перерисовывается без нового запроса.
 let wikiShown = { items: [], query: "" };
+// «Список» — дерево заметок, «Граф» — точки и ссылки между ними; читалка справа в обоих видах.
+let wikiMode = recall("wiki-mode") === "graph" ? "graph" : "list";
+let wikiGraph = null;
 
 export async function showWiki(toast) {
   try {
     const query = $("#wiki-search").value.trim();
-    const items = query
-      ? (await api.wikiSearch(query)).map((item) => ({ path: item.path, title: item.title, note: item.text }))
-      : (await api.wiki()).map((page) => ({ path: page.path, title: page.title }));
-    const unique = [...new Map(items.map((item) => [item.path, item])).values()];
-    renderWikiList(unique, query, toast);
+    const graphShown = wikiMode === "graph" && !query;
+    renderWikiMode(toast, graphShown);
+    if (graphShown) {
+      wikiGraph ??= createGraph($("#wiki-graph"), { onOpen: (path) => openWiki(path, toast) });
+      wikiGraph.update(await api.wikiGraph(), wikiCurrent);
+    } else {
+      const items = query
+        ? (await api.wikiSearch(query)).map((item) => ({ path: item.path, title: item.title, note: item.text }))
+        : (await api.wiki()).map((page) => ({ path: page.path, title: page.title }));
+      const unique = [...new Map(items.map((item) => [item.path, item])).values()];
+      renderWikiList(unique, query, toast);
+    }
     if (wikiCurrent && !query) await openWiki(wikiCurrent, toast, false);
   } catch (error) {
     toast(error);
   }
 }
 
-// Без поиска — дерево папок data/wiki, с поиском — найденные страницы одной группой с фрагментом текста.
+
+// Поиск всегда показывает список найденного: граф по запросу не фильтруется.
+function renderWikiMode(toast, graphShown) {
+  $("#wiki-split").classList.toggle("graph-mode", graphShown);
+  $("#wiki-list").hidden = graphShown;
+  $("#wiki-graph").hidden = !graphShown;
+  for (const tab of $("#wiki-tabs").querySelectorAll("button")) {
+    tab.setAttribute("aria-pressed", String(tab.dataset.mode === wikiMode));
+    tab.onclick = () => {
+      wikiMode = tab.dataset.mode;
+      remember("wiki-mode", wikiMode);
+      $("#wiki-search").value = "";
+      void showWiki(toast);
+    };
+  }
+}
+
+// Без поиска — index.md и дерево папок data/wiki, с поиском — найденные страницы одной группой с фрагментом текста.
 function renderWikiList(items, query, toast) {
   wikiShown = { items, query };
   const root = $("#wiki-list");
@@ -51,7 +81,7 @@ function renderWikiList(items, query, toast) {
     })));
     return;
   }
-  const tree = { folders: new Map(), pages: [] };
+  const tree = { folders: new Map(), pages: [{ path: INDEX_PAGE, title: INDEX_PAGE, index: true }] };
   for (const item of items) {
     const parts = item.path.split("/");
     let node = tree;
@@ -63,7 +93,11 @@ function renderWikiList(items, query, toast) {
   }
   const rows = (node, path, lines) => branch([...node.folders.entries(), ...node.pages], lines, (entry, ancestors, last) => {
     if (!Array.isArray(entry)) {
-      return [treeRow({ prefix: guide(ancestors, last), label: entry.title, title: entry.path, current: entry.path === wikiCurrent, onClick: open(entry.path) })];
+      return [treeRow({
+        prefix: guide(ancestors, last), label: entry.title, current: entry.path === wikiCurrent, onClick: open(entry.path),
+        title: entry.index ? "Индекс: строка на каждую заметку, агент обновляет его сам" : entry.path,
+        note: entry.index ? "индекс" : "",
+      })];
     }
     const [name, child] = entry;
     const folder = path ? `${path}/${name}` : name;
@@ -77,20 +111,68 @@ function renderWikiList(items, query, toast) {
     });
     return opened ? [head, ...rows(child, folder, [...ancestors, !last])] : [head];
   });
-  root.replaceChildren(treeRow({ label: "data/wiki", group: true }), ...rows(tree, "", []));
+  root.replaceChildren(treeRow({ label: `data/wiki · ${items.length}`, group: true }), ...rows(tree, "", []));
+}
+
+// Заметка по пути — из чата вики: пути в ответах агента открывают её здесь.
+export function openNote(path, toast) {
+  void openWiki(path, toast);
 }
 
 async function openWiki(path, toast, refreshList = true) {
   try {
     const page = await api.wikiPage(path);
     wikiCurrent = path;
+    remember("wiki-page", path);
     const reader = $("#wiki-page");
     reader.replaceChildren(el("p", "hint", `data/wiki/${path}`));
-    renderMarkdown(reader, page.content);
+    if (page.meta) reader.append(noteMeta(page.meta));
+    renderMarkdown(reader, page.body);
+    // Ссылки на другие заметки открываются здесь же, а не переходом браузера.
+    for (const link of reader.querySelectorAll("a[data-href]")) {
+      const target = wikiTarget(path, link.dataset.href);
+      if (!target) continue;
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        void openWiki(target, toast);
+      });
+    }
+    wikiGraph?.setCurrent(path);
     if (refreshList) renderWikiList(wikiShown.items, wikiShown.query, toast);
   } catch (error) {
-    toast(error);
+    if (refreshList) {
+      toast(error);
+      return;
+    }
+    // Запомненной заметки больше нет (удалили или слили): забываем её без ошибки.
+    wikiCurrent = null;
+    remember("wiki-page", "");
+    $("#wiki-page").replaceChildren(el("p", "hint", "Выберите страницу."));
   }
+}
+
+// Поля OKF над текстом: тип, теги и описание в одну строку.
+function noteMeta(meta) {
+  const box = el("div", "note-meta");
+  const chips = el("div", "note-chips");
+  if (meta.type) chips.append(el("span", "chip type", meta.type));
+  for (const tag of meta.tags) chips.append(el("span", "chip", `#${tag}`));
+  if (chips.childElementCount) box.append(chips);
+  if (meta.description) box.append(el("p", "note-description", meta.description));
+  return box;
+}
+
+// Путь заметки по относительной ссылке из заметки from; внешние ссылки и не .md — null.
+function wikiTarget(from, href) {
+  if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("/") || href.startsWith("#")) return null;
+  const clean = decodeURIComponent(href.split("#")[0]);
+  if (!clean.endsWith(".md")) return null;
+  const parts = from.split("/").slice(0, -1);
+  for (const part of clean.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part && part !== ".") parts.push(part);
+  }
+  return parts.join("/");
 }
 
 // ---------- возможности ----------

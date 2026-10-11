@@ -45,6 +45,8 @@ function appendInline(parent, source) {
         if (href) {
           const link = document.createElement("a");
           link.href = href;
+          // Исходная ссылка как написана: по ней вики открывает связанную заметку относительно текущей.
+          link.dataset.href = match[2];
           link.target = "_blank";
           link.rel = "noopener noreferrer";
           appendInline(link, match[1]);
@@ -101,12 +103,18 @@ function isTableDivider(line) {
   return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
-function appendTable(parent, header, divider, rows) {
+// Номер строки исходника у блока: по нему просмотр файла рисует колонку номеров.
+function mark(element, line) {
+  element.dataset.line = String(line);
+  return element;
+}
+
+function appendTable(parent, header, divider, rows, first) {
   const wrapper = document.createElement("div");
   wrapper.className = "markdown-table-container";
   const table = document.createElement("table");
   const head = document.createElement("thead");
-  const heading = document.createElement("tr");
+  const heading = mark(document.createElement("tr"), first);
   const alignments = splitTableRow(divider);
   for (const [index, value] of splitTableRow(header).entries()) {
     const cell = document.createElement("th");
@@ -119,8 +127,8 @@ function appendTable(parent, header, divider, rows) {
   head.append(heading);
   table.append(head);
   const body = document.createElement("tbody");
-  for (const row of rows) {
-    const line = document.createElement("tr");
+  for (const [number, row] of rows.entries()) {
+    const line = mark(document.createElement("tr"), first + 2 + number);
     for (const value of splitTableRow(row)) {
       const cell = document.createElement("td");
       appendInline(cell, value);
@@ -137,11 +145,13 @@ function isBlockStart(line) {
   return /^\s*(`{3,}|~{3,}|#{1,6}\s|>|[-+*]\s|\d+[.)]\s)/.test(line);
 }
 
-export function appendMarkdown(parent, source) {
+// offset — сколько строк исходника выше этого куска (для вложенных цитат).
+export function appendMarkdown(parent, source, offset = 0) {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   for (let index = 0; index < lines.length;) {
     const line = lines[index];
     if (!line.trim()) { index += 1; continue; }
+    const start = offset + index + 1;
 
     const fence = /^\s*(`{3,}|~{3,})/.exec(line);
     if (fence) {
@@ -152,7 +162,7 @@ export function appendMarkdown(parent, source) {
         index += 1;
       }
       if (index < lines.length) index += 1;
-      const pre = document.createElement("pre");
+      const pre = mark(document.createElement("pre"), start);
       const code = document.createElement("code");
       const language = line.trim().slice(fence[1].length).trim().split(/\s+/)[0];
       if (language) code.dataset.language = language;
@@ -164,7 +174,7 @@ export function appendMarkdown(parent, source) {
 
     const heading = /^\s*(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
     if (heading) {
-      const element = document.createElement(`h${heading[1].length}`);
+      const element = mark(document.createElement(`h${heading[1].length}`), start);
       appendInline(element, heading[2]);
       parent.append(element);
       index += 1;
@@ -179,12 +189,12 @@ export function appendMarkdown(parent, source) {
         rows.push(lines[index]);
         index += 1;
       }
-      appendTable(parent, line, divider, rows);
+      appendTable(parent, line, divider, rows, start);
       continue;
     }
 
     if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      parent.append(document.createElement("hr"));
+      parent.append(mark(document.createElement("hr"), start));
       index += 1;
       continue;
     }
@@ -196,7 +206,7 @@ export function appendMarkdown(parent, source) {
         index += 1;
       }
       const quote = document.createElement("blockquote");
-      appendMarkdown(quote, quoteLines.join("\n"));
+      appendMarkdown(quote, quoteLines.join("\n"), start - 1);
       parent.append(quote);
       continue;
     }
@@ -208,7 +218,7 @@ export function appendMarkdown(parent, source) {
       while (index < lines.length) {
         const itemMatch = /^\s*([-+*]|\d+[.)])\s+(.+)$/.exec(lines[index]);
         if (!itemMatch || /\d/.test(itemMatch[1][0]) !== ordered) break;
-        const item = document.createElement("li");
+        const item = mark(document.createElement("li"), offset + index + 1);
         appendInline(item, itemMatch[2]);
         list.append(item);
         index += 1;
@@ -223,7 +233,7 @@ export function appendMarkdown(parent, source) {
       paragraph.push(lines[index].trim());
       index += 1;
     }
-    const element = document.createElement("p");
+    const element = mark(document.createElement("p"), start);
     appendInline(element, paragraph.join(" "));
     parent.append(element);
   }

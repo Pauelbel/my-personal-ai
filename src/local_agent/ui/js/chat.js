@@ -1,14 +1,15 @@
-// Чат: история сессии и печатающийся ответ. Вызовы инструментов — шаги на общей направляющей,
+// Чат: история сессии и печатающийся ответ. Вызовы инструментов — строки в общей рамке,
 // под ответом — сводка хода и «Копировать», результаты саб-агентов выделены, код в ответах подсвечен.
 import { highlightCode } from "./highlight.js";
 import { appendMarkdown } from "./markdown.js";
 
 const FLUSH_MS = 80;
-const STEP_ICON = { done: "✓", failed: "✕", pending: "…" };
+const STEP_ICON = { done: "✓", failed: "✕", pending: "◌" };
 // Длинный отчёт саб-агента в основном чате свёрнут; развёрнутые остаются такими после перерисовки.
 const REPORT_FOLD_CHARS = 700;
 const REPORT_FOLD_LINES = 12;
 const unfolded = new Set();
+const folded = new Set();
 
 export function renderMessages(container, messages) {
   container.replaceChildren();
@@ -22,10 +23,10 @@ export function renderMessages(container, messages) {
     return;
   }
   const results = new Map(messages.filter((item) => item.role === "tool").map((item) => [item.tool_call_id, item]));
-  // Вызовы инструментов подряд, даже из разных раундов, собираются в один блок шагов.
-  let steps = null;
+  // Вызовы инструментов подряд, даже из разных раундов, собираются в одну рамку.
+  let box = null;
   const add = (node) => {
-    steps = null;
+    box = null;
     container.append(node);
   };
   for (const message of messages) {
@@ -35,10 +36,55 @@ export function renderMessages(container, messages) {
       continue;
     }
     if (message.content?.trim()) add(assistantNode(message));
-    for (const call of message.tool_calls || []) {
-      if (!steps) container.append(steps = el("div", "steps"));
-      steps.append(stepNode(call, results.get(call.id)));
+    if (!message.tool_calls?.length) continue;
+    if (!box) container.append((box = new ToolBox()).node);
+    box.add(message, results);
+  }
+}
+
+// Рамка вызовов инструментов: в заголовке на кромке — сколько вызовов, сколько заняли и за сколько запросов к модели.
+// Свёрнутые рамки остаются свёрнутыми после перерисовки.
+class ToolBox {
+  constructor() {
+    this.node = el("details", "tools");
+    this.node.open = true;
+    this.head = el("summary", "tools-head");
+    this.title = el("span", "tools-title");
+    this.meta = el("span", "tools-meta");
+    this.head.append(this.title, this.meta);
+    this.rows = el("div", "tools-rows");
+    this.node.append(this.head, this.rows);
+    this.key = null;
+    this.calls = 0;
+    this.requests = 0;
+    this.first = null;
+    this.last = null;
+    this.node.addEventListener("toggle", () => {
+      if (this.node.open) folded.delete(this.key);
+      else folded.add(this.key);
+    });
+  }
+
+  add(message, results) {
+    // Шаги одного сообщения идут друг за другом: время шага — от конца предыдущего до его результата.
+    let previous = Date.parse(message.created_at);
+    this.first ??= previous;
+    this.key ??= message.id;
+    this.node.open = !folded.has(this.key);
+    this.requests += 1;
+    for (const call of message.tool_calls) {
+      const result = results.get(call.id);
+      const finished = result && Date.parse(result.created_at);
+      const seconds = finished && previous ? Math.max(finished - previous, 0) / 1000 : null;
+      if (finished) previous = this.last = finished;
+      this.rows.append(stepNode(call, result, seconds));
+      this.calls += 1;
     }
+    this.title.textContent = `◇ инструменты · ${this.calls} `;
+    this.title.append(el("span", "tools-caret", "▾"));
+    const span = this.first && this.last ? (this.last - this.first) / 1000 : null;
+    this.meta.textContent = [span != null && duration(round(span)), plural(this.requests, "запрос", "запроса", "запросов")]
+      .filter(Boolean).join(" · ");
   }
 }
 
@@ -172,7 +218,7 @@ function statsText(stats) {
     stats.input_tokens != null && `вход ${compact(stats.input_tokens)}`,
     stats.output_tokens != null && `выход ${compact(stats.output_tokens)}`,
     stats.tokens_per_second && `${Math.round(stats.tokens_per_second)} ток/с`,
-    stats.rounds > 1 && `запросов к модели: ${stats.rounds}`,
+    stats.rounds > 1 && `запросов: ${stats.rounds}`,
   ].filter(Boolean).join(" · ");
 }
 
@@ -187,6 +233,17 @@ function duration(seconds) {
   if (seconds < 60) return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1).replace(".", ",")} с`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes} мин ${Math.round(seconds - minutes * 60)} с`;
+}
+
+function round(seconds) {
+  return seconds < 10 ? Math.max(Math.round(seconds * 10) / 10, 0.1) : Math.round(seconds);
+}
+
+function plural(count, one, few, many) {
+  const tens = count % 100;
+  const units = count % 10;
+  const word = tens >= 11 && tens <= 14 ? many : units === 1 ? one : units >= 2 && units <= 4 ? few : many;
+  return `${count} ${word}`;
 }
 
 function userNode(text) {
@@ -241,20 +298,18 @@ function footNode(message, extra = []) {
   return foot;
 }
 
-function stepNode(call, result) {
+function stepNode(call, result, seconds) {
   const state = !result ? "pending" : result.is_error ? "failed" : "done";
   const node = el("details", `step ${state}`);
   const args = parse(call.arguments);
   const target = args.path || args.query || args.url || args.name || args.agent || (Array.isArray(args.names) ? args.names.join(", ") : "");
   const summary = el("summary");
   const icon = el("span", "step-icon", STEP_ICON[state]);
-  icon.title = { done: "Готово", failed: "Ошибка", pending: "Результата нет" }[state];
-  summary.append(icon, el("span", "step-name", call.name));
-  if (target) {
-    const label = el("span", "step-target", String(target));
-    if (args.path) markPath(label, String(args.path));
-    summary.append(label);
-  }
+  icon.title = { done: "Готово", failed: "Ошибка", pending: "Выполняется" }[state];
+  const label = el("span", "step-target", target ? String(target) : "—");
+  if (args.path) markPath(label, String(args.path));
+  const meta = state === "failed" ? "ошибка" : state === "pending" ? "…" : seconds != null ? duration(round(seconds)) : "";
+  summary.append(icon, el("span", "step-name", call.name), label, el("span", "step-meta", meta));
   const body = el("pre");
   body.textContent = `${JSON.stringify(args, null, 2)}\n\n→ ${result?.content ?? "—"}`;
   node.append(summary, body);

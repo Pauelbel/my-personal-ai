@@ -1,8 +1,21 @@
 """Провайдер по сценарию: отвечает заготовленными шагами и запоминает, что видела модель."""
 
 import json
+import tempfile
 
 from local_agent.llm.models import ChatResult, ToolCall
+
+
+def post_session(client, body: dict | None = None):
+    """POST /api/sessions в проекте: без проекта сессию не создать. Берётся первый проект или новый во временной папке."""
+    body = dict(body or {})
+    if "project_id" not in body:
+        projects = client.get("/api/projects").json()
+        project = projects[0] if projects else client.post(
+            "/api/projects", json={"workspace": tempfile.mkdtemp(prefix="project-")},
+        ).json()
+        body["project_id"] = project["id"]
+    return client.post("/api/sessions", json=body)
 
 
 def call(tool: str, /, **arguments) -> tuple[str, dict]:

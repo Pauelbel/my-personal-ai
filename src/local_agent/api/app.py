@@ -67,7 +67,14 @@ from local_agent.tools.git import GitTool
 from local_agent.tools.registry import ToolRegistry
 from local_agent.tools.web import FetchUrlTool
 from local_agent.wiki.service import WikiService
-from local_agent.wiki.tools import WikiReadTool, WikiSearchTool, WikiWriteTool
+from local_agent.wiki.tools import (
+    WikiLintTool,
+    WikiMatchTool,
+    WikiProposeEditsTool,
+    WikiReadTool,
+    WikiSaveNoteTool,
+    WikiSearchTool,
+)
 
 
 def build_providers(settings: Settings, lm_studio: LLMProvider | None) -> LLMRegistry:
@@ -128,8 +135,6 @@ def create_app(
                 on_deleted=(conversation_store.delete, memory_store.forget),
             )
             state.project_service = ProjectService(project_repository, state.session_service)
-            # «Черновики» нужны до миграции: в них переходят сессии без проекта.
-            state.project_service.ensure_drafts(active_settings.drafts_path)
             state.project_service.adopt_sessions()
             state.conversation_service = ConversationService(
                 conversation_store,
@@ -153,7 +158,7 @@ def create_app(
                 ListFilesTool(), ReadFileTool(), SearchFilesTool(),
                 WriteFileTool(active_settings.memory_path), EditFileTool(active_settings.memory_path),
                 GitTool(), SearchDocsTool(index_path / "docs"), FetchUrlTool(),
-                WikiReadTool(state.wiki_service), WikiWriteTool(state.wiki_service),
+                WikiReadTool(state.wiki_service),
             ])
             state.agent_registry = AgentRegistry(load_agents(active_settings.agents_path))
             state.skill_registry = SkillRegistry(load_skills(active_settings.skills_path))
@@ -181,6 +186,7 @@ def create_app(
                     default_context_tokens=active_settings.default_context_tokens,
                     response_reserve_tokens=active_settings.response_reserve_tokens,
                     memory_auto_update_messages=active_settings.memory_auto_update_messages,
+                    wiki_context_messages=active_settings.wiki_context_messages,
                 ),
                 checkpointer=checkpointer,
             )
@@ -195,6 +201,14 @@ def create_app(
             stack.push_async_callback(state.delegation.close)
 
             def core_tools(session: Session, agent: Agent, box: Toolbox) -> list[Tool]:
+                if session.kind == "wiki":
+                    # Чат вики без проекта: инструменты вики и чтение ссылок, все сразу со схемой.
+                    return [
+                        WikiReadTool(state.wiki_service), WikiSearchTool(state.wiki_service),
+                        WikiMatchTool(state.wiki_service), WikiSaveNoteTool(state.wiki_service),
+                        WikiLintTool(state.wiki_service), WikiProposeEditsTool(state.wiki_service),
+                        FetchUrlTool(),
+                    ]
                 if agent.id != MAIN_AGENT_ID:
                     # Саб-агентам — вики, но не личная память пользователя.
                     tools: list[Tool] = [WikiSearchTool(state.wiki_service)]
@@ -209,6 +223,12 @@ def create_app(
                     ProposeTool(state.capabilities),
                     _CatalogTool(MemorySearchTool(state.memory_service)),
                     _CatalogTool(WikiSearchTool(state.wiki_service)),
+                    # Шаги добавления заметки и список правок lint всегда со схемой: без неё модель пишет
+                    # правки текстом вместо карточки. Сам lint без параметров — его хватает строки в реестре.
+                    WikiMatchTool(state.wiki_service),
+                    WikiSaveNoteTool(state.wiki_service),
+                    _CatalogTool(WikiLintTool(state.wiki_service)),
+                    WikiProposeEditsTool(state.wiki_service),
                     _CatalogTool(ArchiveTool(state.capabilities)),
                 ]
                 if state.agent_registry.all():

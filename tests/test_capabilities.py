@@ -5,7 +5,7 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.fakes import ScriptedProvider, call, events_of
+from tests.fakes import ScriptedProvider, call, events_of, post_session
 from tests.test_graph_flow import project_session, settings
 
 from local_agent.api.app import create_app
@@ -48,7 +48,7 @@ def test_invalid_proposal_goes_back_to_the_model_without_a_card(tmp_path):
     broken = call("propose", kind="tool", name="Bad Name", title="x", description="d", reason="r", content="def (")
     provider = ScriptedProvider(broken, "Исправлю")
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Сделай"}))
 
     assert events[-1]["type"] == "done"
@@ -63,7 +63,7 @@ def test_small_model_omissions_in_proposal_are_repaired(tmp_path):
     )
     provider = ScriptedProvider(sloppy)
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         card = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Сделай"}))[-1]
 
     proposal = card["pending"]["proposal"]
@@ -82,7 +82,7 @@ def test_skill_and_agent_are_created_archived_and_restored(tmp_path):
         "Готово",
     )
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
         cards = [events_of(client.post(url + "/turns/stream", json={"content": "Оформи"}))[-1]]
         for _ in range(3):
@@ -103,7 +103,7 @@ def test_skill_and_agent_are_created_archived_and_restored(tmp_path):
 def test_reply_to_proposal_lets_agent_revise_it(tmp_path):
     provider = ScriptedProvider(PROPOSE_TOOL, PROPOSE_TOOL, "Создал")
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
         client.post(url + "/turns/stream", json={"content": "Сделай"})
         revised = events_of(client.post(url + "/resume", json={"action": "reply", "text": "Добавь фамилию"}))[-1]
@@ -117,7 +117,7 @@ def test_reply_to_proposal_lets_agent_revise_it(tmp_path):
 def test_extra_tool_is_offered_from_archive(tmp_path):
     provider = ScriptedProvider(call("archive", action="restore", kind="tool", name="generate_test_cases", reason="Нужны тест-кейсы"), "Подключил")
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
         client.post(url + "/turns/stream", json={"content": "Подключи генерацию"})
         assert "- инструмент generate_test_cases" in provider.system_prompt(0)
@@ -146,7 +146,7 @@ def test_delegated_task_runs_in_background_and_reports_back(tmp_path):
     )
     with TestClient(create_app(configured, llm_provider=provider)) as client:
         client.app.state.memory_service.write_document("profile.md", "# Профиль\n\n- Зовут Павел\n")
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
         events = events_of(client.post(url + "/turns/stream", json={"content": "Проверь вход"}))
         assert events[-1]["message"]["content"] == "Поручил тестировщику"
@@ -193,7 +193,7 @@ def test_team_shows_links_and_direct_chat_is_not_reported_to_main(tmp_path):
             f"---\nname: {name}\ndescription: Помогает\ntools: read_file\n---\nТы тестировщик.\n", encoding="utf-8",
         )
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
         client.post(url + "/turns/stream", json={"content": "Проверь корзину"})
         for _ in range(100):
@@ -254,7 +254,7 @@ def test_linked_subagent_asks_another_and_gets_the_answer(tmp_path):
         linked = client.put("/api/agents/qa/links/notes")
         self_link = client.put("/api/agents/qa/links/qa")
         stored = (tmp_path / "agents" / "qa.md").read_text(encoding="utf-8")
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
         client.post(url + "/turns/stream", json={"content": "Проверь корзину"})
         history = []

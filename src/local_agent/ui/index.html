@@ -3,6 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Своя тёмная тема есть: расширение Dark Reader страницу не перекрашивает, тема приложения выглядит как задумано. -->
+    <meta name="darkreader-lock" />
     <title>Meepo</title>
     <link rel="icon" type="image/png" href="/ui/assets/meepo-mascot.png" />
     <script>
@@ -65,14 +67,22 @@
             <p class="composer-note" id="composer-note" hidden></p>
             <p class="composer-retry" id="composer-retry" hidden><span id="retry-reason"></span> <button type="button" id="retry">Повторить</button></p>
             <div class="queue" id="queue" aria-label="Очередь сообщений" hidden></div>
-            <div class="composer-box">
-              <textarea id="input" rows="1" placeholder="Сообщение (Enter — отправить, Shift+Enter — новая строка)" aria-label="Сообщение"></textarea>
-              <div class="composer-bar">
-                <select id="model-select" aria-label="Модель" title="Модель этой сессии"></select>
-                <button class="mode" id="mode-badge" type="button" title="Права агента в папке проекта — изменить в настройках проекта"></button>
+            <div class="composer-box frame">
+              <div class="frame-head">
+                <span class="frame-left">
+                  <select id="model-select" aria-label="Модель" title="Модель этой сессии"></select>
+                  <button class="mode" id="mode-badge" type="button" title="Права агента в папке проекта — изменить в настройках проекта"></button>
+                </span>
                 <span class="usage" id="usage"></span>
-                <span class="stop-hint" id="stop-hint" hidden>Esc — остановить</span>
-                <button class="primary send" id="send" type="submit" title="Отправить">↑</button>
+              </div>
+              <div class="composer-row">
+                <span class="prompt-mark" aria-hidden="true">◆</span>
+                <textarea id="input" rows="1" placeholder="Сообщение агенту" aria-label="Сообщение"></textarea>
+                <button class="send" id="send" type="submit" title="Отправить">↵</button>
+              </div>
+              <div class="frame-foot">
+                <span class="stop-hint" id="stop-hint" hidden>Esc — стоп</span>
+                <span>Enter — отправить · Shift+Enter — строка</span>
               </div>
             </div>
           </form>
@@ -93,7 +103,6 @@
             <div class="editor-actions">
               <span class="files-path" id="files-path"></span>
               <span class="files-actions"><span class="hint" id="files-status"></span>
-                <input id="files-line" type="number" min="1" placeholder="строка" title="Перейти к строке (Enter)" aria-label="Перейти к строке" hidden />
                 <button type="button" id="files-source" hidden>‹› Исходник</button>
                 <button type="button" id="files-edit" hidden>✎ Править</button>
                 <button class="primary" type="button" id="files-save" hidden>Сохранить</button></span>
@@ -103,15 +112,52 @@
         </div>
       </main>
 
-      <main class="view page" id="view-wiki" hidden>
-        <div class="page-head">
-          <h2>Вики</h2>
-          <input id="wiki-search" type="search" placeholder="Поиск по вики" aria-label="Поиск по вики" />
-        </div>
-        <p class="hint">Заметки агента по статьям и ссылкам. Пришлите ссылку в чат и попросите сделать заметку. Файлы лежат в <code>data/wiki</code>.</p>
-        <div class="split">
-          <div class="list tree-list" id="wiki-list"></div>
-          <article class="reader" id="wiki-page"><p class="hint">Выберите страницу.</p></article>
+      <main class="view wiki-view" id="view-wiki" hidden>
+        <aside class="wiki-chat" id="wiki-chat" aria-label="Чат вики">
+          <div class="wiki-chat-head">
+            <strong>○ Чат вики</strong>
+            <span class="wiki-tools" id="wiki-tools">
+              <input id="wiki-search" type="search" placeholder="Поиск по вики" aria-label="Поиск по вики" />
+              <button id="wiki-lint" type="button" title="Агент в чате вики найдёт противоречия, устаревшее и дубли и покажет список правок — применит только отмеченные">lint</button>
+            </span>
+            <button type="button" class="ghost" id="wiki-chat-clear" title="Начать разговор заново: агент его забудет, заметки останутся">Очистить</button>
+            <button type="button" class="ghost icon" id="wiki-chat-close" title="Скрыть чат вики">«</button>
+          </div>
+          <div class="messages wiki-chat-log" id="wiki-chat-log" aria-live="polite"></div>
+          <div class="wiki-chat-cards" id="wiki-chat-cards"></div>
+          <div class="wiki-chat-queue" id="wiki-chat-queue" hidden></div>
+          <div class="composer wiki-chat-composer">
+            <div class="composer-box frame">
+              <div class="frame-head">
+                <span class="frame-left"><span class="frame-label">◇ вики</span><span class="model-name" id="wiki-chat-model"></span></span>
+                <span class="wiki-chat-status" id="wiki-chat-status"></span>
+              </div>
+              <div class="composer-row">
+                <span class="prompt-mark" aria-hidden="true">◆</span>
+                <textarea id="wiki-chat-input" rows="1" placeholder="Текст, ссылка или вопрос" aria-label="Сообщение в чат вики"></textarea>
+                <button class="send" type="button" id="wiki-chat-send" title="Отправить (Enter)">↵</button>
+              </div>
+              <div class="frame-foot"><span>Enter — отправить · /lint — проверка</span></div>
+            </div>
+          </div>
+        </aside>
+        <div class="resizer" id="wiki-chat-resizer" aria-label="Ширина чата вики"></div>
+        <div class="wiki-main page">
+          <div class="page-head">
+            <button id="wiki-chat-toggle" type="button" title="Показать чат вики" hidden>» Чат вики</button>
+            <h2>Вики</h2>
+          </div>
+          <p class="hint">Пришлите в чат вики текст или ссылку и попросите «добавь заметку»: агент сверит ключевые слова с <code>index.md</code> и дополнит подходящую заметку или создаст новую. Файлы лежат в <code>data/wiki</code>.</p>
+          <nav class="subtabs" id="wiki-tabs" aria-label="Вид вики">
+            <button type="button" data-mode="list" aria-pressed="true">Список</button>
+            <button type="button" data-mode="graph" aria-pressed="false">Граф</button>
+          </nav>
+          <div class="split" id="wiki-split">
+            <div class="list tree-list" id="wiki-list"></div>
+            <div class="graph" id="wiki-graph" hidden></div>
+            <div class="resizer" id="wiki-list-resizer" aria-label="Ширина списка заметок"></div>
+            <article class="reader" id="wiki-page"><p class="hint">Выберите страницу.</p></article>
+          </div>
         </div>
       </main>
 

@@ -7,7 +7,7 @@ from tests.test_graph_flow import settings
 
 from local_agent.api.app import create_app
 
-MODULES = ("app.js", "api.js", "chat.js", "panel.js", "pages.js", "team.js", "files.js", "markdown.js", "highlight.js", "tree.js", "diff.js")
+MODULES = ("app.js", "api.js", "chat.js", "panel.js", "pages.js", "team.js", "files.js", "markdown.js", "highlight.js", "tree.js", "diff.js", "graph.js", "wikichat.js", "resize.js")
 
 
 def test_ui_is_served_without_build_and_external_resources(tmp_path) -> None:

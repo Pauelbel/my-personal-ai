@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from local_agent.agent.main_agent import MAIN_AGENT_ID
-from local_agent.projects.models import DRAFTS_PROJECT_ID
 from local_agent.sessions.models import DEFAULT_SESSION_TITLE, Session
 from local_agent.sessions.service import SessionService
 
@@ -20,7 +19,7 @@ class SessionCreate(BaseModel):
     agent_id: str = Field(default="main", min_length=1)
     model: str | None = None
     # Провайдер и папка берутся из проекта, модель — тоже, если проект её запомнил.
-    # Без проекта сессия попадает в «Черновики».
+    # Без проекта сессию не создать: её папку задаёт проект.
     project_id: str | None = None
 
 
@@ -55,7 +54,9 @@ def create_session(
 ) -> Session:
     agent_id = payload.agent_id
     model = payload.model if payload.model is not None else request.app.state.settings.default_model
-    project = request.app.state.project_service.get(payload.project_id or DRAFTS_PROJECT_ID)
+    if not payload.project_id:
+        raise HTTPException(status_code=400, detail="Сначала выберите проект: сессия работает в папке проекта")
+    project = request.app.state.project_service.get(payload.project_id)
     if project is None:
         raise HTTPException(status_code=400, detail="Проект не найден")
     require_agent(request, agent_id)
@@ -75,7 +76,8 @@ def list_sessions(
     service: Annotated[SessionService, Depends(get_session_service)],
     include_hidden: bool = False,
 ) -> list[Session]:
-    return [session for session in service.list() if include_hidden or not session.hidden]
+    # Служебная сессия вики живёт на вкладке «Вики» и в списке разговоров не нужна.
+    return [session for session in service.list() if session.kind == "chat" and (include_hidden or not session.hidden)]
 
 
 @router.get("/{session_id}", response_model=Session)

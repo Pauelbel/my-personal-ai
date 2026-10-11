@@ -79,7 +79,7 @@ def delete_project(
     project_id: str,
     service: Annotated[ProjectService, Depends(get_project_service)],
 ) -> None:
-    # Сессии удалённого проекта переходят в «Черновики»; сами «Черновики» удалить нельзя.
+    # Вместе с проектом удаляются его сессии; папка на диске остаётся.
     try:
         deleted = service.delete(project_id)
     except ProjectError as exc:

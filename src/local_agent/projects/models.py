@@ -5,10 +5,6 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-# Системный проект «Черновики»: создаётся при старте, его нельзя удалить. Сюда попадают сессии,
-# созданные без проекта, и сессии удалённых проектов.
-DRAFTS_PROJECT_ID = "drafts"
-
 
 class Project(BaseModel):
     id: str

@@ -305,6 +305,9 @@ async def _execute(box: Toolbox, call: dict, decision: dict, workspace: Path | N
     if not box.is_active(tool.id):
         # Модель позвала инструмент из реестра, не подключив его: подключаем на ходу.
         box.activate([tool.id])
+    if "selected" in decision:
+        # Схема инструмента это поле запрещает, так что модель подставить его не может — только пользователь.
+        arguments = {**arguments, "selected": decision["selected"]}
     token = CURRENT_TURN.set(turn)
     try:
         return await tool.execute(arguments, workspace)
@@ -355,7 +358,11 @@ def normalize_decision(value: object) -> dict:
         text = str(value.get("text") or "").strip()
         if value["action"] == "reply" and not text:
             return {"action": "reject", "text": ""}
-        return {"action": value["action"], "text": text}
+        decision = {"action": value["action"], "text": text}
+        # Карточка со списком (правки вики после lint): номера пунктов, которые пользователь отметил.
+        if value["action"] == "approve" and isinstance(value.get("selected"), list):
+            decision["selected"] = [item for item in value["selected"] if isinstance(item, int) and not isinstance(item, bool)]
+        return decision
     return {"action": "reject", "text": ""}
 
 

@@ -1,9 +1,11 @@
-"""Вики для UI: список страниц, поиск, чтение и ручная правка."""
+"""Вики для UI: список страниц, граф ссылок, поиск, чтение и ручная правка."""
 
 import re
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+from local_agent.wiki import notes
 
 router = APIRouter(prefix="/wiki", tags=["wiki"])
 
@@ -13,12 +15,92 @@ class PageContent(BaseModel):
     content: str
 
 
+class NoteMeta(BaseModel):
+    type: str = ""
+    title: str = ""
+    description: str = ""
+    tags: list[str] = []
+    keywords: list[str] = []
+
+
+class PageView(PageContent):
+    """Для просмотра: тело без фронтматтера и разобранные поля OKF отдельно."""
+
+    body: str
+    meta: NoteMeta | None = None
+
+
 @router.get("")
 def pages(request: Request) -> list[dict]:
     return [
         {"path": page.path, "title": page.title, "updated_at": page.updated_at.isoformat(), "size": page.size}
         for page in request.app.state.wiki_service.pages()
     ]
+
+
+class ChatModel(BaseModel):
+    provider: str | None = None
+    model: str | None = None
+
+
+CHAT_TITLE = "Чат вики"
+
+
+def _chat(request: Request):
+    """Чат вики — одна служебная сессия вне проектов; самая свежая, если их почему-то несколько."""
+    sessions = [session for session in request.app.state.session_service.list() if session.kind == "wiki"]
+    return max(sessions, key=lambda session: session.created_at, default=None)
+
+
+def _busy(request: Request, session_id: str) -> bool:
+    state = request.app.state
+    return state.turn_hub.running(session_id) is not None or state.agent_runtime.is_busy(session_id)
+
+
+@router.get("/chat")
+def chat_state(request: Request) -> dict:
+    """Сессия чата вики (сообщения, ход и карточки читаются обычными API сессий) и сколько реплик он помнит."""
+    session = _chat(request)
+    return {
+        "session": session.model_dump(mode="json") if session else None,
+        "running": bool(session) and _busy(request, session.id),
+        "memory": request.app.state.settings.wiki_context_messages,
+    }
+
+
+@router.post("/chat")
+def ensure_chat(payload: ChatModel, request: Request) -> dict:
+    """Чат вики с моделью, выбранной в интерфейсе: создаётся при первом сообщении, модель следует за выбором."""
+    state = request.app.state
+    session = _chat(request)
+    projects = sorted(state.project_service.list(), key=lambda project: project.updated_at, reverse=True)
+    provider = payload.provider or (session.provider if session else None) or (projects[0].provider if projects else "lm_studio")
+    model = payload.model or (session.model if session else "") or (projects[0].model if projects else "") or state.settings.default_model
+    if not model:
+        raise HTTPException(status_code=400, detail="Выберите модель под полем ввода чата")
+    if session is None:
+        session = state.session_service.create(
+            title=CHAT_TITLE, agent_id="wiki", model=model, provider=provider, project_id=None, hidden=True, kind="wiki",
+        )
+    elif (session.provider, session.model) != (provider, model) and not _busy(request, session.id):
+        session = state.session_service.configure(session.id, provider=provider, model=model) or session
+    return {"session": session.model_dump(mode="json")}
+
+
+@router.delete("/chat", status_code=204)
+def clear_chat(request: Request) -> None:
+    """«Очистить»: разговор вики начинается заново, заметки не трогаются."""
+    state = request.app.state
+    sessions = [session for session in state.session_service.list() if session.kind == "wiki"]
+    if any(_busy(request, session.id) for session in sessions):
+        raise HTTPException(status_code=409, detail="Сначала дождитесь ответа или остановите его")
+    for session in sessions:
+        state.session_service.delete(session.id)
+
+
+@router.get("/graph")
+def graph(request: Request) -> dict:
+    return request.app.state.wiki_service.graph()
 
 
 @router.get("/search")
@@ -59,18 +141,25 @@ def snippet(text: str, query: str) -> str:
     return ("…" if start else "") + piece + ("…" if start + SNIPPET_CHARS < len(text) else "")
 
 
-@router.get("/page", response_model=PageContent)
-def read(path: str, request: Request) -> PageContent:
+@router.get("/page", response_model=PageView)
+def read(path: str, request: Request) -> PageView:
     try:
-        return PageContent(path=path, content=request.app.state.wiki_service.read(path))
+        content = request.app.state.wiki_service.read(path)
+        frontmatter, body = notes.split_frontmatter(content)
+        meta = None
+        if frontmatter:
+            note = notes.parse(path, content)
+            meta = NoteMeta(type=note.type, title=note.title, description=note.description,
+                            tags=list(note.tags), keywords=list(note.keywords))
+        return PageView(path=path, content=content, body=body, meta=meta)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.put("/page", response_model=PageContent)
-def write(payload: PageContent, request: Request) -> PageContent:
+@router.put("/page", response_model=PageView)
+def write(payload: PageContent, request: Request) -> PageView:
     try:
         request.app.state.wiki_service.write(payload.path, payload.content)
     except ValueError as exc:

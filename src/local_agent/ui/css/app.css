@@ -9,6 +9,7 @@
   --side: 320px;
   --column: 780px;
   --gutter: max(16px, calc((100% - var(--column)) / 2));
+  --frame-bg: var(--bg);
 }
 
 * { box-sizing: border-box; }
@@ -106,11 +107,14 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .agent-chip[aria-current="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
 
 /* Сообщения */
-.messages { flex: 1; overflow: auto; padding: 20px var(--gutter) 8px; }
+/* Лента и поле ввода — в моноширинном шрифте, как в терминале; рамки с подписями на кромке.
+   Фон под подписью на кромке — --frame-bg: тот же, что у контейнера рамки. */
+.messages { flex: 1; overflow: auto; padding: 20px var(--gutter) 8px; font: 14px/1.6 var(--mono); }
+.messages code, .messages pre { font-size: 13px; }
 .msg { margin: 0 0 18px; }
 .msg.user { display: flex; justify-content: flex-end; }
 .msg.user .bubble {
-  background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px 14px 4px 14px; padding: 8px 14px;
+  background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 12px;
   max-width: 85%; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .msg.assistant .text { overflow-wrap: anywhere; line-height: 1.6; }
@@ -120,6 +124,9 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .msg.report .from { font: 12px var(--mono); color: var(--muted); margin-bottom: 4px; }
 .msg.report.folded .text { max-height: 12em; overflow: hidden; mask-image: linear-gradient(to bottom, black 55%, transparent); }
 .msg-foot { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; margin-top: 6px; font: 12px/1.5 var(--mono); color: var(--muted); }
+.msg-foot .stats::before { content: "■ "; }
+.msg-action.push::before { content: "⧉ "; }
+.msg-action.push { color: var(--accent-2); }
 .msg-foot.bare { opacity: 0; transition: opacity .15s; }
 .msg:hover .msg-foot.bare, .msg-foot.bare:focus-within { opacity: 1; }
 .msg-action { border: 0; background: transparent; color: var(--muted); font: inherit; padding: 0 4px; }
@@ -128,20 +135,39 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .msg-action:hover:not(:disabled) { color: var(--fg); background: transparent; }
 @media (hover: none) { .msg-foot.bare { opacity: 1; } }
 
-/* Вызовы инструментов: шаги на общей направляющей */
-.steps { display: flex; flex-direction: column; gap: 1px; margin: -6px 0 16px; padding-left: 10px; border-left: 2px solid var(--line); }
-.step { font-size: 13px; color: var(--muted); }
-.step summary { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 1px 0; cursor: pointer; list-style: none; }
+/* Вызовы инструментов: строки в рамке, подпись и итог — на верхней кромке */
+.tools {
+  position: relative; margin: 22px 0 18px; padding: 12px 10px 6px; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 55%, transparent);
+}
+.tools:not([open]) { padding: 6px 10px 0; }
+.tools-head {
+  position: absolute; top: -0.8em; left: 10px; right: 10px; display: flex; justify-content: space-between; gap: 8px;
+  font: 12px/1.6 var(--mono); color: var(--muted); cursor: pointer; list-style: none;
+}
+.tools-head::-webkit-details-marker { display: none; }
+.tools-title, .tools-meta { background: var(--frame-bg); padding: 0 6px; white-space: nowrap; }
+.tools-title { font-weight: 600; color: var(--accent-2); }
+.tools-head:hover .tools-title { color: var(--fg); }
+.tools-caret { display: inline-block; transition: transform .15s; }
+.tools:not([open]) .tools-caret { transform: rotate(-90deg); }
+.tools-rows { display: flex; flex-direction: column; }
+.step { font: 13px/1.6 var(--mono); color: var(--muted); }
+.step summary {
+  display: grid; grid-template-columns: 1.4em minmax(0, 20ch) minmax(0, 1fr) auto; align-items: baseline; gap: 12px;
+  padding: 1px 4px; border-radius: 4px; cursor: pointer; list-style: none;
+}
 .step summary::-webkit-details-marker { display: none; }
-.step summary:hover, .step[open] summary { color: var(--fg); }
-.step-icon { width: 1em; flex: none; text-align: center; color: var(--ok); }
-.step.failed .step-icon, .step.failed .step-name { color: var(--danger); }
-.step.pending .step-icon { color: var(--muted); }
-.step-name { flex: none; font: 12.5px var(--mono); color: var(--fg); }
+.step summary:hover, .step[open] summary { background: var(--surface-2); color: var(--fg); }
+.step-icon { text-align: center; color: var(--ok); }
+.step.failed :is(.step-icon, .step-name, .step-meta) { color: var(--danger); }
+.step.pending .step-icon { color: var(--accent); animation: pulse 1s infinite alternate; }
+.step-name { font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .step-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-meta { text-align: right; white-space: nowrap; }
 .step pre {
   white-space: pre-wrap; max-height: 280px; overflow: auto; margin: 4px 0 8px; padding: 8px 10px; color: var(--fg);
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 12px;
 }
 
 /* Markdown: ответы в чате, вики и просмотр файлов */
@@ -179,16 +205,17 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 
 /* Печатающийся ответ */
 .streaming .status { display: flex; gap: 8px; align-items: center; margin: 6px 0 2px; font: 12px var(--mono); color: var(--muted); }
-.streaming .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--agent); animation: pulse 1s infinite alternate; }
+.streaming .status::before { content: "◆"; color: var(--agent); animation: pulse 1s infinite alternate; }
 .trace { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .trace summary { cursor: pointer; font-family: var(--mono); }
 .trace pre { white-space: pre-wrap; max-height: 200px; overflow: auto; margin: 4px 0; padding: 6px 10px; border-left: 2px solid var(--line); font-size: 12px; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: 2px; margin-top: 12vh; color: var(--muted); text-align: center; }
 .empty img { width: 112px; height: 112px; margin-bottom: 10px; filter: drop-shadow(0 8px 18px var(--shadow)); }
 .empty strong { font-size: 22px; color: var(--fg); }
+.empty button { margin-top: 14px; }
 
 /* Низ чата: задачи саб-агентов и поле ввода */
-.chat-bottom { flex: none; padding: 4px var(--gutter) 14px; }
+.chat-bottom { flex: none; padding: 14px var(--gutter) 16px; }
 .dock { position: relative; margin: 12px 0 10px; padding: 12px 6px 6px; border: 1px solid var(--line-strong); border-radius: 10px; }
 .dock.collapsed { padding: 6px 6px 0; }
 .dock.collapsed .tasks { display: none; }
@@ -197,7 +224,7 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
   border: 0; background: transparent; padding: 0; font: 12px/1.6 var(--mono); color: var(--muted);
 }
 .dock-head:hover:not(:disabled) { background: transparent; color: var(--fg); }
-.dock-title, .dock-summary { background: var(--bg); padding: 0 6px; white-space: nowrap; }
+.dock-title, .dock-summary { background: var(--frame-bg); padding: 0 6px; white-space: nowrap; }
 .dock-title { font-weight: 600; color: var(--accent-2); }
 .dock-caret { display: inline-block; transition: transform .15s; }
 .dock.collapsed .dock-caret { transform: rotate(-90deg); }
@@ -216,31 +243,48 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 .task-state.failed { color: var(--danger); }
 .tasks li.more { display: block; font: 12px var(--mono); color: var(--muted); }
 
-.composer-box {
-  border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); padding: 8px 8px 6px 14px;
-  transition: border-color .15s, box-shadow .15s;
+/* Поле ввода в рамке: модель, права и контекст — на верхней кромке, подсказки — на нижней */
+.frame { position: relative; border: 1px solid var(--line-strong); border-radius: 6px; transition: border-color .15s; }
+.frame:focus-within { border-color: var(--accent-2); }
+.frame-head, .frame-foot {
+  position: absolute; left: 10px; right: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  font: 12px/1.6 var(--mono); color: var(--muted); pointer-events: none;
 }
-.composer-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.frame-head { top: -0.8em; }
+.frame-foot { bottom: -0.8em; justify-content: flex-end; }
+.frame-head > *, .frame-foot > * { background: var(--frame-bg); padding: 0 6px; white-space: nowrap; pointer-events: auto; min-width: 0; }
+.frame-left { display: flex; align-items: center; gap: 2px; overflow: hidden; }
+.frame-label, .model-name { font-weight: 600; color: var(--fg); }
+.frame-label { color: var(--accent-2); margin-right: 6px; }
+.model-name { overflow: hidden; text-overflow: ellipsis; }
+.composer-box { padding: 16px 8px 14px; }
+.composer-row { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.prompt-mark { flex: none; color: var(--ok); font: 13px/28px var(--mono); padding-left: 4px; }
 .composer textarea {
-  display: block; width: 100%; min-height: 28px; max-height: 40vh; resize: none; border: 0; background: transparent; padding: 4px 0;
+  flex: 1; min-width: 0; min-height: 28px; max-height: 40vh; resize: none; border: 0; background: transparent; padding: 4px 0;
+  font: 14px/1.45 var(--mono);
 }
 .composer textarea:focus { outline: none; }
-.composer-bar { display: flex; align-items: center; gap: 6px; margin-top: 4px; min-width: 0; }
 #model-select {
-  min-width: 0; max-width: 240px; border: 0; background: transparent; border-radius: 6px; padding: 2px 4px;
-  font: 12px var(--mono); color: var(--muted); cursor: pointer;
+  min-width: 0; max-width: 240px; border: 0; background: transparent; border-radius: 4px; padding: 0 2px;
+  font: 600 12px var(--mono); color: var(--fg); cursor: pointer;
 }
-#model-select:hover { background: var(--surface-2); color: var(--fg); }
-.mode { border: 0; background: transparent; padding: 2px 6px; font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
-.mode:hover:not(:disabled) { color: var(--fg); background: transparent; }
+#model-select:hover { background: var(--surface-2); }
+.mode { border: 0; background: transparent; padding: 0 4px; font: 600 12px var(--mono); color: var(--danger); white-space: nowrap; text-transform: uppercase; letter-spacing: .03em; }
+.mode::before { content: "· "; color: var(--muted); font-weight: 400; }
+.mode:hover:not(:disabled) { background: transparent; filter: brightness(1.2); }
 .mode.read { color: var(--warn); }
-.usage { margin-left: auto; display: flex; align-items: center; gap: 8px; font: 12px var(--mono); color: var(--muted); white-space: nowrap; min-width: 0; }
-.meter { width: 60px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; flex: none; }
-.meter > span { display: block; height: 100%; border-radius: 3px; background: var(--ok); }
-.meter.warn > span { background: var(--warn); }
-.meter.full > span { background: var(--danger); }
-.stop-hint { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
-.send { width: 34px; height: 34px; padding: 0; border-radius: 50%; font-size: 16px; flex: none; }
+.usage { display: flex; align-items: center; gap: 6px; color: var(--ok); }
+.usage:empty { display: none; }
+.meter-text { letter-spacing: -1px; }
+.meter-text.warn { color: var(--warn); }
+.meter-text.full { color: var(--danger); }
+.stop-hint { color: var(--danger); }
+.send {
+  flex: none; width: 30px; height: 28px; padding: 0; border-radius: 4px; font: 14px var(--mono);
+  border-color: var(--line-strong); background: transparent; color: var(--accent-2);
+}
+.send:hover:not(:disabled) { border-color: var(--accent-2); background: transparent; }
 /* Очередь: сообщения, которые уйдут после ответа */
 .queue { display: flex; flex-direction: column; gap: 2px; margin: 0 0 6px; padding: 4px 8px; border: 1px dashed var(--line-strong); border-radius: 10px; font: 12.5px var(--mono); }
 .queue-item { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -278,10 +322,20 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 .diff-line.removed .diff-sign { color: var(--danger); }
 .diff-skip { padding: 0 8px; color: var(--muted); background: var(--bg); }
 .card textarea { width: 100%; margin-top: 6px; resize: vertical; min-height: 54px; }
+.edits { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.edit { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.edit:has(input:not(:checked)) { opacity: .55; }
+.edit input { margin-top: 3px; flex: none; }
+.edit-text { min-width: 0; overflow-wrap: anywhere; }
+.edit-head { font: 12px var(--mono); color: var(--accent-2); }
+.edit-problem { margin-top: 2px; }
+.edit-change { margin-top: 2px; color: var(--muted); }
 
 /* Страницы: вики, возможности, память */
 .page { overflow: auto; padding: 16px 24px; }
-.page-head { display: flex; align-items: center; gap: 12px; }
+.page-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.page-head input[type="search"] { flex: 0 1 240px; min-width: 0; }
+.page-head button { white-space: nowrap; }
 .page-head h2 { margin: 0; flex: 1; font-size: 20px; }
 .split { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; margin-top: 12px; min-height: 60vh; }
 .list { list-style: none; margin: 0; padding: 0; border-right: 1px solid var(--line); }
@@ -328,6 +382,85 @@ button.trow-main:hover:not(:disabled) { background: transparent; }
 .subtabs button[aria-pressed="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
 .subtabs .count { font: 11px var(--mono); color: var(--muted); }
 .list.tree-list { padding-right: 6px; overflow: auto; }
+
+/* Вики: слева чат вики со своим полем ввода, справа заметки */
+.wiki-view { display: grid; grid-template-columns: var(--wiki-chat-w, minmax(320px, 420px)) 0 minmax(0, 1fr); min-height: 0; }
+.wiki-view.chat-hidden { grid-template-columns: minmax(0, 1fr); }
+.wiki-view.chat-hidden .resizer { display: none; }
+/* Разделитель панелей: узкая полоса над границей колонок, при наведении и перетаскивании подсвечивается */
+.resizer { position: relative; z-index: 2; cursor: col-resize; touch-action: none; }
+.resizer::after { content: ""; position: absolute; inset: 0 -4px; transition: background .15s; }
+.resizer:hover::after, .resizer:focus-visible::after, body.resizing .resizer::after { background: color-mix(in srgb, var(--accent-2) 45%, transparent); }
+.resizer:focus-visible { outline: none; }
+body.resizing { cursor: col-resize; user-select: none; }
+#wiki-split { grid-template-columns: var(--wiki-list-w, 260px) 0 minmax(0, 1fr); }
+#wiki-split.graph-mode { grid-template-columns: var(--wiki-graph-w, minmax(0, 3fr)) 0 minmax(280px, 2fr); }
+#wiki-split { column-gap: 8px; }
+#wiki-split .resizer::after { inset: 0 -8px; }
+.wiki-main { min-width: 0; min-height: 0; }
+.wiki-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); background: var(--surface); --frame-bg: var(--surface); }
+.wiki-chat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 10px 10px 14px; border-bottom: 1px solid var(--line); }
+.wiki-chat-status { font: 12px var(--mono); color: var(--muted); }
+.wiki-chat-status:empty { display: none; }
+.wiki-chat-status.running { color: var(--accent-2); }
+.wiki-chat-status.waiting { color: var(--warn); }
+.wiki-chat-log { padding: 14px 14px 6px; }
+.wiki-chat-empty { margin: 8px 0; }
+.wiki-forgotten { opacity: .5; }
+.wiki-forget-line { display: flex; align-items: center; gap: 10px; margin: -4px 0 16px; font: 11px var(--mono); color: var(--muted); }
+.wiki-forget-line::before, .wiki-forget-line::after { content: ""; flex: 1; border-top: 1px dashed var(--line-strong); }
+.wiki-chat-cards .card { margin: 0 14px 10px; }
+.wiki-chat-queue { padding: 0 14px 6px; }
+.wiki-chat-composer { padding: 16px 14px 18px; border-top: 1px solid var(--line); }
+.wiki-chat-head strong { flex: none; white-space: nowrap; }
+/* Поиск и lint — второй строкой шапки чата на всю ширину: при любой ширине чата поле поиска не сжимается в ноль. */
+.wiki-tools { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.wiki-chat-head .wiki-tools { order: 1; flex: 1 1 100%; }
+.wiki-chat-head #wiki-chat-clear { margin-left: auto; }
+.wiki-tools input { flex: 1 1 120px; min-width: 0; padding: 3px 8px; }
+.wiki-tools button { white-space: nowrap; padding: 3px 8px; }
+.wiki-chat-head #wiki-chat-clear { padding: 3px 6px; }
+.page-head .wiki-tools { flex: 0 1 auto; }
+.tabs button.attention::after { content: " ●"; color: var(--warn); font-size: 10px; vertical-align: 2px; }
+.note-meta { margin: 4px 0 2px; }
+.note-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px var(--mono); padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.chip.type { color: var(--accent-fg); background: var(--accent); }
+.note-description { margin: 8px 0 0; color: var(--muted); font-style: italic; }
+.split.graph-mode { height: calc(100vh - 230px); min-height: 380px; }
+.split.graph-mode .reader { overflow: auto; }
+.graph { position: relative; min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.graph[hidden] { display: none; }
+.graph-svg { display: block; position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; user-select: none; }
+.graph-svg.pointing { cursor: pointer; }
+.graph-svg.panning { cursor: grabbing; }
+/* Цвета графа — токены темы: тёмный режим браузера перекрашивает их вместе со страницей. */
+/* Линии — средним тоном: видны и на светлом, и на тёмном фоне, даже если браузер перекрасил только страницу. */
+.graph-edge { stroke: var(--muted); stroke-opacity: .6; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.graph-svg.hovering .graph-edge { stroke-opacity: .12; }
+.graph-svg.hovering .graph-edge.lit { stroke: var(--accent-2); stroke-opacity: .9; }
+.graph-node { fill: var(--muted); }
+.graph-node.c1 { fill: var(--cluster-1); }
+.graph-node.c2 { fill: var(--cluster-2); }
+.graph-node.c3 { fill: var(--cluster-3); }
+.graph-node.c4 { fill: var(--cluster-4); }
+.graph-node.c5 { fill: var(--cluster-5); }
+.graph-node.c6 { fill: var(--cluster-6); }
+.graph-node.c7 { fill: var(--cluster-7); }
+.graph-node.c8 { fill: var(--cluster-8); }
+.graph-svg.hovering .graph-node:not(.lit) { opacity: .25; }
+.graph-ring { display: none; fill: none; stroke: var(--fg); stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.graph-ring.shown { display: inline; }
+.graph-labels { font-family: var(--mono); }
+/* Обводка цветом фона под текстом: подпись читается поверх линий и чужих точек. */
+.graph-label {
+  fill: var(--fg); stroke: var(--surface); stroke-linejoin: round; paint-order: stroke;
+  text-anchor: middle; dominant-baseline: hanging; pointer-events: none; opacity: var(--label-opacity, 1);
+}
+.graph-label.lit { opacity: 1; }
+.graph-svg.hovering .graph-label:not(.lit) { opacity: calc(var(--label-opacity, 1) * .25); }
+.graph-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; }
+.graph-empty[hidden] { display: none; }
 
 /* Окна */
 dialog { border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--fg); width: min(560px, calc(100vw - 32px)); box-shadow: 0 16px 40px var(--shadow); }
@@ -421,8 +554,14 @@ dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 13px;
 .file-view { margin: 0; padding: 10px 12px; white-space: pre; font-family: var(--mono); font-size: 13px; line-height: 1.5; tab-size: 4; }
 .code-mark { position: absolute; left: 0; right: 0; pointer-events: none; background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 3px 0 var(--accent); }
 .code-mark:not([style]) { display: none; }
-#files-line { width: 84px; padding: 3px 6px; font: 12px var(--mono); }
-.files-markdown { padding: 8px 20px 20px; max-width: 980px; }
+.files-markdown { padding: 8px 20px 20px; max-width: 980px; min-width: 0; flex: 1; }
+.md-lines { position: relative; display: flex; min-height: 100%; }
+.md-gutter {
+  position: relative; flex: none; width: 3.6em; user-select: none; border-right: 1px solid var(--line); background: var(--surface);
+  font: 12px/20px var(--mono); color: var(--muted); opacity: .8;
+}
+.md-gutter span { position: absolute; right: 10px; }
+.files-markdown .line-mark { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: -8px 0 0 color-mix(in srgb, var(--accent) 16%, transparent); }
 .files-markdown pre { background: var(--bg); }
 .files-editor { display: block; width: 100%; height: 100%; min-height: 0; border: 0; border-radius: var(--radius); resize: none; font-family: var(--mono); font-size: 13px; line-height: 1.5; tab-size: 4; padding: 10px 12px; }
 
@@ -442,12 +581,17 @@ dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 13px;
   .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 20; width: min(320px, 88vw); box-shadow: 4px 0 24px var(--shadow); }
   .side { width: auto; border-left: 0; border-top: 1px solid var(--line); max-height: 38vh; }
   .messages { padding: 14px 12px 6px; }
-  .chat-bottom { padding: 2px 10px 10px; }
+  .chat-bottom { padding: 14px 10px 10px; }
   .agent-bar { padding: 0 8px; }
-  .composer-box { padding-left: 12px; }
   #model-select { max-width: 130px; }
-  .meter, .usage .speed, .stop-hint { display: none; }
+  .meter-text, .usage .speed, .stop-hint, .frame-foot { display: none; }
   .split { grid-template-columns: 1fr; }
+  .split.graph-mode { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+  .wiki-view { display: block; overflow: auto; }
+  .resizer { display: none; }
+  #wiki-split, #wiki-split.graph-mode { grid-template-columns: 1fr; }
+  .wiki-main { overflow: visible; }
+  .wiki-chat { height: 75vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 30vh; overflow: auto; }
   .split.files { height: auto; }
   .files-tree { border-right: 0; border-bottom: 1px solid var(--line); max-height: 30vh; }

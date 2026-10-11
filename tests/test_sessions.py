@@ -1,6 +1,7 @@
 """Проверка сессий подтверждает API и сохранение данных между запусками."""
 
 from fastapi.testclient import TestClient
+from tests.fakes import post_session
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
@@ -36,32 +37,26 @@ def test_session_persists_after_app_restart(tmp_path) -> None:
     assert missing.status_code == 404
 
 
-def test_session_without_project_goes_to_drafts(tmp_path) -> None:
-    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", projects_path=tmp_path / "projects", drafts_path=tmp_path / "drafts", _env_file=None)
+def test_session_needs_a_project(tmp_path) -> None:
+    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", projects_path=tmp_path / "projects", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
-        session = client.post("/api/sessions", json={}).json()
-        # Старое поле папки в запросе больше ничего не значит: сессия всё равно попадает в «Черновики».
-        with_folder = client.post("/api/sessions", json={"workspace": str(tmp_path)}).json()
-        unknown = client.post("/api/sessions", json={"project_id": "nope"})
-        projects = client.get("/api/projects").json()
+        without = client.post("/api/sessions", json={})
+        unknown = post_session(client, {"project_id": "nope"})
+        # Старое поле папки в запросе ничего не значит: папку задаёт проект.
+        session = post_session(client, {"workspace": str(tmp_path)}).json()
+        [project] = client.get("/api/projects").json()
 
-    assert session["project_id"] == with_folder["project_id"] == "drafts"
+    assert without.status_code == 400 and "выберите проект" in without.json()["detail"]
     assert unknown.status_code == 400
-    [drafts] = projects
-    assert drafts["id"] == "drafts" and drafts["name"] == "drafts"
-    assert drafts["workspace"] == str((tmp_path / "drafts").resolve())
-    assert (tmp_path / "drafts").is_dir()
-
-    with TestClient(create_app(settings)) as client:
-        assert client.get("/api/projects").json() == projects
+    assert session["project_id"] == project["id"] and project["workspace"] != str(tmp_path)
 
 
 def test_session_can_be_renamed(tmp_path) -> None:
     settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
-        session = client.post("/api/sessions", json={}).json()
+        session = post_session(client, {}).json()
         renamed = client.put(
             f"/api/sessions/{session['id']}/title", json={"title": "  Мой проект  "}
         )
@@ -84,8 +79,8 @@ def test_deleting_session_removes_only_its_messages(tmp_path) -> None:
     settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
-        first = client.post("/api/sessions", json={}).json()
-        second = client.post("/api/sessions", json={}).json()
+        first = post_session(client, {}).json()
+        second = post_session(client, {}).json()
         for session in (first, second):
             assert client.post(
                 f"/api/sessions/{session['id']}/messages",

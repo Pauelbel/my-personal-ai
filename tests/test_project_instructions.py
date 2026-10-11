@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.fakes import post_session
 
 from local_agent.agent.context import build_system_prompt
 from local_agent.agent.project_instructions import load_project_instructions
@@ -80,6 +81,8 @@ def test_next_turn_reloads_and_workspace_switch_does_not_leak(tmp_path):
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
+    third = tmp_path / "third"
+    third.mkdir()
     rule = first / "AGENTS.md"
     rule.write_text("ПЕРВОЕ_ПРАВИЛО", encoding="utf-8")
     (second / "AGENTS.md").write_text("ДРУГОЙ_ПРОЕКТ", encoding="utf-8")
@@ -93,13 +96,12 @@ def test_next_turn_reloads_and_workspace_switch_does_not_leak(tmp_path):
     with TestClient(create_app(settings, llm_provider=provider)) as client:
         sessions = {}
 
-        def turn(workspace: Path | None):
+        def turn(workspace: Path):
             if workspace not in sessions:
-                # Без папки — сессия «Черновиков»: правила других проектов в неё не попадают.
                 project_id = client.post("/api/projects", json={
                     "name": workspace.name, "workspace": str(workspace),
-                }).json()["id"] if workspace else None
-                session = client.post("/api/sessions", json={
+                }).json()["id"]
+                session = post_session(client, {
                     "model": "test-model", "project_id": project_id,
                 }).json()
                 sessions[workspace] = session["id"]
@@ -120,6 +122,7 @@ def test_next_turn_reloads_and_workspace_switch_does_not_leak(tmp_path):
         assert "ДРУГОЙ_ПРОЕКТ" in switched
         assert "ОБНОВЛЁННОЕ_ПРАВИЛО" not in switched
         assert "СОХРАНЁННЫЙ_ВЫВОД" not in switched
-        assert "ДРУГОЙ_ПРОЕКТ" not in turn(None)
+        # Проект без своих правил не получает правила других проектов.
+        assert "ДРУГОЙ_ПРОЕКТ" not in turn(third)
         rule.unlink()
         assert "ОБНОВЛЁННОЕ_ПРАВИЛО" not in turn(first)

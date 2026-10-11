@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.fakes import post_session
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
@@ -29,7 +30,7 @@ def settings(tmp_path):
 
 def project_session(client, workspace):
     project = client.post("/api/projects", json={"name": "Проект", "workspace": str(workspace)}).json()
-    return client.post("/api/sessions", json={"model": "test", "project_id": project["id"]}).json()
+    return post_session(client, {"model": "test", "project_id": project["id"]}).json()
 
 
 class WorkflowProvider:
@@ -94,7 +95,7 @@ def test_skill_write_approval_and_new_dialog(tmp_path, approved):
         else:
             assert "отклонил" in results[1].content
         assert not runtime.is_busy(session_id)
-        fresh = client.post("/api/sessions", json={
+        fresh = post_session(client, {
             "project_id": session["project_id"], "model": "test",
         }).json()
         assert client.post(f"/api/sessions/{fresh['id']}/turns", json={
@@ -130,7 +131,7 @@ class RecoveryProvider:
 def test_interrupted_answer_is_saved_and_next_turn_is_available(tmp_path):
     provider = RecoveryProvider()
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         session_id = session["id"]
         runtime = client.app.state.agent_runtime
 

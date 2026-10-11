@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from local_agent.projects.models import DRAFTS_PROJECT_ID, Project
+from local_agent.projects.models import Project
 from local_agent.sessions.models import Session
 from local_agent.sessions.repository import SessionRepository
 from local_agent.storage.json.projects import JsonProjectRepository
@@ -46,11 +46,14 @@ class SessionService:
         agent_id: str,
         model: str,
         provider: str,
-        project_id: str | None = None,
+        project_id: str | None,
         parent_id: str | None = None,
         hidden: bool = False,
+        kind: str = "chat",
     ) -> Session:
-        # Своей папки у сессии нет: её задаёт проект. Без проекта сессия попадает в «Черновики».
+        # Своей папки у сессии нет: её задаёт проект. Без проекта — только служебная сессия вики.
+        if project_id is None and kind == "chat":
+            raise ValueError("Сессия разговора живёт в проекте")
         now = datetime.now(UTC)
         session = Session(
             id=uuid4().hex,
@@ -60,9 +63,10 @@ class SessionService:
             agent_id=agent_id,
             model=model,
             provider=provider,
-            project_id=project_id or DRAFTS_PROJECT_ID,
+            project_id=project_id,
             parent_id=parent_id,
             hidden=hidden,
+            kind=kind,
         )
         return self._effective(self._repository.save(session))
 

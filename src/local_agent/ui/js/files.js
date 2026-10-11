@@ -10,10 +10,12 @@ const $ = (selector) => document.querySelector(selector);
 const view = {
   projectId: null, children: new Map(), open: new Set(), loading: new Set(), message: "",
   path: null, file: null, editing: false,
-  // Markdown показывается исходником с номерами строк; line — подсвеченная строка.
+  // source — Markdown исходником, а не отрисованным; line — подсвеченная строка исходника.
   source: false, line: null,
 };
 let toast = () => {};
+// Открытый файл каждого проекта: после перезагрузки страницы он открывается снова.
+const OPENED_KEY = "files-opened";
 // Путь перетаскиваемого элемента дерева.
 let dragged = null;
 
@@ -26,11 +28,6 @@ export function initFiles(showError) {
     view.source = !view.source;
     syncActions();
     renderBody();
-  });
-  $("#files-line").addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    goToLine(Number.parseInt(event.target.value, 10));
   });
   $("#files-body").addEventListener("keydown", (event) => {
     if (event.key === "s" && (event.ctrlKey || event.metaKey) && view.editing) {
@@ -52,6 +49,27 @@ export async function showFiles(project) {
   }
   if (!view.projectId) return renderTree();
   await refreshTree();
+  const saved = opened()[view.projectId];
+  if (saved && !view.path) await openPath(saved, null, true);
+}
+
+function opened() {
+  try {
+    return JSON.parse(localStorage.getItem(OPENED_KEY)) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberOpened(path) {
+  const all = opened();
+  if (path) all[view.projectId] = path;
+  else delete all[view.projectId];
+  try {
+    localStorage.setItem(OPENED_KEY, JSON.stringify(all));
+  } catch {
+    // Без хранилища просто не запомним.
+  }
 }
 
 // ---------- дерево ----------
@@ -216,8 +234,9 @@ async function deleteEntry(entry) {
 // ---------- открытый файл ----------
 
 // Путь из чата: относительный к папке проекта или абсолютный внутри неё. Папка раскрывается в дереве,
-// файл открывается; line — строка, к которой перейти.
-export async function openPath(path, line = null) {
+// файл открывается; line — строка, к которой перейти. quiet — восстановление после перезагрузки:
+// файла уже нет — молча забываем его, без ошибки.
+export async function openPath(path, line = null, quiet = false) {
   if (!view.projectId) return;
   const id = view.projectId;
   const folders = path.split("/").slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join("/"));
@@ -229,7 +248,8 @@ export async function openPath(path, line = null) {
       await api.files(id, path);
       folder = true;
     } catch {
-      toast(new Error(`В проекте нет «${path}»`));
+      if (quiet) rememberOpened(null);
+      else toast(new Error(`В проекте нет «${path}»`));
       return;
     }
   }
@@ -253,6 +273,7 @@ async function openFile(path) {
     const file = await api.file(id, path);
     if (id !== view.projectId || path !== view.path) return;
     view.file = file;
+    rememberOpened(path);
     syncActions();
     renderBody();
   } catch (error) {
@@ -261,6 +282,7 @@ async function openFile(path) {
 }
 
 function closeFile() {
+  if (view.path && view.projectId) rememberOpened(null);
   Object.assign(view, { path: null, file: null, editing: false });
   syncActions();
   showPath();
@@ -297,8 +319,7 @@ function renderBody() {
   body.classList.remove("editing");
   let content;
   if (isMarkdown() && !view.source) {
-    content = el("article", "reader files-markdown");
-    renderMarkdown(content, view.file.content);
+    content = markdownView(view.file.content);
   } else {
     content = codeView(view.file.content, view.path);
   }
@@ -321,32 +342,62 @@ function codeView(text, path) {
   return wrap;
 }
 
+// Отрисованный Markdown с номерами строк исходника: у каждого блока — номер его первой строки.
+// Колонка номеров отдельная и ставится по фактическому положению блоков, поэтому переносы,
+// таблицы и картинки её не сбивают, а при копировании текста номера в буфер не попадают.
+function markdownView(text) {
+  const wrap = el("div", "md-lines");
+  const gutter = el("div", "md-gutter");
+  gutter.setAttribute("aria-hidden", "true");
+  const doc = el("article", "reader files-markdown");
+  renderMarkdown(doc, text);
+  wrap.append(gutter, doc);
+  const place = () => {
+    const origin = wrap.getBoundingClientRect().top;
+    gutter.replaceChildren(...[...doc.querySelectorAll("[data-line]")].map((block) => {
+      // У строки таблицы и пункта списка число встаёт напротив первой строки текста.
+      const target = block.tagName === "TR" ? block.cells[0] ?? block : block;
+      const style = getComputedStyle(target);
+      const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.5;
+      const number = el("span", "", block.dataset.line);
+      number.style.top = `${target.getBoundingClientRect().top - origin + Number.parseFloat(style.paddingTop) + (lineHeight - 20) / 2}px`;
+      return number;
+    }));
+  };
+  new ResizeObserver(place).observe(doc);
+  return wrap;
+}
+
+// Переход к строке по ссылке «файл:42» из чата: в отрисованном Markdown подсвечивается блок,
+// в который попадает строка, в остальных файлах — сама строка.
 function goToLine(line) {
   if (!view.file || view.editing || !Number.isInteger(line) || line < 1) return;
+  const body = $("#files-body");
   if (isMarkdown() && !view.source) {
-    view.source = true;
-    syncActions();
-    renderBody();
+    const blocks = [...body.querySelectorAll(".files-markdown [data-line]")];
+    const block = blocks.filter((item) => Number(item.dataset.line) <= line).pop() ?? blocks[0];
+    if (!block) return;
+    for (const item of body.querySelectorAll(".line-mark")) item.classList.remove("line-mark");
+    block.classList.add("line-mark");
+    body.scrollTop = Math.max(0, block.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop - body.clientHeight / 3);
+    return;
   }
-  const wrap = $("#files-body .code-lines");
+  const wrap = body.querySelector(".code-lines");
   if (!wrap) return;
   const total = view.file.content.split("\n").length;
   view.line = Math.min(line, total);
-  $("#files-line").value = String(view.line);
   const gutter = wrap.querySelector(".code-gutter");
   const style = getComputedStyle(gutter);
   const height = Number.parseFloat(style.lineHeight);
   const mark = wrap.querySelector(".code-mark");
   mark.style.top = `${gutter.offsetTop + Number.parseFloat(style.paddingTop) + (view.line - 1) * height}px`;
   mark.style.height = `${height}px`;
-  const body = $("#files-body");
   body.scrollTop = Math.max(0, mark.offsetTop - body.clientHeight / 3);
 }
 
 function syncActions() {
   $("#files-source").hidden = !view.file || view.editing || !isMarkdown();
   $("#files-source").textContent = view.source ? "👁 Вид" : "‹› Исходник";
-  $("#files-line").hidden = !view.file || view.editing;
   $("#files-edit").hidden = !view.file || view.file.truncated;
   $("#files-edit").textContent = view.editing ? "👁 Просмотр" : "✎ Править";
   $("#files-save").hidden = !view.editing;

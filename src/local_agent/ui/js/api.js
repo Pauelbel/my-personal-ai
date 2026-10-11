@@ -99,6 +99,11 @@ export const api = {
   wiki: () => request("/wiki"),
   wikiSearch: (query) => request(`/wiki/search?${q({ q: query })}`),
   wikiPage: (path) => request(`/wiki/page?${q({ path })}`),
+  wikiGraph: () => request("/wiki/graph"),
+  // Чат вики — служебная сессия вне проектов: её сообщения, ход и очередь — обычными запросами сессии.
+  wikiChat: () => request("/wiki/chat"),
+  ensureWikiChat: (provider, model) => request("/wiki/chat", json("POST", { provider, model })),
+  clearWikiChat: () => request("/wiki/chat", { method: "DELETE" }),
 
   memory: () => request("/memory"),
   memoryDocument: (name) => request(`/memory/${encodeURIComponent(name)}`),

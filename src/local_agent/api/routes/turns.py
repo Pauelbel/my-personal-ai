@@ -39,6 +39,8 @@ class Decision(BaseModel):
 
     action: Literal["approve", "reject", "reply"]
     text: str = ""
+    # Для карточки со списком: номера пунктов, которые пользователь отметил.
+    selected: list[int] | None = None
 
 
 def get_agent_runtime(request: Request) -> AgentRuntime:

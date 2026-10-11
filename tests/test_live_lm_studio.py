@@ -4,6 +4,7 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.fakes import post_session
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
@@ -25,7 +26,7 @@ def test_live_lm_studio_turn(tmp_path) -> None:
     )
 
     with TestClient(create_app(settings)) as client:
-        session = client.post("/api/sessions", json={}).json()
+        session = post_session(client, {}).json()
         response = client.post(
             f"/api/sessions/{session['id']}/turns",
             json={"content": "Say only OK."},
@@ -53,7 +54,7 @@ def test_live_memory_update(tmp_path) -> None:
     )
 
     with TestClient(create_app(settings)) as client:
-        session = client.post("/api/sessions", json={}).json()
+        session = post_session(client, {}).json()
         client.post(
             f"/api/sessions/{session['id']}/messages",
             json={"content": "Я предпочитаю, чтобы изменения кода были небольшими и проверяемыми."},

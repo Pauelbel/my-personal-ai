@@ -4,6 +4,8 @@ import { StreamingMessage, el, renderMessages, scrollDown } from "./chat.js";
 import { renderCards, renderDock } from "./panel.js";
 import { initFiles, openPath, showFiles } from "./files.js";
 import { reloadCapabilities, saveMemory, showCapabilities, showMemory, showWiki } from "./pages.js";
+import { initWikiChat, LINT_PROMPT, refreshWikiChat, sendWiki } from "./wikichat.js";
+import { makeResizable } from "./resize.js";
 import { renderAgentBar, renderTeam } from "./team.js";
 import { editLabel, guide, rowAction, treeRow } from "./tree.js";
 
@@ -130,15 +132,54 @@ async function loadMessages() {
   }
 }
 
-async function newSession(projectId = current()?.project_id) {
+// Сессия живёт в проекте: по умолчанию — в проекте открытой сессии или в последнем изменённом,
+// а пока проектов нет — вместо сессии открывается выбор папки проекта. Возвращает сессию или null.
+async function newSession(projectId = current()?.project_id ?? latestProject()?.id) {
+  if (!projectId) {
+    showWelcome();
+    openProject();
+    return null;
+  }
   try {
     const session = await api.createSession(projectId);
     await loadSessions();
     await selectSession(session.id);
     $("#input").focus();
+    return session;
   } catch (error) {
     toast(error);
+    return null;
   }
+}
+
+function latestProject() {
+  return [...state.projects].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] ?? null;
+}
+
+// Первое открытие: проектов нет — приветствие с выбором папки вместо пустого чата.
+function showWelcome() {
+  state.current = null;
+  state.messages = [];
+  state.team = null;
+  $("#agent-bar").replaceChildren();
+  showView("chat");
+  const empty = el("div", "empty");
+  const mascot = el("img");
+  mascot.src = "/ui/assets/meepo-mascot.png";
+  mascot.alt = "";
+  const choose = el("button", "primary", "Выбрать папку проекта");
+  choose.type = "button";
+  choose.addEventListener("click", () => openProject());
+  empty.append(mascot, el("strong", "", "Привет! Я Meepo."),
+    "Выберите папку проекта: в ней я буду читать и править файлы. Разговоры хранятся по проектам.", choose);
+  $("#messages").replaceChildren(empty);
+  render();
+}
+
+// Lint вики — сообщение в чат вики: он живёт вне проектов, ход и карточка правок видны на вкладке «Вики».
+function lintWiki() {
+  showView("wiki");
+  void sendWiki(LINT_PROMPT);
 }
 
 // Ход в сессии ждёт решения по карточке, идёт сейчас или в ней работают саб-агенты.
@@ -173,7 +214,10 @@ function renderSidebar() {
     drawn.delete("sidebar");
     return;
   }
-  if (changed("sidebar", tree)) $("#session-list").replaceChildren(...tree.flatMap(projectNode));
+  if (!changed("sidebar", tree)) return;
+  $("#session-list").replaceChildren(...(tree.length
+    ? tree.flatMap(projectNode)
+    : [treeRow({ label: "проектов пока нет", mark: "" })]));
 }
 
 // Проект — «◆ имя», его сессии — ветки «├─ ○ название». ● — идёт ход или работают саб-агенты, «ждёт» — нужна карточка.
@@ -292,7 +336,7 @@ function openProject(project = null) {
   $("#project-path").value = project?.workspace ?? "";
   $("#project-mode").value = project?.mode ?? "full";
   $("#project-error").textContent = "";
-  $("#project-delete").hidden = !project || project.id === "drafts";
+  $("#project-delete").hidden = !project;
   closeOverlay();
   $("#project-dialog").showModal();
   void browse(project?.workspace ?? null);
@@ -348,11 +392,16 @@ async function saveProject(event) {
 
 async function deleteProject() {
   const project = state.editingProject;
-  if (!project || !window.confirm(`Удалить проект «${project.name}»? Его сессии перейдут в черновики, папка на диске останется.`)) return;
+  if (!project || !window.confirm(`Удалить проект «${project.name}» вместе с его сессиями и их историей? Папка на диске останется.`)) return;
   try {
     await api.deleteProject(project.id);
     $("#project-dialog").close();
     await loadSessions();
+    if (!current()) {
+      const next = state.sessions.find((item) => !item.hidden);
+      if (next) await selectSession(next.id);
+      else await newSession();
+    }
     render();
   } catch (error) {
     $("#project-error").textContent = error.message;
@@ -423,6 +472,13 @@ async function changeModel() {
 async function send() {
   const input = $("#input");
   const content = input.value.trim();
+  if (content === "/lint") {
+    // Команда, а не сообщение: проверка вики идёт отдельно от разговора, на вкладке «Вики».
+    input.value = "";
+    autosize();
+    lintWiki();
+    return;
+  }
   const session = current();
   if (!content || !session) return;
   if (state.streaming === session.id) {
@@ -619,10 +675,12 @@ function render() {
   $("#composer-retry").hidden = !failed;
   $("#retry-reason").textContent = failed ? `Ответ не получен: ${state.failed.reason}` : "";
   const streaming = Boolean(state.streaming);
-  $("#send").textContent = streaming ? "■" : "↑";
+  $("#send").textContent = streaming ? "■" : "↵";
   $("#send").title = streaming ? "Остановить ответ (Esc)" : "Отправить (Enter)";
   $("#stop-hint").hidden = !streaming;
-  $("#input").placeholder = placeholder(streaming);
+  $("#input").placeholder = session || streaming ? placeholder(streaming) : "Сначала выберите папку проекта";
+  $("#input").disabled = !session && !streaming;
+  $("#send").disabled = !session && !streaming;
   renderQueue();
   const waiting = Boolean(session?.pending) && !streaming;
   const missing = Boolean(session?.model) && !state.modelsUnknown
@@ -649,10 +707,9 @@ function renderUsage(session) {
     return;
   }
   const share = Math.min(session.context_tokens / session.context_window, 1);
-  const meter = el("span", `meter${share >= 0.85 ? " full" : share >= 0.6 ? " warn" : ""}`);
-  const fill = el("span");
-  fill.style.width = `${Math.max(share * 100, 3)}%`;
-  meter.append(fill);
+  // Шкала из шести делений, как в терминале: хотя бы одно закрашено, пока контекст не пуст.
+  const cells = Math.max(Math.round(share * 6), 1);
+  const meter = el("span", `meter-text${share >= 0.85 ? " full" : share >= 0.6 ? " warn" : ""}`, "▰".repeat(cells) + "▱".repeat(6 - cells));
   usage.title = `Последний запрос занял ${session.context_tokens} из ${session.context_window} токенов окна модели`;
   usage.replaceChildren(el("span", "", "контекст"), meter, el("span", "", `${Math.round(share * 100)}%`));
   if (session.tokens_per_second) usage.append(el("span", "speed", `· ${Math.round(session.tokens_per_second)} ток/с`));
@@ -761,7 +818,7 @@ async function refreshFromServer() {
     state.offline = true;
   }
   render();
-  await Promise.all([refreshPanel(), refreshTeam(), state.streaming ? null : syncTurn()]);
+  await Promise.all([refreshPanel(), refreshTeam(), state.streaming ? null : syncTurn(), refreshWikiChat()]);
 }
 
 async function poll() {
@@ -816,13 +873,20 @@ async function openAgent(node) {
 
 // ---------- разделы ----------
 
+const VIEWS = ["chat", "team", "files", "wiki", "capabilities", "memory"];
+
 function showView(view) {
   state.view = view;
+  // После перезагрузки страница откроется на этой же вкладке.
+  remember("view", view);
   for (const button of document.querySelectorAll(".tabs button")) button.setAttribute("aria-pressed", String(button.dataset.view === view));
-  for (const name of ["chat", "team", "files", "wiki", "capabilities", "memory"]) $(`#view-${name}`).hidden = name !== view;
+  for (const name of VIEWS) $(`#view-${name}`).hidden = name !== view;
   if (view === "team") void refreshTeam();
   if (view === "files") void showFiles(projectOf(current()));
-  if (view === "wiki") void showWiki(toast);
+  if (view === "wiki") {
+    void showWiki(toast);
+    void refreshWikiChat(true);
+  }
   if (view === "capabilities") void showCapabilities(toast);
   if (view === "memory") void showMemory(toast);
   if (view === "chat") renderChat();
@@ -895,6 +959,15 @@ function bind() {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => showWiki(toast), 250);
   });
+  $("#wiki-lint").addEventListener("click", lintWiki);
+  initWikiChat({ toast, model: () => $("#model-select").value.split(SEP) });
+  makeResizable($("#wiki-chat-resizer"), { grid: $("#view-wiki"), variables: ["--wiki-chat-w"], min: 280 });
+  makeResizable($("#wiki-list-resizer"), {
+    grid: $("#wiki-split"),
+    variables: ["--wiki-list-w", "--wiki-graph-w"],
+    pick: () => ($("#wiki-split").classList.contains("graph-mode") ? "--wiki-graph-w" : "--wiki-list-w"),
+    min: 160,
+  });
   $("#capabilities-reload").addEventListener("click", () => reloadCapabilities(toast));
   $("#retry").addEventListener("click", retry);
   initFiles(toast);
@@ -941,7 +1014,7 @@ function fitScreen() {
 
 function placeholder(streaming) {
   if (streaming) return narrow.matches ? "В очередь" : "Ход идёт — Enter поставит сообщение в очередь";
-  return narrow.matches ? "Сообщение" : "Сообщение (Enter — отправить, Shift+Enter — новая строка)";
+  return "Сообщение агенту";
 }
 
 async function start() {
@@ -954,10 +1027,14 @@ async function start() {
   } catch (error) {
     toast(error);
   }
+  // Вкладку читаем до выбора сессии: выбор сессии сам переключает на чат.
+  const savedView = recall("view");
   const saved = recall("session");
   const target = state.sessions.find((session) => session.id === saved) ?? state.sessions.find((session) => !session.hidden);
-  if (target) await selectSession(target.id);
-  else await newSession();
+  if (target) {
+    await selectSession(target.id);
+    if (VIEWS.includes(savedView) && savedView !== "chat") showView(savedView);
+  } else await newSession();
   listen();
   setTimeout(poll, POLL_MS);
 }

@@ -38,6 +38,7 @@ from local_agent.sessions.service import SessionService
 from local_agent.tools.base import Tool, summary_line
 from local_agent.tools.registry import ToolRegistry
 from local_agent.tools.skills import UseSkillTool
+from local_agent.wiki.agent import wiki_agent
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,8 @@ class RuntimeLimits:
     default_context_tokens: int
     response_reserve_tokens: int
     memory_auto_update_messages: int
+    # Сколько последних реплик пользователя (с ответами на них) помнит чат вики; всё раньше забывается.
+    wiki_context_messages: int = 3
 
 
 # Базовые инструменты, которые добавляют другие части приложения: память, вики, предложения, делегирование.
@@ -103,6 +106,8 @@ class AgentRuntime:
 
     def agent_for(self, session: Session) -> Agent:
         """Основная сессия всегда за основным агентом; дочерняя — за саб-агентом, которому поручили задачу."""
+        if session.kind == "wiki":
+            return wiki_agent(session.provider)
         if not session.parent_id:
             return main_agent(session.provider)
         agent = self._agents.get(session.agent_id)
@@ -143,6 +148,8 @@ class AgentRuntime:
 
     def catalog_text(self, session: Session, box: Toolbox) -> str:
         """Компактный реестр: имя и одна строка описания, полные схемы подключаются по запросу."""
+        if session.kind == "wiki":
+            return "Все инструменты вики подключены сразу. Файлов проекта, памяти о пользователе и саб-агентов здесь нет."
         agent = self.agent_for(session)
         sub_agent = agent.id != MAIN_AGENT_ID
         skills = [
@@ -265,7 +272,8 @@ class AgentRuntime:
             user_message = last[-1]
         else:
             user_message = await asyncio.to_thread(self._conversation.add_user_message, session.id, content, sender)
-        if sender is None and not session.parent_id:
+        wiki = session.kind == "wiki"
+        if sender is None and not session.parent_id and not wiki:
             self._sessions.name_from_first_message(session.id, content, self._conversation.count(session.id))
         yield {"type": "user_message", "message": user_message}
 
@@ -275,8 +283,14 @@ class AgentRuntime:
         window = loaded_window or self._limits.default_context_tokens
         budget = max(window - self._limits.response_reserve_tokens, 0)
         history = await asyncio.to_thread(self._conversation.recent, session.id, self._limits.max_context_messages * 10)
-        # Саб-агент работает на основного агента, а не на пользователя: личная память в его сессию не попадает.
-        memory_context = "" if session.parent_id else await asyncio.to_thread(self._memory.prompt_context, content)
+        if wiki:
+            # Чат вики — череда независимых просьб: модель видит только хвост разговора, без резюме,
+            # иначе старые тексты и ответы путают её на новой задаче.
+            history = last_user_turns(history, self._limits.wiki_context_messages)
+        # Саб-агент работает на основного агента, а не на пользователя, а вики — не про пользователя:
+        # личная память в эти сессии не попадает.
+        memory_context = "" if session.parent_id or wiki else await asyncio.to_thread(self._memory.prompt_context, content)
+        summary = "" if wiki else session.summary
         project_context = await asyncio.to_thread(
             load_project_instructions, session.workspace, max_bytes=budget // 4,
         )
@@ -284,7 +298,7 @@ class AgentRuntime:
         catalog = self.catalog_text(session, box)
         context = build_context(
             build_system_prompt(
-                agent.system_prompt, memory_context, session.summary, today=date.today(),
+                agent.system_prompt, memory_context, summary, today=date.today(),
                 capabilities=CATALOG_MARKER, project_context=project_context,
             ),
             history,
@@ -298,7 +312,7 @@ class AgentRuntime:
             f"≈{used} из {window} токенов окна{'' if loaded_window else ' (по умолчанию)'}"
         )
         extras = [name for name, present in (
-            ("инструкции проекта", project_context), ("память", memory_context), ("резюме", session.summary)
+            ("инструкции проекта", project_context), ("память", memory_context), ("резюме", summary)
         ) if present]
         yield log(f"В системный промпт добавлено: {', '.join(extras)}" if extras else "Дополнительный контекст не подключён")
 
@@ -367,10 +381,12 @@ class AgentRuntime:
     # ---------- после хода ----------
 
     def _after_turn(self, session: Session, model: str, included_count: int) -> None:
-        if self._conversation.count(session.id) > included_count:
+        # Чат вики забывает старое намеренно: резюме выпавших сообщений ему не нужно.
+        if session.kind == "chat" and self._conversation.count(session.id) > included_count:
             self._spawn(f"summary:{session.id}", self._summarizer.update(session.id, included_count, model))
         threshold = self._limits.memory_auto_update_messages
-        if not session.parent_id and threshold and self._memory.pending_user_messages(session.id) >= threshold:
+        # Память — о пользователе: из переписки саб-агентов и служебной проверки вики её не пополняем.
+        if not session.parent_id and session.kind == "chat" and threshold and self._memory.pending_user_messages(session.id) >= threshold:
             self._spawn(f"memory:{session.id}", self._update_memory(session.id))
 
     async def _update_memory(self, session_id: str) -> None:
@@ -401,3 +417,9 @@ class AgentRuntime:
             del self._background[key]
         if not task.cancelled() and task.exception() is not None:
             logger.error("Фоновая задача завершилась ошибкой key=%s", key, exc_info=task.exception())
+
+
+def last_user_turns(history: list[Message], count: int) -> list[Message]:
+    """Хвост истории с последних count реплик пользователя: всё, что раньше, модель не видит."""
+    starts = [index for index, message in enumerate(history) if message.role == "user"]
+    return history[starts[-count]:] if len(starts) > count else history

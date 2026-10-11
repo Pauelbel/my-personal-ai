@@ -1,7 +1,7 @@
 """Память в промпте: короткий профиль и записи, найденные по сообщению, а не все файлы целиком."""
 
 from fastapi.testclient import TestClient
-from tests.fakes import ScriptedProvider, call, events_of
+from tests.fakes import ScriptedProvider, call, events_of, post_session
 from tests.test_graph_flow import settings
 
 from local_agent.api.app import create_app
@@ -24,7 +24,7 @@ def test_prompt_gets_profile_and_only_relevant_entries(tmp_path):
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
         for name, content in MEMORY.items():
             client.app.state.memory_service.write_document(name, content)
-        session = client.post("/api/sessions", json={"model": "test"}).json()
+        session = post_session(client, {"model": "test"}).json()
         client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Напиши функцию на Python"})
 
     prompt = provider.system_prompt()
@@ -38,10 +38,10 @@ def test_remember_writes_through_patch_contract_and_is_used_next_time(tmp_path):
         "Вас зовут Павел",
     )
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        first = client.post("/api/sessions", json={"model": "test"}).json()
+        first = post_session(client, {"model": "test"}).json()
         events = events_of(client.post(f"/api/sessions/{first['id']}/turns/stream", json={"content": "Привет, я Павел"}))
         duplicate = client.app.state.memory_service
-        second = client.post("/api/sessions", json={"model": "test"}).json()
+        second = post_session(client, {"model": "test"}).json()
         client.post(f"/api/sessions/{second['id']}/turns/stream", json={"content": "Как меня зовут?"})
         profile = client.get("/api/memory/profile.md").json()["content"]
 
