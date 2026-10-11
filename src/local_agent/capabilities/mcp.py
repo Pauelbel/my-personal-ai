@@ -91,7 +91,7 @@ BROWSER_DESCRIPTIONS = {
     ),
     "browser_fill_form": "Заполнить несколько полей формы",
     "browser_press_key": "Нажать клавишу на клавиатуре",
-    "browser_type": "Ввести текст в редактируемый элемент",
+    "browser_type": "Ввести текст в редактируемый элемент. Элемент задаётся его ref из browser_browser_snapshot или browser_browser_find.",
     "browser_navigate": "Перейти по адресу",
     "browser_navigate_back": "Вернуться на предыдущую страницу в истории",
     "browser_network_requests": (
@@ -111,7 +111,10 @@ BROWSER_DESCRIPTIONS = {
         "browser_browser_snapshot."
     ),
     "browser_snapshot": "Снять снимок доступности текущей страницы — это лучше, чем скриншот",
-    "browser_click": "Кликнуть по элементу на веб-странице",
+    "browser_click": (
+        "Кликнуть по элементу на веб-странице. Элемент задаётся его ref из browser_browser_snapshot или browser_browser_find: "
+        "сначала сними снимок, потом кликай — CSS-селекторы наугад не работают."
+    ),
     "browser_drag": "Перетащить один элемент на другой (drag and drop)",
     "browser_hover": "Навести курсор на элемент страницы",
     "browser_select_option": "Выбрать вариант в выпадающем списке",
@@ -132,7 +135,7 @@ DEFAULT_CONFIG = {
         "browser": {
             "description": "Браузер Playwright: открыть страницу, кликнуть, заполнить, извлечь данные",
             "command": "npx",
-            "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+            "args": ["-y", "@playwright/mcp@latest", "--isolated"],
             "auto_approve": [
                 "browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_take_screenshot",
                 "browser_wait_for", "browser_tabs", "browser_console_messages", "browser_network_requests",
@@ -231,9 +234,13 @@ class MCPManager:
         from mcp.client.stdio import stdio_client
 
         self._logs_path.mkdir(parents=True, exist_ok=True)
+        # Своя рабочая папка у каждого сервера: всё, что он пишет в текущую папку (Playwright — снимки страниц
+        # и логи консоли в .playwright-mcp), остаётся в журналах, а не в папке, откуда запущено приложение.
+        workdir = Path(settings.get("cwd") or self._logs_path / f"mcp-{state.name}")
+        workdir.mkdir(parents=True, exist_ok=True)
         params = StdioServerParameters(
             command=settings["command"], args=[str(item) for item in settings.get("args", [])],
-            env=settings.get("env") or None,
+            env=settings.get("env") or None, cwd=workdir,
         )
         auto_approve = set(settings.get("auto_approve", []))
         descriptions = settings.get("descriptions") if isinstance(settings.get("descriptions"), dict) else {}

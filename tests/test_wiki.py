@@ -92,10 +92,35 @@ def test_rename_and_merge_rewrite_links_and_index(tmp_path):
     assert not (tmp_path / "wiki" / "векторные_бд.md").exists()
 
     graph = service.graph()
-    assert graph["edges"] == [{"from": "rag.md", "to": "векторные_базы_данных.md"}]
+    assert graph["edges"] == [{"from": "rag.md", "to": "векторные_базы_данных.md", "kind": "link"}]
     assert {node["path"]: (node["degree"], node["cluster"]) for node in graph["nodes"]} == {
         "rag.md": (1, 0), "векторные_базы_данных.md": (1, 0),
     }
+
+
+def test_graph_links_notes_close_by_text_without_model(tmp_path):
+    service = wiki(tmp_path)
+    root = tmp_path / "wiki"
+    root.mkdir()
+    texts = {
+        "тест_дизайн.md": "# Тест-дизайн\n\nГраничные значения и классы эквивалентности для тестирования форм.",
+        "тест_кейсы.md": "# Тест-кейсы\n\nАгент пишет тест-кейсы: граничные значения, классы эквивалентности, шаги.",
+        "ollama.md": "# Ollama\n\nЗапуск локальной модели, context length и выгрузка слоёв на видеокарту.",
+        "lm_studio.md": "# LM Studio\n\nНастройки локальной модели: context length, выгрузка на видеокарту.",
+        "рецепт.md": "# Яблочный пирог\n\nМука, сахар, яблоки, корица. Выпекать сорок минут.",
+    }
+    for name, text in texts.items():
+        (root / name).write_text(text, encoding="utf-8")
+
+    edges = {(edge["from"], edge["to"]): edge for edge in service.graph()["edges"]}
+    assert set(edges) == {("тест_дизайн.md", "тест_кейсы.md"), ("lm_studio.md", "ollama.md")}
+    assert all(edge["kind"] == "similar" and 0 < edge["score"] <= 1 for edge in edges.values())
+
+    # Если заметки уже связаны ссылкой, пунктир её не дублирует.
+    (root / "ollama.md").write_text(texts["ollama.md"] + "\n\nСм. [LM Studio](lm_studio.md).", encoding="utf-8")
+    edges = {(edge["from"], edge["to"]): edge["kind"] for edge in service.graph()["edges"]}
+    assert edges[("lm_studio.md", "ollama.md")] == "link"
+    assert len(edges) == 2
 
 
 def test_index_follows_manual_files_and_paths_are_checked(tmp_path):

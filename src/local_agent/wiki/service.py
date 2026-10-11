@@ -130,14 +130,28 @@ class WikiService:
         return sorted(pairs, key=lambda pair: -len(pair[2]))
 
     def graph(self) -> dict:
-        """Точки — заметки, линии — ссылки между ними; размер точки — число связей, цвет — кластер."""
-        items = self.notes()
+        """Точки — заметки, линии — связи; размер точки — число связей, цвет — кластер.
+
+        Связи двух видов: link — ссылка из одной заметки на другую, similar — заметки близки по тексту
+        (сервер находит их сам, модель не нужна). Пара со ссылкой пунктиром не дублируется.
+        """
+        items, terms = [], {}
+        for relative, path in self._files():
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            note = notes.parse(relative, text)
+            items.append(note)
+            terms[relative] = notes.similarity_terms(note, text)
         known = {note.path for note in items}
-        edges: dict[tuple[str, str], None] = {}
+        edges: dict[tuple[str, str], dict] = {}
         for note in items:
             for target in note.links:
                 if target in known and target != note.path:
-                    edges[tuple(sorted((note.path, target)))] = None
+                    edges[tuple(sorted((note.path, target)))] = {"kind": "link"}
+        for left, right, score in notes.similar_pairs(terms):
+            edges.setdefault(tuple(sorted((left, right))), {"kind": "similar", "score": score})
         degree = {note.path: 0 for note in items}
         for left, right in edges:
             degree[left] += 1
@@ -149,7 +163,7 @@ class WikiService:
                  "degree": degree[note.path], "cluster": cluster[note.path]}
                 for note in items
             ],
-            "edges": [{"from": left, "to": right} for left, right in edges],
+            "edges": [{"from": left, "to": right, **edge} for (left, right), edge in edges.items()],
         }
 
     # ---------- запись ----------

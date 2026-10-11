@@ -265,6 +265,9 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
   font: 14px/1.45 var(--mono);
 }
 .composer textarea:focus { outline: none; }
+/* Полоса прокрутки в поле ввода съедает место: прячем её, прокрутка колёсиком и клавишами остаётся. */
+.composer textarea { scrollbar-width: none; }
+.composer textarea::-webkit-scrollbar { display: none; }
 #model-select {
   min-width: 0; max-width: 240px; border: 0; background: transparent; border-radius: 4px; padding: 0 2px;
   font: 600 12px var(--mono); color: var(--fg); cursor: pointer;
@@ -387,16 +390,20 @@ button.trow-main:hover:not(:disabled) { background: transparent; }
 .wiki-view { display: grid; grid-template-columns: var(--wiki-chat-w, minmax(320px, 420px)) 0 minmax(0, 1fr); min-height: 0; }
 .wiki-view.chat-hidden { grid-template-columns: minmax(0, 1fr); }
 .wiki-view.chat-hidden .resizer { display: none; }
-/* Разделитель панелей: узкая полоса над границей колонок, при наведении и перетаскивании подсвечивается */
-.resizer { position: relative; z-index: 2; cursor: col-resize; touch-action: none; }
-.resizer::after { content: ""; position: absolute; inset: 0 -4px; transition: background .15s; }
-.resizer:hover::after, .resizer:focus-visible::after, body.resizing .resizer::after { background: color-mix(in srgb, var(--accent-2) 45%, transparent); }
+/* Разделитель панелей: невидимая полоса для мыши поверх границы колонок; при наведении и перетаскивании
+   граница подсвечивается тонкой линией. --line-at — где граница относительно разделителя. */
+.resizer { position: relative; z-index: 2; cursor: col-resize; touch-action: none; --line-at: -1px; }
+.resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--line-at) - 4px); width: 10px; }
+.resizer::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: var(--line-at); width: 2px; transition: background .15s;
+}
+.resizer:hover::before, .resizer:focus-visible::before, body.resizing .resizer::before { background: var(--accent-2); }
 .resizer:focus-visible { outline: none; }
 body.resizing { cursor: col-resize; user-select: none; }
 #wiki-split { grid-template-columns: var(--wiki-list-w, 260px) 0 minmax(0, 1fr); }
 #wiki-split.graph-mode { grid-template-columns: var(--wiki-graph-w, minmax(0, 3fr)) 0 minmax(280px, 2fr); }
 #wiki-split { column-gap: 8px; }
-#wiki-split .resizer::after { inset: 0 -8px; }
+#wiki-split .resizer { --line-at: -9px; }
 .wiki-main { min-width: 0; min-height: 0; }
 .wiki-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); background: var(--surface); --frame-bg: var(--surface); }
 .wiki-chat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 10px 10px 14px; border-bottom: 1px solid var(--line); }
@@ -437,6 +444,13 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* Цвета графа — токены темы: тёмный режим браузера перекрашивает их вместе со страницей. */
 /* Линии — средним тоном: видны и на светлом, и на тёмном фоне, даже если браузер перекрасил только страницу. */
 .graph-edge { stroke: var(--muted); stroke-opacity: .6; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.graph-edge.similar { stroke-dasharray: 4 4; stroke-opacity: .45; }
+.graph-legend {
+  position: absolute; left: 10px; bottom: 8px; display: flex; gap: 14px; font: 11px var(--mono); color: var(--muted);
+  pointer-events: none;
+}
+.graph-legend span::before { content: ""; display: inline-block; width: 18px; margin: 0 6px 3px 0; vertical-align: middle; border-top: 1px solid var(--muted); }
+.graph-legend .graph-legend-similar::before { border-top-style: dashed; }
 .graph-svg.hovering .graph-edge { stroke-opacity: .12; }
 .graph-svg.hovering .graph-edge.lit { stroke: var(--accent-2); stroke-opacity: .9; }
 .graph-node { fill: var(--muted); }

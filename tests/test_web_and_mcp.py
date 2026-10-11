@@ -57,6 +57,6 @@ def test_mcp_tool_description_is_translated_from_config():
 
     translated = MCPTool("browser", None, tool("browser_click", "Perform click on a web page"), set(), BROWSER_DESCRIPTIONS)
     original = MCPTool("browser", None, tool("browser_new_thing", "Brand new  tool"), set(), BROWSER_DESCRIPTIONS)
-    assert translated.description == "Кликнуть по элементу на веб-странице"
+    assert translated.description == BROWSER_DESCRIPTIONS["browser_click"]
     # Инструмента нет в переводах — остаётся описание сервера.
     assert original.description == "Brand new tool"

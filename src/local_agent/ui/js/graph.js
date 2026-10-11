@@ -30,7 +30,10 @@ export function createGraph(root, { onOpen }) {
   scene.append(edgeLayer, nodeLayer, ring, labelLayer);
   svg.append(scene);
   const empty = el("p", "hint graph-empty", "Заметок пока нет.");
-  root.replaceChildren(svg, empty);
+  // Легенда: сплошная линия — ссылка между заметками, пунктир — сервер нашёл, что они близки по тексту.
+  const legend = el("div", "graph-legend");
+  legend.append(el("span", "graph-legend-link", "ссылка"), el("span", "graph-legend-similar", "близки по тексту"));
+  root.replaceChildren(svg, empty, legend);
   let nodes = [];
   let edges = [];
   let byPath = new Map();
@@ -55,7 +58,9 @@ export function createGraph(root, { onOpen }) {
       byPath.set(node.path, node);
       return node;
     });
-    edges = data.edges.map((edge) => ({ a: byPath.get(edge.from), b: byPath.get(edge.to) })).filter(({ a, b }) => a && b);
+    edges = data.edges
+      .map((edge) => ({ a: byPath.get(edge.from), b: byPath.get(edge.to), kind: edge.kind ?? "link", score: edge.score }))
+      .filter(({ a, b }) => a && b);
     neighbours = new Map(nodes.map((node) => [node, new Set()]));
     for (const { a, b } of edges) {
       neighbours.get(a).add(b);
@@ -91,7 +96,12 @@ export function createGraph(root, { onOpen }) {
   // Элементы пересоздаются только при обновлении данных; кадры раскладки лишь двигают их.
   function build() {
     edgeLayer.replaceChildren(...edges.map((edge) => {
-      edge.line = shape("line", "graph-edge");
+      edge.line = shape("line", `graph-edge ${edge.kind}`);
+      const tip = shape("title");
+      tip.textContent = edge.kind === "similar"
+        ? `Близки по тексту: ${edge.a.title} — ${edge.b.title} (${Math.round(edge.score * 100)}%)`
+        : `Ссылка: ${edge.a.title} — ${edge.b.title}`;
+      edge.line.append(tip);
       return edge.line;
     }));
     nodeLayer.replaceChildren(...nodes.map((node) => {

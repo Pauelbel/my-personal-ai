@@ -24,6 +24,7 @@ YAML-значения без кавычек, если заметку попра�
 """
 
 import json
+import math
 import posixpath
 import re
 from dataclasses import dataclass, field
@@ -320,6 +321,76 @@ def entry_of(note: Note) -> IndexEntry:
 
 
 # ---------- граф ----------
+
+# Связи по смыслу: TF-IDF по основам слов всего текста заметки и косинусная близость.
+# Основа — первые STEM_CHARS букв: «тестирование» и «тестировщик» совпадут без стеммера.
+STEM_CHARS = 5
+# Заголовок, описание, теги и ключевые слова говорят о теме заметки сильнее, чем её текст.
+PROFILE_WEIGHT = 3.0
+# Ниже порога близость — случайные общие слова; у каждой заметки не больше SIMILAR_PER_NOTE самых близких.
+SIMILAR_THRESHOLD = 0.08
+SIMILAR_PER_NOTE = 3
+URL = re.compile(r"https?://\S+")
+WORD = re.compile(r"[^\W\d_]{3,}")
+STOPWORDS = frozenset(
+    "и в во не что он на я с со как а то все она так его но да ты к у же вы за бы по только ее мне было вот от меня "
+    "еще нет о из ему теперь когда даже ну вдруг ли если уже или ни быть был него до вас нибудь опять уж вам ведь там "
+    "потом себя ничего ей может они тут где есть надо ней для мы тебя их чем была сам чтоб без будто чего раз тоже "
+    "себе под будет ж тогда кто этот того потому этого какой совсем ним здесь этом один почти мой тем чтобы нее "
+    "сейчас были куда зачем всех никогда можно при наконец два об другой хоть после над больше тот через эти нас про "
+    "всего них какая много разве три эту моя впрочем хорошо свою этой перед иногда лучше чуть том нельзя такой им "
+    "более всегда конечно всю между это эта так также каждый который которая которые которых через если "
+    "the and for with that this from are was were you your not but can all any have has into its our out use "
+    "using how what when which who will would also than then them they there these those".split()
+)
+
+
+def similarity_terms(note: Note, body: str) -> dict[str, float]:
+    """Веса основ слов заметки: текст — с весом 1, заголовок, описание, теги и ключевые слова — с PROFILE_WEIGHT."""
+    counts: dict[str, float] = {}
+
+    def add(text: str, weight: float) -> None:
+        for word in WORD.findall(URL.sub(" ", text).casefold().replace("ё", "е")):
+            if word not in STOPWORDS:
+                stem = word[:STEM_CHARS]
+                counts[stem] = counts.get(stem, 0.0) + weight
+
+    add(split_frontmatter(body)[1], 1.0)
+    add(" ".join([note.title, note.description, *note.tags, *note.keywords]), PROFILE_WEIGHT)
+    # Логарифм: слово, повторённое двадцать раз, не перевешивает всё остальное.
+    return {stem: 1 + math.log(count) for stem, count in counts.items()}
+
+
+def similar_pairs(terms: dict[str, dict[str, float]]) -> list[tuple[str, str, float]]:
+    """Пары близких по смыслу заметок (путь, путь, близость 0…1) — самые близкие первыми.
+
+    Слова, которые есть почти во всех заметках (заголовки шаблона, общие слова), веса не получают.
+    """
+    paths = list(terms)
+    frequency: dict[str, int] = {}
+    for weights in terms.values():
+        for stem in weights:
+            frequency[stem] = frequency.get(stem, 0) + 1
+    total = len(paths)
+    vectors: dict[str, dict[str, float]] = {}
+    for path, weights in terms.items():
+        vector = {stem: weight * math.log(total / frequency[stem]) for stem, weight in weights.items()}
+        norm = math.sqrt(sum(value * value for value in vector.values())) or 1.0
+        vectors[path] = {stem: value / norm for stem, value in vector.items() if value}
+    scores: dict[tuple[str, str], float] = {}
+    for index, left in enumerate(paths):
+        for right in paths[index + 1:]:
+            small, large = sorted((vectors[left], vectors[right]), key=len)
+            score = sum(value * large.get(stem, 0.0) for stem, value in small.items())
+            if score >= SIMILAR_THRESHOLD:
+                scores[(left, right)] = score
+    # Пара остаётся, если хотя бы для одной из двух заметок она среди самых близких.
+    best: dict[str, list[tuple[str, str]]] = {path: [] for path in paths}
+    for pair in sorted(scores, key=lambda pair: -scores[pair]):
+        for path in pair:
+            best[path].append(pair)
+    kept = {pair for pairs in best.values() for pair in pairs[:SIMILAR_PER_NOTE]}
+    return sorted(((left, right, round(scores[(left, right)], 3)) for left, right in kept), key=lambda item: -item[2])
 
 
 def clusters(paths: list[str], edges: list[tuple[str, str]]) -> dict[str, int]:
