@@ -1,51 +1,53 @@
-"""Runtime выполняет ход агента: собирает контекст, стримит ответ LLM, вызывает инструменты и сохраняет историю."""
+"""Runtime ведёт ход агента по графу LangGraph: собирает контекст, запускает граф и отдаёт события в UI.
+
+Ход может остановиться на подтверждении (interrupt). Тогда поток заканчивается событием interrupt,
+а то, что ждёт решения, хранится в сессии и в чекпоинте графа: решение можно принять и после
+перезагрузки страницы или сервера. Новое сообщение пользователя в такой сессии — ответ на карточку.
+"""
 
 import asyncio
 import logging
-import time
-from collections.abc import AsyncIterator, Coroutine, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import date
+from uuid import uuid4
 
-from local_agent.agent.context import build_context, build_system_prompt, estimate_message_tokens
+from langgraph.types import Command
+
+from local_agent.agent.context import build_context, build_system_prompt, estimate_message_tokens, estimate_tokens
+from local_agent.agent.errors import (
+    AgentRuntimeError,
+    NothingPendingError,
+    SessionBusyError,
+    SessionNotFoundError,
+)
+from local_agent.agent.main_agent import MAIN_AGENT_ID, main_agent
+from local_agent.agent.models import Agent
 from local_agent.agent.project_instructions import load_project_instructions
 from local_agent.agent.registry import AgentRegistry, SkillRegistry
 from local_agent.agent.summary import ConversationSummarizer
-from local_agent.agent.tool_executor import ToolExecutor
-from local_agent.llm.base import context_length, stream_chat
-from local_agent.llm.models import ChatMessage, ChatResult, ReasoningDelta
+from local_agent.capabilities.toolbox import DEFAULT_ACTIVE_TOOLS, ActivateTool, Toolbox
+from local_agent.graph.agent_graph import CATALOG_MARKER, GraphDeps, build_agent_graph, from_chat, log
+from local_agent.llm.base import context_length
 from local_agent.llm.registry import LLMRegistry
 from local_agent.memory.conversation import ConversationService
 from local_agent.memory.models import Message
 from local_agent.memory.service import MemoryService, MemoryServiceError
+from local_agent.sessions.models import Session
 from local_agent.sessions.service import SessionService
-from local_agent.tools.base import Tool, ToolResult
-from local_agent.tools.messaging import SendMessageTool
+from local_agent.tools.base import Tool, summary_line
 from local_agent.tools.registry import ToolRegistry
 from local_agent.tools.skills import UseSkillTool
 
 logger = logging.getLogger(__name__)
 
-LOG_ARGUMENTS_CHARS = 160
-# Навык обычно занимает несколько шагов подряд: use_skill, git, read_file.
-MAX_TOOL_ROUNDS = 8
-MAX_CALLS_PER_ROUND = 4
-APPROVAL_TIMEOUT_SECONDS = 300
-# Команда агентов работает долго, и человек может отойти, пока агент с холста ждёт подтверждения.
-NODE_APPROVAL_TIMEOUT_SECONDS = 3600
-INTERRUPTED_SUFFIX = "\n\n_(ответ прерван)_"
+# activate занимает раунд, поэтому основному агенту лимит выше, чем раньше.
+MAX_TOOL_ROUNDS = 10
 
-
-class AgentRuntimeError(Exception):
-    """Сессию нельзя обработать из-за неподдерживаемой конфигурации."""
-
-
-class SessionNotFoundError(AgentRuntimeError):
-    """Запрошенная сессия не существует."""
-
-
-class SessionBusyError(AgentRuntimeError):
-    """В сессии уже выполняется другой ход."""
+__all__ = [
+    "AgentRuntime", "AgentRuntimeError", "NothingPendingError", "RuntimeLimits",
+    "SessionBusyError", "SessionNotFoundError",
+]
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,13 @@ class RuntimeLimits:
     default_context_tokens: int
     response_reserve_tokens: int
     memory_auto_update_messages: int
+
+
+# Базовые инструменты, которые добавляют другие части приложения: память, вики, предложения, делегирование.
+# Получают сессию, её агента и набор хода; возвращают инструменты, подключённые всегда.
+CoreTools = Callable[[Session, Agent, Toolbox], list[Tool]]
+# Вызывается, когда ход сессии закончился ответом: так результат саб-агента возвращается основному.
+FinishedHook = Callable[[Session, Message], Awaitable[None]]
 
 
 class AgentRuntime:
@@ -68,6 +77,7 @@ class AgentRuntime:
         skills: SkillRegistry,
         summarizer: ConversationSummarizer,
         limits: RuntimeLimits,
+        checkpointer=None,
     ) -> None:
         self._sessions = sessions
         self._conversation = conversation
@@ -78,47 +88,158 @@ class AgentRuntime:
         self._skills = skills
         self._summarizer = summarizer
         self._limits = limits
+        self._checkpointer = checkpointer
         self._session_locks: dict[str, asyncio.Lock] = {}
-        self._approvals: dict[tuple[str, str], asyncio.Future[bool]] = {}
         self._background: dict[str, asyncio.Task] = {}
+        self.core_tools: list[CoreTools] = []
+        self.finished_hooks: list[FinishedHook] = []
+        # Архив возможностей для реестра основного агента; задаёт приложение.
+        self.archive_lines: Callable[[], list[str]] | None = None
+        self._graph = build_agent_graph(
+            GraphDeps(sessions, conversation, providers, self.toolbox, self.catalog_text), checkpointer,
+        )
+
+    # ---------- агенты и инструменты ----------
+
+    def agent_for(self, session: Session) -> Agent:
+        """Основная сессия всегда за основным агентом; дочерняя — за саб-агентом, которому поручили задачу."""
+        if not session.parent_id:
+            return main_agent(session.provider)
+        agent = self._agents.get(session.agent_id)
+        if agent is None:
+            raise AgentRuntimeError(f"Саб-агент «{session.agent_id}» не найден: возможно, он в архиве")
+        return agent
+
+    def toolbox(self, session: Session) -> Toolbox:
+        agent = self.agent_for(session)
+        sub_agent = agent.id != MAIN_AGENT_ID
+        project = self._sessions.project_of(session)
+        registry_tools = self._tools.all() if session.workspace else []
+        if project is not None and project.mode == "read":
+            # Проект только для чтения: всё, что меняет файлы или систему, агенту даже не показываем.
+            registry_tools = [tool for tool in registry_tools if not tool.requires_approval]
+        if sub_agent:
+            registry_tools = [tool for tool in registry_tools if tool.id in agent.tools]
+        active = project.active_tools if project is not None and project.active_tools is not None else DEFAULT_ACTIVE_TOOLS
+        box = Toolbox(
+            core=[], catalog=registry_tools, active=list(active),
+            on_active_change=lambda active: self._sessions.set_active_tools(session.id, active),
+            all_active=sub_agent,
+        )
+        if not sub_agent:
+            box.core.append(ActivateTool(box))
+        skill_tool = UseSkillTool(
+            self._skills, {tool.id for tool in self._tools.all()}, {tool.id for tool in registry_tools},
+            agent.skills if sub_agent else None,
+        )
+        if skill_tool.skills():
+            box.core.append(skill_tool)
+        for build in self.core_tools:
+            for tool in build(session, agent, box):
+                # Редкие инструменты основного агента (поиск в памяти, архив) лежат в реестре одной строкой.
+                (box.catalog if getattr(tool, "catalog", False) else box.core).append(tool)
+        box.__post_init__()
+        return box
+
+    def catalog_text(self, session: Session, box: Toolbox) -> str:
+        """Компактный реестр: имя и одна строка описания, полные схемы подключаются по запросу."""
+        agent = self.agent_for(session)
+        sub_agent = agent.id != MAIN_AGENT_ID
+        skills = [
+            skill for skill in self._skills.all()
+            if not sub_agent or agent.skills is None or skill.id in agent.skills
+        ]
+        parts = ["Реестр возможностей (имя — что делает)."]
+        project = self._sessions.project_of(session)
+        if project is not None and project.mode == "read":
+            parts.append(
+                "Проект открыт только для чтения: инструменты, меняющие файлы или систему, недоступны. "
+                "Если без них не обойтись, скажи пользователю, что нужно переключить проект в полный режим."
+            )
+        tools = box.catalog_lines()
+        if tools:
+            parts.append(
+                ("Твои инструменты:" if sub_agent else "Инструменты (вызывай подключённые, остальные сначала подключи через activate):")
+                + "\n" + "\n".join(tools)
+            )
+        else:
+            parts.append("Инструментов для работы с файлами нет.")
+        parts.append(
+            "Скиллы — инструкции под тип задач, загружаются через use_skill:\n"
+            + "\n".join(f"- {skill.id} — {summary_line(skill.description)}" for skill in skills)
+            if skills else "Скиллов пока нет."
+        )
+        if not sub_agent:
+            agents = self._agents.all()
+            parts.append(
+                "Саб-агенты — помощники с постоянной ролью, задачу поручают через delegate:\n"
+                + "\n".join(f"- {item.id} — {summary_line(item.description or item.name)}" for item in agents)
+                if agents else "Саб-агентов пока нет."
+            )
+        if not sub_agent and self.archive_lines is not None and (archived := self.archive_lines()):
+            parts.append("В архиве (вернуть можно через archive с action restore, с утверждением пользователя):\n" + "\n".join(archived))
+        return "\n\n".join(parts)
+
+    # ---------- ход ----------
 
     def is_busy(self, session_id: str) -> bool:
         lock = self._session_locks.get(session_id)
         return lock is not None and lock.locked()
 
-    def resolve_approval(self, session_id: str, call_id: str, approved: bool) -> bool:
-        future = self._approvals.get((session_id, call_id))
-        if future is None or future.done():
-            return False
-        future.set_result(approved)
-        return True
-
     async def run_turn(self, session_id: str, content: str, request_id: str) -> Message:
-        """Ход без стриминга: подтверждать некому, поэтому изменяющие инструменты отклоняются."""
-        answer: Message | None = None
-        async for event in self.stream_turn(session_id, content, request_id):
-            if event["type"] == "approval_required":
-                self.resolve_approval(session_id, event["call"]["id"], False)
-            elif event["type"] == "done":
-                answer = event["message"]
-        assert answer is not None
-        return answer
+        """Ход без стриминга: подтверждать некому, поэтому все вызовы с подтверждением отклоняются."""
+        events = self.stream_turn(session_id, content, request_id)
+        while True:
+            answer: Message | None = None
+            pending = False
+            async for event in events:
+                if event["type"] == "done":
+                    answer = event["message"]
+                elif event["type"] == "interrupt":
+                    pending = True
+            if answer is not None:
+                return answer
+            if not pending:
+                raise AgentRuntimeError("Модель не вернула ответ")
+            events = self.resume(session_id, {"action": "reject"}, request_id)
 
     async def stream_turn(
-        self,
-        session_id: str,
-        content: str,
-        request_id: str,
-        extra_tools: Sequence[Tool] = (),
-        sender: str | None = None,
+        self, session_id: str, content: str, request_id: str, sender: str | None = None, *, retry: bool = False,
     ) -> AsyncIterator[dict]:
-        """extra_tools — встроенные инструменты этого хода, например send_message у агента с холста;
-        sender — имя агента, если реплику написал он, а не пользователь."""
+        """sender — кто написал реплику, если не пользователь (например, основной агент саб-агенту);
+        retry — повтор после сбоя: та же реплика без ответа не сохраняется второй раз."""
         lock = self._session_locks.setdefault(session_id, asyncio.Lock())
         if lock.locked():
             raise SessionBusyError("В этой сессии ещё выполняется предыдущий ход")
         async with lock:
-            async for event in self._turn(session_id, content, request_id, extra_tools, sender):
+            session = self._sessions.get(session_id)
+            if session is None:
+                raise SessionNotFoundError("Сессия не найдена")
+            if session.pending_thread and session.pending:
+                # Ход ждёт решения по карточке: новое сообщение — ответ на неё.
+                async for event in self._drive(session, session.pending_thread, Command(resume={
+                    "action": "reply", "text": content,
+                })):
+                    yield event
+                return
+            if session.pending_thread:
+                # Прошлый ход оборвался посреди графа (сбой или остановка сервера): начинаем с чистого листа.
+                await self._forget(session.id, session.pending_thread)
+            async for event in self._start(session, content, request_id, sender, retry):
+                yield event
+
+    async def resume(self, session_id: str, decision: object, request_id: str) -> AsyncIterator[dict]:
+        """Продолжает ход, остановленный на подтверждении: approve, reject или reply с текстом."""
+        lock = self._session_locks.setdefault(session_id, asyncio.Lock())
+        if lock.locked():
+            raise SessionBusyError("В этой сессии ещё выполняется предыдущий ход")
+        async with lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                raise SessionNotFoundError("Сессия не найдена")
+            if not session.pending_thread or not session.pending:
+                raise NothingPendingError("Ход уже не ждёт решения")
+            async for event in self._drive(session, session.pending_thread, Command(resume=decision)):
                 yield event
 
     async def close(self) -> None:
@@ -127,15 +248,10 @@ class AgentRuntime:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _turn(
-        self, session_id: str, content: str, request_id: str, extra_tools: Sequence[Tool], sender: str | None
+    async def _start(
+        self, session: Session, content: str, request_id: str, sender: str | None, retry: bool = False,
     ) -> AsyncIterator[dict]:
-        session = self._sessions.get(session_id)
-        if session is None:
-            raise SessionNotFoundError("Сессия не найдена")
-        agent = self._agents.get(session.agent_id)
-        if agent is None:
-            raise AgentRuntimeError("Агент не найден")
+        agent = self.agent_for(session)
         provider_id = session.provider or agent.llm_provider
         provider = self._providers.get(provider_id)
         if provider is None:
@@ -144,194 +260,118 @@ class AgentRuntime:
         if not model:
             raise AgentRuntimeError("Выберите модель для этой сессии")
 
-        user_message = await asyncio.to_thread(self._conversation.add_user_message, session_id, content, sender)
-        if sender is None:
-            self._sessions.name_from_first_message(
-                session_id, content, self._conversation.count(session_id)
-            )
+        last = await asyncio.to_thread(self._conversation.recent, session.id, 1)
+        if retry and last and last[-1].role == "user" and last[-1].content == content:
+            user_message = last[-1]
+        else:
+            user_message = await asyncio.to_thread(self._conversation.add_user_message, session.id, content, sender)
+        if sender is None and not session.parent_id:
+            self._sessions.name_from_first_message(session.id, content, self._conversation.count(session.id))
         yield {"type": "user_message", "message": user_message}
 
-        available = {tool.id for tool in ToolExecutor.allowed_tools(self._tools, agent, session)}
-        skill_tool = UseSkillTool(self._skills, {tool.id for tool in self._tools.all()}, available, agent.skills)
-        skills = skill_tool.skills()
-        executor = ToolExecutor.for_session(
-            self._tools, agent, session, request_id, builtins=[*([skill_tool] if skills else []), *extra_tools],
-            llm=(provider, model),
-        )
-        definitions = executor.definitions()
+        box = self.toolbox(session)
+        definitions = box.definitions()
         loaded_window = await context_length(provider, model)
         window = loaded_window or self._limits.default_context_tokens
-        history = await asyncio.to_thread(
-            self._conversation.recent, session_id, self._limits.max_context_messages * 10
-        )
-        # Агент с холста работает на агента сессии, а не на пользователя: личная память в его сессию не попадает.
-        memory_context = "" if session.parent_id else self._memory.context()
+        budget = max(window - self._limits.response_reserve_tokens, 0)
+        history = await asyncio.to_thread(self._conversation.recent, session.id, self._limits.max_context_messages * 10)
+        # Саб-агент работает на основного агента, а не на пользователя: личная память в его сессию не попадает.
+        memory_context = "" if session.parent_id else await asyncio.to_thread(self._memory.prompt_context, content)
         project_context = await asyncio.to_thread(
-            load_project_instructions, session.workspace,
-            max_bytes=max(window - self._limits.response_reserve_tokens, 0),
+            load_project_instructions, session.workspace, max_bytes=budget // 4,
         )
+        # Бюджет окна считаем по настоящему реестру, а в состояние кладём метку: граф подставит свежий.
+        catalog = self.catalog_text(session, box)
         context = build_context(
             build_system_prompt(
-                agent.system_prompt, memory_context, session.summary, today=date.today(), skills=skills,
-                project_context=project_context,
-                team=next((tool.recipients for tool in extra_tools if isinstance(tool, SendMessageTool)), None),
+                agent.system_prompt, memory_context, session.summary, today=date.today(),
+                capabilities=CATALOG_MARKER, project_context=project_context,
             ),
             history,
             max_messages=self._limits.max_context_messages,
-            max_tokens=max(window - self._limits.response_reserve_tokens, 0),
+            max_tokens=budget - estimate_tokens(catalog),
             tools=definitions,
         )
-        messages = context.messages
-        used = sum(estimate_message_tokens(message) for message in messages)
-        yield _log(
+        used = sum(estimate_message_tokens(message) for message in context.messages) + estimate_tokens(catalog)
+        yield log(
             f"Контекст: {context.included_count} из {len(history)} сообщений истории, "
             f"≈{used} из {window} токенов окна{'' if loaded_window else ' (по умолчанию)'}"
         )
         extras = [name for name, present in (
             ("инструкции проекта", project_context), ("память", memory_context), ("резюме", session.summary)
         ) if present]
-        yield _log(f"В системный промпт добавлено: {', '.join(extras)}" if extras else "Дополнительный контекст не подключён")
-        yield _log(
-            "Инструменты: " + ", ".join(item["function"]["name"] for item in definitions)
-            if definitions else "Инструменты недоступны: выберите рабочую папку и включите их"
-        )
-        added = 0
-        partial: list[str] = []
-        result: ChatResult | None = None
-        started = time.perf_counter()
-        max_rounds = agent.max_tool_rounds or MAX_TOOL_ROUNDS
-        approval_timeout = NODE_APPROVAL_TIMEOUT_SECONDS if session.parent_id else APPROVAL_TIMEOUT_SECONDS
+        yield log(f"В системный промпт добавлено: {', '.join(extras)}" if extras else "Дополнительный контекст не подключён")
+
+        thread = f"{session.id}:{uuid4().hex}"
+        # Ход идёт: если сервер упадёт посреди графа, следующий ход начнётся с чистого листа.
+        self._sessions.set_pending(session.id, thread, None)
+        state = {
+            "session_id": session.id, "request_id": request_id, "provider_id": provider_id, "model": model,
+            "window": window, "rounds": 0, "max_rounds": agent.max_tool_rounds or MAX_TOOL_ROUNDS,
+            "messages": [from_chat(message) for message in context.messages],
+            "decisions": {}, "answer": None,
+            "included": context.included_count, "history_count": self._conversation.count(session.id),
+        }
+        async for event in self._drive(session, thread, state):
+            yield event
+
+    async def _drive(self, session: Session, thread: str, payload: object) -> AsyncIterator[dict]:
+        """Прогоняет граф до ответа или до interrupt и переводит его события в события UI."""
+        config = {"configurable": {"thread_id": thread}, "recursion_limit": 3 * MAX_TOOL_ROUNDS + 50}
+        interrupted = None
+        answer: Message | None = None
         try:
-            rounds = 0
-            while True:
-                offered = definitions if rounds < max_rounds else None
-                result = None
-                yield _log(
-                    f"Запрос к {provider_id} · {model}" + (f" · раунд {rounds + 1}" if rounds else "")
-                    + ("" if offered or not definitions else " · без инструментов (лимит раундов)")
-                )
-                requested = time.perf_counter()
-                first_token_at = None
-                waiting = True
-                async for item in stream_chat(provider, model, messages, offered):
-                    if waiting and not isinstance(item, ChatResult):
-                        waiting = False
-                        first_token_at = time.perf_counter()
-                        yield _log(f"Первый токен через {time.perf_counter() - requested:.1f} с")
-                    if isinstance(item, str):
-                        partial.append(item)
-                        yield {"type": "delta", "text": item}
-                    elif isinstance(item, ReasoningDelta):
-                        yield {"type": "reasoning", "text": item.text}
-                    else:
-                        result = item
-                if result is None:
-                    raise AgentRuntimeError("Модель не вернула ответ")
-                generated_for = time.perf_counter() - (first_token_at or requested)
-                yield _log(_round_summary(result, time.perf_counter() - requested))
-                if not result.tool_calls:
-                    break
-                if rounds == max_rounds:
-                    raise AgentRuntimeError("Модель превысила лимит раундов вызова инструментов")
-                rounds += 1
-
-                text = "".join(partial)
-                partial = []
-                assistant = await asyncio.to_thread(
-                    self._conversation.add_assistant_message, session_id, text, result.tool_calls
-                )
-                added += 1
-                yield {"type": "tool_calls", "message": assistant}
-                messages.append(ChatMessage(role="assistant", content=text or None, tool_calls=result.tool_calls))
-
-                for index, call in enumerate(result.tool_calls):
-                    if index >= MAX_CALLS_PER_ROUND:
-                        output = ToolResult("Лимит вызовов инструментов за один раунд", is_error=True)
-                    else:
-                        tool = executor.get(call.name)
-                        yield _log(f"Вызов {call.name} {_shorten(call.arguments, LOG_ARGUMENTS_CHARS)}")
-                        approved = True
-                        if tool is not None and tool.requires_approval:
-                            future = asyncio.get_running_loop().create_future()
-                            self._approvals[(session_id, call.id)] = future
-                            try:
-                                yield _log("Жду подтверждения пользователя")
-                                yield {
-                                    "type": "approval_required",
-                                    "call": {"id": call.id, "name": call.name, "arguments": call.arguments},
-                                    "tool_name": tool.name,
-                                }
-                                approved = await asyncio.wait_for(future, approval_timeout)
-                            except TimeoutError:
-                                approved = False
-                            finally:
-                                self._approvals.pop((session_id, call.id), None)
-                            yield _log("Вызов разрешён" if approved else "Вызов отклонён")
-                        tool_started = time.perf_counter()
-                        output = (
-                            await executor.execute(call) if approved
-                            else ToolResult("Пользователь отклонил этот вызов", is_error=True)
-                        )
-                        yield _log(
-                            f"{call.name}: "
-                            + (f"ошибка — {_shorten(output.content, LOG_ARGUMENTS_CHARS)}" if output.is_error
-                               else f"готово, {len(output.content)} символов")
-                            + f" за {time.perf_counter() - tool_started:.1f} с"
-                        )
-                    tool_message = await asyncio.to_thread(
-                        self._conversation.add_tool_message,
-                        session_id,
-                        call_id=call.id,
-                        name=call.name,
-                        content=output.content,
-                        is_error=output.is_error,
-                    )
-                    added += 1
-                    yield {"type": "tool_result", "message": tool_message}
-                    messages.append(ChatMessage(role="tool", content=output.content, tool_call_id=call.id))
-        except (asyncio.CancelledError, GeneratorExit):
-            # Пользователь нажал «Стоп» или закрыл вкладку: сохраняем то, что модель успела написать.
-            if text := "".join(partial).strip():
-                self._conversation.add_assistant_message(session_id, text + INTERRUPTED_SUFFIX)
+            async for mode, chunk in self._graph.astream(payload, config, stream_mode=["custom", "updates"]):
+                if mode == "custom":
+                    if chunk.get("type") == "done":
+                        answer = chunk["message"]
+                    yield chunk
+                elif isinstance(chunk, dict) and "__interrupt__" in chunk:
+                    interrupted = chunk["__interrupt__"][0]
+        except BaseException:
+            # «Стоп», закрытая вкладка или ошибка: ход прерван целиком, ждать в нём больше нечего.
+            self._sessions.set_pending(session.id, None, None)
+            self._spawn(f"forget:{thread}", self._delete_thread(thread))
             raise
-        except Exception:
-            logger.exception(
-                "Запрос к LLM завершился ошибкой request_id=%s session_id=%s agent_id=%s provider=%s model=%s latency_ms=%.1f",
-                request_id, session_id, agent.id, provider_id, model,
-                (time.perf_counter() - started) * 1000,
-            )
-            raise
-
-        if not result.content:
-            raise AgentRuntimeError("Модель не вернула ответ")
-        answer = await asyncio.to_thread(self._conversation.add_assistant_message, session_id, result.content)
-        added += 1
-        count = result.input_tokens
-        speed = (
-            result.output_tokens / generated_for
-            if isinstance(result.output_tokens, int) and result.output_tokens > 0 and generated_for > 0.05
-            else None
+        if interrupted is not None:
+            pending = {**interrupted.value, "interrupt_id": interrupted.id}
+            self._sessions.set_pending(session.id, thread, pending)
+            yield {"type": "interrupt", "pending": pending}
+            return
+        values = await self._thread_values(thread)
+        await self._forget(session.id, thread)
+        if answer is None:
+            return
+        included = values.get("included", 0) + max(
+            self._conversation.count(session.id) - values.get("history_count", 0), 0,
         )
-        self._sessions.set_usage(session_id, {
-            "context_tokens": count if isinstance(count, int) and count >= 0 else None,
-            "context_window": window,
-            "tokens_per_second": speed,
-        })
-        logger.info(
-            "Запрос к LLM выполнен request_id=%s session_id=%s agent_id=%s provider=%s model=%s input_tokens=%s output_tokens=%s latency_ms=%.1f",
-            request_id, session_id, agent.id, provider_id, model,
-            result.input_tokens, result.output_tokens,
-            (time.perf_counter() - started) * 1000,
-        )
-        self._after_turn(session_id, model, context.included_count + added, remember=not session.parent_id)
-        yield {"type": "done", "message": answer}
+        current = self._sessions.get(session.id) or session
+        self._after_turn(current, values.get("model") or current.model, included)
+        for hook in self.finished_hooks:
+            self._spawn(f"finished:{session.id}:{answer.id}", hook(current, answer))
 
-    def _after_turn(self, session_id: str, model: str, included_count: int, *, remember: bool) -> None:
-        if self._conversation.count(session_id) > included_count:
-            self._spawn(f"summary:{session_id}", self._summarizer.update(session_id, included_count, model))
+    async def _thread_values(self, thread: str) -> dict:
+        if self._checkpointer is None:
+            return {}
+        snapshot = await self._graph.aget_state({"configurable": {"thread_id": thread}})
+        return dict(snapshot.values or {})
+
+    async def _forget(self, session_id: str, thread: str) -> None:
+        self._sessions.set_pending(session_id, None, None)
+        await self._delete_thread(thread)
+
+    async def _delete_thread(self, thread: str) -> None:
+        if self._checkpointer is not None:
+            await self._checkpointer.adelete_thread(thread)
+
+    # ---------- после хода ----------
+
+    def _after_turn(self, session: Session, model: str, included_count: int) -> None:
+        if self._conversation.count(session.id) > included_count:
+            self._spawn(f"summary:{session.id}", self._summarizer.update(session.id, included_count, model))
         threshold = self._limits.memory_auto_update_messages
-        if remember and threshold and self._memory.pending_user_messages(session_id) >= threshold:
-            self._spawn(f"memory:{session_id}", self._update_memory(session_id))
+        if not session.parent_id and threshold and self._memory.pending_user_messages(session.id) >= threshold:
+            self._spawn(f"memory:{session.id}", self._update_memory(session.id))
 
     async def _update_memory(self, session_id: str) -> None:
         session = self._sessions.get(session_id)
@@ -361,21 +401,3 @@ class AgentRuntime:
             del self._background[key]
         if not task.cancelled() and task.exception() is not None:
             logger.error("Фоновая задача завершилась ошибкой key=%s", key, exc_info=task.exception())
-
-
-def _log(text: str) -> dict:
-    """Строка лога хода: UI показывает её под статусом «Модель думает»."""
-    return {"type": "log", "text": text}
-
-
-def _round_summary(result: ChatResult, seconds: float) -> str:
-    tokens = ""
-    if result.input_tokens is not None or result.output_tokens is not None:
-        tokens = f", токенов: вход {result.input_tokens or '?'}, выход {result.output_tokens or '?'}"
-    calls = f"; просит инструменты: {', '.join(call.name for call in result.tool_calls)}" if result.tool_calls else ""
-    return f"Модель ответила за {seconds:.1f} с{tokens}{calls}"
-
-
-def _shorten(text: str, limit: int) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[:limit] + "…"

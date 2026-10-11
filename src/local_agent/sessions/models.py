@@ -4,8 +4,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from local_agent.team.models import Canvas
-
 DEFAULT_SESSION_TITLE = "Новая сессия"
 
 
@@ -26,17 +24,15 @@ class Session(BaseModel):
     context_tokens: int | None = None
     context_window: int | None = None
     tokens_per_second: float | None = None
-    # Инструменты включаются для каждой сессии отдельно; новая сессия начинает без доступа к файлам.
-    enabled_tools: list[str] = Field(default_factory=list)
     # Резюме сообщений, которые уже не помещаются в окно модели, и последнее из них.
     summary: str = ""
     summary_until_message_id: str | None = None
-    # Холст: агенты, которым агент сессии может поручать работу. Пустой холст — обычный чат.
-    canvas: Canvas = Field(default_factory=Canvas)
-    # id узла холста → его скрытая сессия, где агент ведёт свою часть работы.
-    node_sessions: dict[str, str] = Field(default_factory=dict)
-    # У скрытой сессии узла: чья она и какой это узел холста.
+    # Ход остановлен на подтверждении: поток графа в чекпоинтах и что именно ждёт решения пользователя.
+    pending_thread: str | None = None
+    pending: dict | None = None
+    # У дочерней сессии саб-агента — сессия, которая поручила ему работу.
     parent_id: str | None = None
-    node_id: str | None = None
-    # Сессия узла не показывается в общем списке, но открывается с его карточки на холсте.
+    # Задача саб-агента в дочерней сессии: agent_id, agent_name, title, status (queued, running, done, failed), error.
+    task: dict | None = None
+    # Дочерние сессии не показываются в общем списке.
     hidden: bool = False

@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import shutil
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +15,7 @@ from local_agent.llm.models import ChatResult, ToolCall
 
 RULE = "Тестовые отчёты этого проекта называются «Проверка Маяк»."
 RULE_PATH = ".github/instructions/learnings.instructions.md"
+EXTRAS_SKILLS = Path(__file__).resolve().parents[1] / "src/local_agent/extras/skills"
 
 
 def settings(tmp_path):
@@ -58,25 +61,30 @@ def test_skill_write_approval_and_new_dialog(tmp_path, approved):
     workspace = tmp_path / "project"
     workspace.mkdir()
     provider = WorkflowProvider()
+    # Стартовых навыков больше нет: нужный берём из необязательного набора.
+    (tmp_path / "skills").mkdir()
+    shutil.copy(EXTRAS_SKILLS / "update-skills.md", tmp_path / "skills")
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
         session = project_session(client, workspace)
         session_id = session["id"]
-        assert client.put(f"/api/sessions/{session_id}/tools/write_file", json={
-            "enabled": True,
-        }).status_code == 200
         runtime = client.app.state.agent_runtime
         events = []
 
         async def exercise():
             async for event in runtime.stream_turn(session_id, "Запомни для проекта", "test"):
                 events.append(event)
-                if event["type"] == "approval_required":
-                    assert not (workspace / RULE_PATH).exists()
-                    assert event["call"]["name"] == "write_file"
-                    assert runtime.resolve_approval(session_id, event["call"]["id"], approved)
+            # Ход остановился на подтверждении: файла ещё нет, решение ждёт в сессии.
+            assert events[-1]["type"] == "interrupt"
+            assert events[-1]["pending"]["call"]["name"] == "write_file"
+            assert not (workspace / RULE_PATH).exists()
+            assert client.app.state.session_service.get(session_id).pending is not None
+            decision = {"action": "approve" if approved else "reject"}
+            async for event in runtime.resume(session_id, decision, "test"):
+                events.append(event)
 
         client.portal.call(exercise)
-        assert sum(event["type"] == "approval_required" for event in events) == 1
+        assert sum(event["type"] == "interrupt" for event in events) == 1
+        assert client.app.state.session_service.get(session_id).pending is None
         results = [event["message"] for event in events if event["type"] == "tool_result"]
         assert "Обновление инструкций" in results[0].content
         assert (workspace / RULE_PATH).exists() is approved

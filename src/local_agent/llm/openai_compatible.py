@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from local_agent.llm.base import LLMProviderError, LLMProviderUnavailable
+from local_agent.llm.base import LLMEmptyResponse, LLMProviderError, LLMProviderUnavailable
 from local_agent.llm.models import ChatMessage, ChatResult, ReasoningDelta, ToolCall
 
 CONTEXT_CACHE_SECONDS = 60
@@ -51,6 +51,8 @@ class OpenAICompatibleProvider:
         try:
             message = data["choices"][0]["message"]
             content = message.get("content")
+            if not (isinstance(content, str) and content.strip()) and not message.get("tool_calls"):
+                raise LLMEmptyResponse(f"Модель на сервере «{self.name}» вернула пустой ответ")
             calls = tuple(
                 ToolCall(
                     id=item["id"],
@@ -66,9 +68,11 @@ class OpenAICompatibleProvider:
     async def chat_stream(
         self, model: str, messages: list[ChatMessage],
         tools: list[dict[str, object]] | None = None,
+        options: dict[str, object] | None = None,
     ) -> AsyncIterator[str | ReasoningDelta | ChatResult]:
         payload = self._payload(model, messages, tools, stream=True)
         payload["stream_options"] = {"include_usage": True}
+        payload.update(options or {})
         parts: list[str] = []
         calls: dict[int, dict[str, str]] = {}
         usage: dict = {}
@@ -110,6 +114,8 @@ class OpenAICompatibleProvider:
             ToolCall(id=slot["id"] or f"call-{index}", name=slot["name"], arguments=slot["arguments"] or "{}")
             for index, slot in sorted(calls.items())
         )
+        if not "".join(parts).strip() and not tool_calls:
+            raise LLMEmptyResponse(f"Модель на сервере «{self.name}» вернула пустой ответ")
         try:
             yield self._result("".join(parts), tool_calls, usage)
         except ValueError as exc:

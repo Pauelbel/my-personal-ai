@@ -1,117 +1,39 @@
-// Этот модуль держит все HTTP-запросы UI к backend API в одном месте.
+// HTTP API приложения. Ошибки сервера превращаются в Error с понятным текстом.
+
 async function request(path, options = {}) {
   const response = await fetch(`/api${path}`, {
     ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
+    headers: options.body ? { "Content-Type": "application/json" } : undefined,
   });
   if (!response.ok) throw await responseError(response);
-  if (response.status === 204) return null;
-  return response.json();
+  return response.status === 204 ? null : response.json();
 }
 
 async function responseError(response) {
-  const data = await response.json().catch(() => ({}));
-  const detail = data.detail;
-  const message = typeof detail === "string"
-    ? detail
-    : (detail?.message || `Ошибка сервера (${response.status})`);
-  const error = new Error(message);
-  error.messageSaved = detail?.user_message_saved === true;
-  return error;
+  let message = `Ошибка ${response.status}`;
+  try {
+    const data = await response.json();
+    const detail = data.detail;
+    message = typeof detail === "string" ? detail : detail?.message || (Array.isArray(detail) ? detail.map((item) => item.msg).join("; ") : message);
+  } catch {
+    // Ответ без JSON: оставляем код ошибки.
+  }
+  return new Error(message);
 }
 
-const sessionPath = (sessionId) => `/sessions/${encodeURIComponent(sessionId)}`;
+const json = (method, body) => ({ method, body: JSON.stringify(body) });
+const q = (params) => new URLSearchParams(params).toString();
 
-export const sessionsApi = {
-  // Служебные сессии запуска тоже нужны: их открывают из ленты, а панель сессий их прячет.
-  list: () => request("/sessions?include_hidden=true"),
-  create: (model, projectId = null) => request(
-    "/sessions",
-    { method: "POST", body: JSON.stringify({ model, project_id: projectId }) },
-  ),
-  configure: (sessionId, config) => request(
-    `${sessionPath(sessionId)}/config`,
-    { method: "PUT", body: JSON.stringify(config) },
-  ),
-  rename: (sessionId, title) => request(
-    `${sessionPath(sessionId)}/title`,
-    { method: "PUT", body: JSON.stringify({ title }) },
-  ),
-  delete: (sessionId) => request(sessionPath(sessionId), { method: "DELETE" }),
-  // Холст сохраняется целиком; в ответе — ошибки, из-за которых команда пока не запустится.
-  // Переписка агента с холста: создаётся, если ему ещё ничего не поручали.
-  openNode: (sessionId, nodeId) => request(
-    `${sessionPath(sessionId)}/canvas/${encodeURIComponent(nodeId)}/session`, { method: "POST" },
-  ),
-  saveCanvas: (sessionId, canvas) => request(
-    `${sessionPath(sessionId)}/canvas`, { method: "PUT", body: JSON.stringify(canvas) },
-  ),
-};
-
-export const projectsApi = {
-  list: () => request("/projects"),
-  create: (project) => request("/projects", { method: "POST", body: JSON.stringify(project) }),
-  update: (projectId, project) => request(
-    `/projects/${encodeURIComponent(projectId)}`,
-    { method: "PUT", body: JSON.stringify(project) },
-  ),
-  delete: (projectId) => request(`/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" }),
-};
-
-export const foldersApi = {
-  list: (path) => request(path ? `/folders?path=${encodeURIComponent(path)}` : "/folders"),
-};
-
-export const messagesApi = {
-  list: (sessionId) => request(`${sessionPath(sessionId)}/messages`),
-};
-
-export const catalogApi = {
-  models: (provider) => request(`/models?provider=${encodeURIComponent(provider)}`),
-  providers: () => request("/providers"),
-  agents: () => request("/agents"),
-};
-
-export const skillsApi = {
-  list: () => request("/skills"),
-  create: (skill) => request("/skills", { method: "POST", body: JSON.stringify(skill) }),
-  delete: (skillId) => request(`/skills/${encodeURIComponent(skillId)}`, { method: "DELETE" }),
-  archive: () => request("/skills/archive"),
-  clearArchive: () => request("/skills/archive", { method: "DELETE" }),
-  restore: (archiveId) => request(`/skills/archive/${encodeURIComponent(archiveId)}/restore`, { method: "POST" }),
-  read: (skillId) => request(`/skills/${encodeURIComponent(skillId)}`),
-  save: (skillId, instructions) => request(
-    `/skills/${encodeURIComponent(skillId)}`,
-    { method: "PUT", body: JSON.stringify({ instructions }) },
-  ),
-};
-
-export const agentsApi = {
-  options: () => request("/agents/options"),
-  create: (agent) => request("/agents", { method: "POST", body: JSON.stringify(agent) }),
-  update: (agentId, agent) => request(
-    `/agents/${encodeURIComponent(agentId)}`, { method: "PUT", body: JSON.stringify(agent) },
-  ),
-  delete: (agentId) => request(`/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" }),
-  prompt: (agentId) => request(`/agents/${encodeURIComponent(agentId)}/prompt`),
-  savePrompt: (agentId, systemPrompt) => request(
-    `/agents/${encodeURIComponent(agentId)}/prompt`,
-    { method: "PUT", body: JSON.stringify({ system_prompt: systemPrompt }) },
-  ),
-};
-
-// Поток событий SSE: onEvent вызывается на каждое событие. Без события finalType поток считается оборванным.
-async function streamEvents(path, body, signal, onEvent, finalType) {
-  const response = await fetch(`/api${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
+// Поток событий хода. Заканчивается событием done (ответ), interrupt (ход ждёт решения), stopped или error.
+// body === null — подключение к уже идущему ходу (GET).
+async function stream(path, body, signal, onEvent) {
+  const response = await fetch(`/api${path}`, body === null ? { signal } : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
   });
   if (!response.ok) throw await responseError(response);
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
-  let completed = false;
+  let finished = false;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -121,54 +43,65 @@ async function streamEvents(path, body, signal, onEvent, finalType) {
       const chunk = buffer.slice(0, boundary);
       buffer = buffer.slice(boundary + 2);
       const data = chunk.split("\n").filter((line) => line.startsWith("data: ")).map((line) => line.slice(6)).join("\n");
-      if (data) {
-        const event = JSON.parse(data);
-        completed ||= event.type === finalType;
-        onEvent(event);
-      }
+      if (!data) continue;
+      const event = JSON.parse(data);
+      finished ||= ["done", "interrupt", "error", "stopped"].includes(event.type);
+      onEvent(event);
     }
   }
-  if (!completed) throw new Error("Соединение закрыто до завершения ответа.");
+  if (!finished) throw new Error("Соединение закрыто до конца ответа.");
 }
 
-export const turnsApi = {
-  stream: (sessionId, content, signal, onEvent) => streamEvents(
-    `${sessionPath(sessionId)}/turns/stream`, { content }, signal, onEvent, "done",
-  ),
-  decide: (sessionId, callId, approved) => request(
-    `${sessionPath(sessionId)}/approvals/${encodeURIComponent(callId)}`,
-    { method: "POST", body: JSON.stringify({ approved }) },
-  ),
-};
+export const api = {
+  // С дочерними сессиями саб-агентов: их разговоры открываются с холста и из полосы агентов.
+  sessions: () => request("/sessions?include_hidden=true"),
+  session: (id) => request(`/sessions/${id}`),
+  createSession: (projectId) => request("/sessions", json("POST", projectId ? { project_id: projectId } : {})),
+  renameSession: (id, title) => request(`/sessions/${id}/title`, json("PUT", { title })),
+  deleteSession: (id) => request(`/sessions/${id}`, { method: "DELETE" }),
+  configure: (id, provider, model) => request(`/sessions/${id}/config`, json("PUT", { provider, model })),
+  messages: (id) => request(`/sessions/${id}/messages`),
+  send: (id, content, signal, onEvent, retry = false) => stream(`/sessions/${id}/turns/stream`, { content, retry }, signal, onEvent),
+  team: (id) => request(`/sessions/${id}/team`),
+  link: (agentId, target) => request(`/agents/${encodeURIComponent(agentId)}/links/${encodeURIComponent(target)}`, { method: "PUT" }),
+  unlink: (agentId, target) => request(`/agents/${encodeURIComponent(agentId)}/links/${encodeURIComponent(target)}`, { method: "DELETE" }),
+  teamChat: (id, agentId) => request(`/sessions/${id}/team/${encodeURIComponent(agentId)}/chat`, { method: "POST" }),
+  resume: (id, decision, signal, onEvent) => stream(`/sessions/${id}/resume`, decision, signal, onEvent),
+  // Ход идёт на сервере независимо от вкладки: к нему можно подключиться заново и остановить его.
+  turn: (id) => request(`/sessions/${id}/turn`),
+  follow: (id, start, signal, onEvent) => stream(`/sessions/${id}/turn/stream?${q({ start })}`, null, signal, onEvent),
+  stop: (id) => request(`/sessions/${id}/turn/stop`, { method: "POST" }),
+  enqueue: (id, content) => request(`/sessions/${id}/queue`, json("POST", { content })),
+  dequeue: (id, itemId) => request(`/sessions/${id}/queue/${itemId}`, { method: "DELETE" }),
 
-export const toolsApi = {
-  list: (sessionId) => request(`${sessionPath(sessionId)}/tools`),
-  configure: (sessionId, toolId, enabled) => request(
-    `${sessionPath(sessionId)}/tools/${encodeURIComponent(toolId)}`,
-    { method: "PUT", body: JSON.stringify({ enabled }) },
-  ),
-};
+  projects: () => request("/projects"),
+  createProject: (name, workspace) => request("/projects", json("POST", { name, workspace })),
+  updateProject: (id, name, workspace, mode) => request(`/projects/${id}`, json("PUT", { name, workspace, mode })),
+  files: (projectId, path) => request(`/projects/${projectId}/files?${q({ path })}`),
+  file: (projectId, path) => request(`/projects/${projectId}/files/content?${q({ path })}`),
+  saveFile: (projectId, path, content) => request(`/projects/${projectId}/files/content?${q({ path })}`, json("PUT", { content })),
+  moveFile: (projectId, path, newPath) => request(`/projects/${projectId}/files/move?${q({ path })}`, json("POST", { new_path: newPath })),
+  deleteFile: (projectId, path) => request(`/projects/${projectId}/files?${q({ path })}`, { method: "DELETE" }),
+  deleteProject: (id) => request(`/projects/${id}`, { method: "DELETE" }),
+  folders: (path) => request(`/folders${path ? `?${q({ path })}` : ""}`),
 
-export const memoryApi = {
-  list: () => request("/memory"),
-  read: (name) => request(`/memory/${encodeURIComponent(name)}`),
-  save: (name, content) => request(
-    `/memory/${encodeURIComponent(name)}`,
-    { method: "PUT", body: JSON.stringify({ content }) },
-  ),
-  update: (sessionId) => request(`${sessionPath(sessionId)}/memory/update`, { method: "POST" }),
-};
+  providers: () => request("/providers"),
+  models: (provider) => request(`/models?${q({ provider })}`),
 
-export const filesApi = {
-  remove: (projectId, path) => request(`/projects/${encodeURIComponent(projectId)}/files?path=${encodeURIComponent(path)}`, { method: "DELETE" }),
-  move: (projectId, path, newPath) => request(
-    `/projects/${encodeURIComponent(projectId)}/files/move?path=${encodeURIComponent(path)}`,
-    { method: "POST", body: JSON.stringify({ new_path: newPath }) },
-  ),
-  list: (projectId, path = "") => request(`/projects/${encodeURIComponent(projectId)}/files?path=${encodeURIComponent(path)}`),
-  read: (projectId, path) => request(`/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}`),
-  write: (projectId, path, content) => request(
-    `/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(path)}`,
-    { method: "PUT", body: JSON.stringify({ content }) },
-  ),
+  attention: (sessionId) => request(`/attention${sessionId ? `?${q({ session_id: sessionId })}` : ""}`),
+
+  capabilities: () => request("/capabilities"),
+  capabilitySource: (kind, id) => request(`/capabilities/${kind}/${encodeURIComponent(id)}`),
+  archive: (kind, id) => request(`/capabilities/${kind}/${encodeURIComponent(id)}/archive`, { method: "POST" }),
+  restore: (kind, archiveId) => request(`/capabilities/${kind}/restore/${encodeURIComponent(archiveId)}`, { method: "POST" }),
+  reloadCapabilities: () => request("/capabilities/reload", { method: "POST" }),
+
+  wiki: () => request("/wiki"),
+  wikiSearch: (query) => request(`/wiki/search?${q({ q: query })}`),
+  wikiPage: (path) => request(`/wiki/page?${q({ path })}`),
+
+  memory: () => request("/memory"),
+  memoryDocument: (name) => request(`/memory/${encodeURIComponent(name)}`),
+  saveMemory: (name, content) => request(`/memory/${encodeURIComponent(name)}`, json("PUT", { content })),
+  updateMemory: (sessionId) => request(`/sessions/${sessionId}/memory/update`, { method: "POST" }),
 };

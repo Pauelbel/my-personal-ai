@@ -8,6 +8,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from local_agent.projects.service import HOME_LABEL
+
 router = APIRouter(prefix="/folders", tags=["folders"])
 
 MAX_FOLDERS = 1000
@@ -60,7 +62,7 @@ def list_folders(path: str | None = None) -> FolderListing:
 
 def _roots() -> list[Folder]:
     home = Path.home()
-    roots = [Folder(name=f"Домашняя папка ({home.name})", path=str(home))]
+    roots = [Folder(name=HOME_LABEL.format(home.name), path=str(home))]
     if os.name == "nt":
         roots += [
             Folder(name=f"Диск {letter}:", path=f"{letter}:\\")

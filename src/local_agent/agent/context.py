@@ -2,11 +2,9 @@
 
 import json
 import math
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 
-from local_agent.agent.models import Skill
 from local_agent.llm.models import ChatMessage, ToolCall
 from local_agent.memory.models import Message
 
@@ -43,34 +41,10 @@ def build_system_prompt(
     summary: str = "",
     *,
     today: date | None = None,
-    skills: Sequence[Skill] = (),
+    capabilities: str = "",
     project_context: str = "",
-    team: Mapping[str, str] | None = None,
 ) -> str:
     # Части идут от редко меняющихся к частым: LM Studio переиспользует кэш общего начала промпта.
-    if team:
-        # Без этого раздела агент узнаёт о соседях только из описания send_message и делает их работу сам,
-        # особенно когда под задачу подходит навык.
-        system_prompt += (
-            "\n\nТы работаешь в команде. Если задача подходит под роль участника из списка, поручи её ему "
-            "через send_message и не делай её сам — это важнее навыков. В content передай задачу целиком: "
-            "что сделать, пути, условия. Ответ участника придёт следующим сообщением; итог перескажи пользователю.\n"
-            "Участники:\n"
-            + "\n".join(f"- {node_id}: {about}" for node_id, about in team.items())
-        )
-    if skills:
-        # В команде задача по роли участника уходит ему: иначе навык перехватывает её у участника.
-        delegate_first = (
-            "Сначала проверь, не подходит ли просьба под роль участника команды: такую задачу поручи ему, "
-            "навык не нужен. Иначе, если" if team else "Если"
-        )
-        system_prompt += (
-            f"\n\nНавыки — готовые инструкции для типовых задач. {delegate_first} просьба пользователя подходит "
-            "под навык из списка, твоим первым действием должен быть вызов use_skill с id навыка — "
-            "до любых других инструментов и до ответа. Затем выполняй задачу строго по его инструкциям.\n"
-            "Навыки:\n"
-            + "\n".join(f"- {skill.id}: {skill.description}" for skill in skills)
-        )
     if project_context:
         system_prompt += (
             "\n\nИнструкции выбранного проекта. Применяй их только к этому проекту. "
@@ -78,10 +52,12 @@ def build_system_prompt(
             "ограничения, подтверждения инструментов и явные указания пользователя.\n"
             + project_context
         )
+    if capabilities:
+        system_prompt += "\n\n" + capabilities
     if memory_context:
         system_prompt += (
-            "\n\nДолговременная память пользователя. Используй её как контекст, "
-            "но более новые слова пользователя имеют приоритет:\n" + memory_context
+            "\n\nЧто ты знаешь о пользователе (найдено в долговременной памяти по этому сообщению; "
+            "более новые слова пользователя важнее):\n" + memory_context
         )
     if today:
         # Только дата: время до минуты меняло бы промпт на каждом ходе и сбрасывало кэш.

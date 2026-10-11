@@ -128,8 +128,9 @@ class MarkdownMemoryStore:
         patch: MemoryPatch,
         *,
         session_id: str,
-        last_processed_message_id: str,
+        last_processed_message_id: str | None,
     ) -> int:
+        """last_processed_message_id=None — точечная запись (remember): checkpoint сессии не сдвигается."""
         self.initialize()
         documents = {document.name: document.content for document in self.list_documents()}
         original_documents = documents.copy()
@@ -153,9 +154,10 @@ class MarkdownMemoryStore:
 
         original_state = self.state_path.read_text(encoding="utf-8") if self.state_path.exists() else None
         state = self._read_state()
-        state.sessions[session_id] = SessionCheckpoint(
-            last_processed_message_id=last_processed_message_id
-        )
+        if last_processed_message_id is not None:
+            state.sessions[session_id] = SessionCheckpoint(
+                last_processed_message_id=last_processed_message_id
+            )
         targets = {name: documents[name] for name in sorted(changed)}
         targets[self.state_path.name] = self._state_content(state)
         self._commit(

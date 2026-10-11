@@ -2,17 +2,12 @@
 
 import asyncio
 import json
-from datetime import UTC, datetime
 
-from local_agent.agent.models import Agent
-from local_agent.agent.tool_executor import ToolExecutor
+from local_agent.extras.testgen.pipeline import CaseGenerator, chunks, parse_page, system_prompt
+from local_agent.extras.testgen.style import lint
+from local_agent.extras.testgen.tool import GenerateTestCasesTool
 from local_agent.llm.base import LLMProviderError, LLMProviderUnavailable
 from local_agent.llm.models import ChatResult
-from local_agent.sessions.models import Session
-from local_agent.testgen.pipeline import CaseGenerator, chunks, parse_page, system_prompt
-from local_agent.testgen.style import lint
-from local_agent.tools.registry import ToolRegistry
-from local_agent.tools.testgen import GenerateTestCasesTool
 
 BODY = "## Настройка\n\n" + "Откройте меню «Сервер» и задайте адрес. " * 20
 
@@ -179,18 +174,23 @@ def test_tool_keeps_finished_pages_when_server_goes_down(tmp_path):
     assert (tmp_path / "testgen/test_cases/docs/a.md").exists()
 
 
-def test_executor_binds_session_model_to_tools(tmp_path):
-    now = datetime.now(UTC)
-    session = Session(
-        id="s", title="t", created_at=now, updated_at=now, agent_id="qa", model="gemma", provider="p",
-        workspace=str(tmp_path), enabled_tools=["generate_test_cases"],
-    )
-    agent = Agent(id="qa", name="QA", system_prompt="-", llm_provider="p", model="", tools=("generate_test_cases",))
-    provider = FakeProvider()
+def test_extra_runs_on_model_of_current_turn(tmp_path):
+    from local_agent.capabilities.extras import TestCasesExtra
+    from local_agent.graph.agent_graph import CURRENT_TURN
+    from local_agent.llm.registry import LLMRegistry
 
-    executor = ToolExecutor.for_session(
-        ToolRegistry([GenerateTestCasesTool()]), agent, session, "r", llm=(provider, "gemma"),
-    )
+    provider = FakeProvider({"test_cases": [CASE]})
+    tool = TestCasesExtra(LLMRegistry({"p": provider}))
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text("# Страница\n\n" + BODY, encoding="utf-8")
 
-    tool = executor.get("generate_test_cases")
-    assert tool._provider is provider and tool._model == "gemma"
+    unbound = asyncio.run(tool.execute({"path": "docs"}, tmp_path))
+    token = CURRENT_TURN.set({"provider_id": "p", "model": "gemma"})
+    try:
+        bound = asyncio.run(tool.execute({"path": "docs", "limit": 1}, tmp_path))
+    finally:
+        CURRENT_TURN.reset(token)
+
+    assert unbound.is_error
+    assert not bound.is_error and (tmp_path / "testgen/test_cases/docs/a.md").exists()

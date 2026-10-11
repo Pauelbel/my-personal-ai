@@ -3,6 +3,7 @@
 import json
 
 from local_agent.memory.conversation import ConversationService
+from local_agent.memory.models import MessageStats
 from local_agent.storage.jsonl.conversation import JsonlConversationStore
 
 
@@ -27,3 +28,13 @@ def test_jsonl_store_uses_one_file_per_session(tmp_path) -> None:
 
     store.delete("session-1")
     assert not (tmp_path / "conversations" / "session-1.jsonl").exists()
+
+
+def test_jsonl_store_keeps_answer_stats(tmp_path) -> None:
+    store = JsonlConversationStore(tmp_path / "conversations")
+    stats = MessageStats(seconds=2.5, rounds=2, input_tokens=900, output_tokens=40)
+    answer = ConversationService(store).add_assistant_message("session-1", "Готово", (), stats)
+
+    record = json.loads((tmp_path / "conversations" / "session-1.jsonl").read_text(encoding="utf-8"))
+    assert record["stats"] == {"seconds": 2.5, "rounds": 2, "input_tokens": 900, "output_tokens": 40}
+    assert JsonlConversationStore(tmp_path / "conversations").list("session-1") == [answer]

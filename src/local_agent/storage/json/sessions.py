@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
@@ -18,6 +19,8 @@ class JsonSessionRepository:
     def __init__(self, root: Path) -> None:
         self.root = root
         self._lock = RLock()
+        # Вызывается с id после каждой записи и удаления: так интерфейс узнаёт об изменениях без опроса.
+        self.on_change: Callable[[str], None] | None = None
 
     def initialize(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -74,7 +77,8 @@ class JsonSessionRepository:
             if not path.exists():
                 return False
             path.unlink()
-            return True
+        self._changed(path.stem)
+        return True
 
     def set_usage(self, session_id: str, usage: dict[str, object]) -> None:
         with self._lock:
@@ -108,8 +112,11 @@ class JsonSessionRepository:
             raise ValueError("Недопустимый ID сессии")
         return self.root / f"{session_id}.json"
 
-    @staticmethod
-    def _write(path: Path, session: Session) -> None:
+    def _changed(self, item_id: str) -> None:
+        if self.on_change is not None:
+            self.on_change(item_id)
+
+    def _write(self, path: Path, session: Session) -> None:
         temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
         try:
             temporary.write_text(
@@ -119,3 +126,4 @@ class JsonSessionRepository:
             os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
+        self._changed(path.stem)

@@ -3,355 +3,183 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Meepo Agent</title>
+    <title>Meepo</title>
     <link rel="icon" type="image/png" href="/ui/assets/meepo-mascot.png" />
     <script>
-      try { document.documentElement.dataset.theme = localStorage.getItem("app-theme") || "light"; }
-      catch { document.documentElement.dataset.theme = "light"; }
+      try {
+        const saved = localStorage.getItem("app-theme");
+        document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      } catch { document.documentElement.dataset.theme = "light"; }
     </script>
-    <link rel="stylesheet" href="/ui/css/app.css" />
     <link rel="stylesheet" href="/ui/css/theme.css" />
+    <link rel="stylesheet" href="/ui/css/app.css" />
     <script type="module" src="/ui/js/app.js"></script>
   </head>
   <body>
-    <div class="app-shell">
-      <main class="main-area">
-        <!-- Вся навигация — в шапке: слева сессия, в центре правая панель, справа служебные страницы. -->
-        <header class="app-header">
-          <div class="header-group header-session">
-            <img class="header-mascot" src="/ui/assets/meepo-mascot.png" width="30" height="30" alt="" aria-hidden="true" />
-            <button class="header-button" id="show-sessions" type="button" aria-expanded="false" aria-controls="sessions-drawer" title="Сессии и проекты"><span aria-hidden="true">☰</span><span class="header-label">Сессии</span></button>
-            <span class="header-separator" aria-hidden="true">·</span>
-            <h1 id="page-title">
-              <button class="header-title-button" id="edit-title" type="button" aria-label="Переименовать сессию" title="Переименовать сессию"><span class="header-title-text" id="title-text">Сессии</span><span class="header-title-edit" aria-hidden="true">✎</span></button>
-              <input class="header-title-input" id="title-input" aria-label="Название сессии" maxlength="100" hidden />
-            </h1>
-            <button class="header-folder" id="session-folder" type="button" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5h6l2 2h10v10.5H3z"/></svg><span class="header-folder-path" id="session-folder-path"></span></button>
-            <button class="header-button" id="new-session" type="button" title="Новая сессия в проекте текущей сессии"><span aria-hidden="true">＋</span><span class="header-label">Сессия</span></button>
-          </div>
-          <div class="header-group header-tabs" id="header-tabs" role="group" aria-label="Правая панель" hidden>
-            <button class="header-button" id="tab-canvas" type="button" aria-controls="canvas-pane" aria-pressed="true" title="Холст агентов"><span aria-hidden="true">◧</span><span class="header-label">Холст</span></button>
-            <button class="header-button" id="tab-files" type="button" aria-controls="files-pane" aria-pressed="false" title="Файлы проекта"><span aria-hidden="true">▤</span><span class="header-label">Файлы</span></button>
-          </div>
-          <div class="header-group header-pages">
-            <button class="header-button" id="show-customization" type="button" aria-pressed="false" title="Кастомизация: инструменты, память, агенты и навыки"><span aria-hidden="true">⚒</span><span class="header-label">Кастомизация</span></button>
-            <button class="header-button" id="show-settings" type="button" aria-pressed="false" title="Настройки"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M19.2 10.5L21.9 10.8L21.9 13.2L19.2 13.5L18.2 16.0L19.9 18.2L18.2 19.9L16.0 18.2L13.5 19.2L13.2 21.9L10.8 21.9L10.5 19.2L8.0 18.2L5.8 19.9L4.1 18.2L5.8 16.0L4.8 13.5L2.1 13.2L2.1 10.8L4.8 10.5L5.8 8.0L4.1 5.8L5.8 4.1L8.0 5.8L10.5 4.8L10.8 2.1L13.2 2.1L13.5 4.8L16.0 5.8L18.2 4.1L19.9 5.8L18.2 8.0z"/><circle cx="12" cy="12" r="3"/></svg><span class="header-label">Настройки</span></button>
-          </div>
-        </header>
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="ghost icon" id="sessions-toggle" type="button" aria-expanded="true" aria-controls="sidebar" title="Проекты и сессии">☰</button>
+        <span class="brand"><img src="/ui/assets/meepo-mascot.png" alt="" width="24" height="24" />Meepo</span>
+        <nav class="crumbs" aria-label="Открытая сессия">
+          <button class="crumb" id="project-chip" type="button" title="Настройки проекта"></button>
+          <span class="crumb-sep" aria-hidden="true">/</span>
+          <span class="session-title" id="session-title">—</span>
+        </nav>
+        <span class="offline" id="offline" role="status" hidden>нет связи с сервером</span>
+      </div>
+      <nav class="tabs" aria-label="Разделы">
+        <button type="button" data-view="chat" aria-pressed="true">Чат</button>
+        <button type="button" data-view="team" aria-pressed="false">Команда</button>
+        <button type="button" data-view="files" aria-pressed="false">Файлы</button>
+        <button type="button" data-view="wiki" aria-pressed="false">Вики</button>
+        <button type="button" data-view="capabilities" aria-pressed="false">Возможности</button>
+        <button type="button" data-view="memory" aria-pressed="false">Память</button>
+      </nav>
+      <div class="topbar-right">
+        <button class="ghost icon" id="theme-toggle" type="button" title="Светлая или тёмная тема">☾</button>
+      </div>
+    </header>
 
-        <!-- Сессии выезжают слева поверх чата: выбор, создание и удаление сессий и проектов. -->
-        <aside class="sessions-drawer" id="sessions-drawer" aria-label="Сессии и проекты" hidden>
-          <div class="drawer-heading">
-            <span>Сессии</span>
-            <button class="heading-button" id="new-project" type="button" title="Новый проект с рабочей папкой">＋ Проект</button>
-          </div>
-          <nav class="session-list" id="session-list" aria-label="Сессии"></nav>
-        </aside>
+    <div class="layout">
+      <aside class="sidebar" id="sidebar" aria-label="Проекты и сессии">
+        <div class="sidebar-head">
+          <h3>Проекты</h3>
+          <button class="ghost small" id="new-project" type="button" title="Новый проект: папка, в которой работает агент">＋ проект</button>
+        </div>
+        <button class="new-session" id="new-session" type="button">＋ Новая сессия</button>
+        <div class="tree" id="session-list"></div>
+      </aside>
 
-        <div class="notice" id="notice" role="status" hidden></div>
-
-        <section class="content-panel" id="session-panel" aria-labelledby="page-title">
-          <div class="empty-state" id="empty-state">
-            <div class="empty-icon" aria-hidden="true">✳</div>
-            <h2>Начните с новой сессии</h2>
-            <p>Создайте разговор, чтобы он появился в списке сессий (☰ Сессии) и сохранился после перезапуска.</p>
-            <button class="primary-button" id="empty-new-session" type="button">Создать сессию</button>
-          </div>
-
-          <div class="session-detail" id="session-detail" hidden>
-            <div class="conversation">
-              <nav class="run-bar" id="run-bar" aria-label="Сессия агента с холста" hidden></nav>
-              <div class="message-list" id="message-list" aria-live="polite"></div>
-              <div class="turn-recovery" id="turn-recovery" role="status" hidden>
-                <p id="turn-recovery-text"></p>
-                <button class="secondary-button" id="retry-turn" type="button">Повторить</button>
-              </div>
-              <div class="chat-usage" id="chat-usage" hidden>
-                <span class="usage-context" id="usage-context" title="Входные токены последнего запроса (по данным сервера модели) из размера контекстного окна">
-                  <span class="usage-label">Контекст</span>
-                  <span class="usage-meter" aria-hidden="true"><span class="usage-fill" id="usage-fill"></span></span>
-                  <span id="usage-text">—</span>
-                </span>
-                <span class="usage-speed" id="usage-speed" title="Скорость генерации последнего ответа: токены ответа в секунду после первого токена">⚡ —</span>
-              </div>
-              <div class="composer-shell">
-                <form class="composer" id="message-form">
-                  <label class="visually-hidden" for="message-input">Сообщение</label>
-                  <textarea id="message-input" rows="3" placeholder="Спросите о проекте или попросите внести изменения..." title="Enter — отправить, Ctrl+Enter — новая строка" required></textarea>
-                </form>
-                <div class="composer-config">
-                  <label class="config-field" for="session-agent" title="Агент этой сессии. Агенты с холста перечислены ниже: выбор открывает разговор с ними"><span class="visually-hidden">Агент</span><select id="session-agent"><option value="agent:default">Основной агент</option></select></label>
-                  <span class="config-divider" aria-hidden="true"></span>
-                  <label class="config-field" for="session-provider"><span class="visually-hidden">Провайдер</span><select id="session-provider"><option value="lm_studio">LM Studio</option></select></label>
-                  <span class="config-divider" aria-hidden="true"></span>
-                  <label class="config-field model-field" for="session-model" title="Модель этого чата: меняется сразу, со следующего сообщения"><span class="visually-hidden">Модель</span><select id="session-model" required></select></label>
-                  <button class="composer-memory" id="update-memory-chat" type="button" title="Обработать новые сообщения этой сессии">Обновить память</button>
-                  <button class="composer-send" id="save-message" type="submit" form="message-form" aria-label="Отправить сообщение" title="Отправить">↑</button>
-                </div>
-              </div>
-            </div>
-            <div class="run-resizer" id="canvas-resizer" role="separator" aria-orientation="vertical" aria-label="Ширина чата" title="Потяните, чтобы изменить ширину; двойной щелчок — по умолчанию" tabindex="0"></div>
-            <section class="canvas-pane" id="canvas-pane" aria-label="Холст агентов">
-              <div class="team-toolbar">
-                <label>Добавить агента<select id="team-add-agent"></select></label>
-                <span class="teams-status" id="teams-status" role="status"></span>
-              </div>
-              <div class="team-canvas" id="team-canvas">
-                <div class="team-stage" id="team-stage">
-                  <svg class="team-edges" id="team-edges" aria-hidden="true">
-                    <defs>
-                      <marker id="team-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                        <path d="M0 1L9 5L0 9z" fill="currentColor" />
-                      </marker>
-                    </defs>
-                  </svg>
-                </div>
-                <p class="canvas-hint" id="canvas-hint">Добавьте агентов и протяните к ним стрелки от агента сессии — он сможет поручать им работу. Пока стрелок нет, это обычный чат.</p>
-                <div class="zoom-controls" aria-label="Масштаб холста">
-                  <button id="zoom-out" type="button" aria-label="Уменьшить">−</button>
-                  <button id="zoom-reset" type="button" title="Сбросить масштаб">100%</button>
-                  <button id="zoom-in" type="button" aria-label="Увеличить">＋</button>
-                </div>
-              </div>
-            </section>
-            <section class="files-pane" id="files-pane" aria-label="Файлы проекта" hidden>
-              <nav class="files-tree" id="files-tree" aria-label="Дерево файлов"></nav>
-              <div class="files-viewer">
-                <div class="files-viewer-title" id="files-viewer-title">
-                  <span class="files-viewer-name" id="files-viewer-name"></span>
-                  <span class="files-viewer-actions" id="files-viewer-actions" hidden>
-                    <span id="files-status" role="status"></span>
-                    <button id="files-edit" type="button" title="Переключить просмотр и редактирование">✎ Править</button>
-                    <button id="files-save" type="button" hidden>Сохранить</button>
-                  </span>
-                </div>
-                <div class="files-viewer-body" id="files-viewer-body"></div>
-              </div>
-            </section>
-          </div>
-        </section>
-
-        <section class="content-panel settings-panel" id="settings-panel" aria-labelledby="settings-title" hidden>
-          <span class="section-label">ПРИЛОЖЕНИЕ</span>
-          <h2 id="settings-title">Настройки</h2>
-          <p>Выберите оформление, в котором удобно работать. Оно сохранится в этом браузере.</p>
-          <fieldset class="theme-settings">
-            <legend>Тема интерфейса</legend>
-            <label class="theme-option"><input type="radio" name="theme" value="light" /><span><strong>Светлая</strong><small>Светлое поле, бирюзовый текст и синие плашки</small></span></label>
-            <label class="theme-option"><input type="radio" name="theme" value="dark" /><span><strong>Тёмная</strong><small>Космический синий с жёлтым акцентом</small></span></label>
-          </fieldset>
-          <p class="settings-note">Параметры сервера пока задаются в локальном файле конфигурации.</p>
-        </section>
-
-        <section class="content-panel customization-panel" id="customization-panel" aria-labelledby="customization-title" hidden>
-          <h2 id="customization-title">Кастомизация</h2>
-          <p class="customization-description">Настройте инструменты, память, агентов и навыки.</p>
-          <nav class="customization-tabs" aria-label="Разделы кастомизации">
-            <button id="show-tools" type="button" aria-controls="tools-panel">Инструменты</button>
-            <button id="show-memory" type="button" aria-controls="memory-panel">Память</button>
-            <button id="show-prompt" type="button" aria-controls="prompt-panel">Агенты</button>
-            <button id="show-skills" type="button" aria-controls="skills-panel">Навыки</button>
-          </nav>
-          <section id="tools-panel" aria-labelledby="show-tools" hidden>
-            <p id="tools-intro"></p>
-            <div class="tools-list" id="tools-list"></div>
+      <main class="view" id="view-chat">
+        <nav class="agent-bar" id="agent-bar" aria-label="Агенты этой сессии" hidden></nav>
+        <div class="messages" id="messages" aria-live="polite"></div>
+        <div class="chat-bottom">
+          <section class="dock" id="dock" aria-label="Задачи саб-агентов" hidden>
+            <button class="dock-head" id="dock-toggle" type="button" aria-expanded="true" aria-controls="tasks">
+              <span class="dock-title"><span class="dock-caret" aria-hidden="true">▾</span> саб-агенты <span id="dock-count"></span></span>
+              <span class="dock-summary" id="dock-summary"></span>
+            </button>
+            <ul class="tasks" id="tasks"></ul>
           </section>
-        <section class="memory-panel" id="memory-panel" aria-labelledby="memory-title" hidden>
-          <div class="memory-header">
-            <div>
-              <span class="section-label" id="memory-title">ДОЛГОВРЕМЕННАЯ ПАМЯТЬ</span>
-              <p>Markdown-файлы можно редактировать здесь или обычным текстовым редактором. Обновление запускается из выбранной сессии.</p>
-            </div>
-          </div>
-          <p class="memory-status" id="memory-status" role="status"></p>
-          <div class="memory-workspace">
-            <nav class="memory-files" id="memory-files" aria-label="Файлы памяти"></nav>
-            <div class="memory-editor">
-              <label for="memory-content" id="memory-document-title">Выберите файл</label>
-              <p class="memory-document-description" id="memory-document-description">Выберите категорию, чтобы увидеть её назначение.</p>
-              <textarea id="memory-content" spellcheck="true" disabled></textarea>
-              <button class="primary-button" id="save-memory" type="button" disabled>Сохранить</button>
-            </div>
-          </div>
-        </section>
-
-        <section class="memory-panel" id="prompt-panel" aria-labelledby="prompt-title" hidden>
-          <div class="memory-header">
-            <div>
-              <span class="section-label" id="prompt-title">АГЕНТЫ</span>
-              <p>Агент — роль: инструменты, навыки и системный промпт, с которого начинается каждый его запрос к модели. Агента и модель выбирают под полем ввода в чате. Изменения действуют со следующего сообщения во всех сессиях и командах этого агента.</p>
-            </div>
-            <div class="skill-header-actions">
-              <button class="primary-button" id="add-agent" type="button">＋ Агент</button>
-            </div>
-          </div>
-          <p class="memory-status" id="prompt-status" role="status"></p>
-          <div class="memory-workspace prompt-workspace">
-            <nav class="memory-files" id="prompt-agents" aria-label="Агенты"></nav>
-            <form class="memory-editor agent-form" id="agent-form">
-              <span class="agent-form-title" id="prompt-agent-title">Агент</span>
-              <p class="memory-document-description" id="prompt-agent-file"></p>
-              <div class="agent-form-grid">
-                <label class="dialog-field">Имя<input id="agent-name" maxlength="100" autocomplete="off" required /></label>
-                <label class="dialog-field">ID<input id="agent-id" maxlength="60" autocomplete="off" placeholder="латиница, например reviewer" pattern="[a-z0-9][a-z0-9_-]*" /></label>
-                <label class="dialog-field wide">Описание — его видят соседи по команде<input id="agent-description" maxlength="500" autocomplete="off" /></label>
-                <label class="dialog-field">Раундов инструментов за ход<input id="agent-rounds" type="number" min="1" max="50" placeholder="8" aria-describedby="agent-rounds-hint" /></label>
-                <p class="field-hint wide" id="agent-rounds-hint">Раунд — один шаг работы с инструментами: модель просит вызвать их (прочитать файл, найти, записать — до 4 вызовов за раз), приложение выполняет и возвращает результат. Число задаёт, сколько таких шагов подряд агент сделает на одно ваше сообщение; после лимита он обязан ответить текстом, уже без инструментов. Пусто — 8. Агенту, который сначала изучает папки, а потом пишет файл, ставьте больше, например 15–20: иначе раунды уйдут на чтение и до записи он не дойдёт.</p>
+          <form class="composer" id="composer">
+            <p class="composer-note" id="composer-note" hidden></p>
+            <p class="composer-retry" id="composer-retry" hidden><span id="retry-reason"></span> <button type="button" id="retry">Повторить</button></p>
+            <div class="queue" id="queue" aria-label="Очередь сообщений" hidden></div>
+            <div class="composer-box">
+              <textarea id="input" rows="1" placeholder="Сообщение (Enter — отправить, Shift+Enter — новая строка)" aria-label="Сообщение"></textarea>
+              <div class="composer-bar">
+                <select id="model-select" aria-label="Модель" title="Модель этой сессии"></select>
+                <button class="mode" id="mode-badge" type="button" title="Права агента в папке проекта — изменить в настройках проекта"></button>
+                <span class="usage" id="usage"></span>
+                <span class="stop-hint" id="stop-hint" hidden>Esc — остановить</span>
+                <button class="primary send" id="send" type="submit" title="Отправить">↑</button>
               </div>
-              <fieldset class="agent-checks" id="agent-tools"><legend>Инструменты</legend></fieldset>
-              <fieldset class="agent-checks" id="agent-skills">
-                <legend>Навыки</legend>
-                <label class="agent-check all"><input type="checkbox" id="agent-all-skills" /> все навыки каталога, включая будущие</label>
-              </fieldset>
-              <label class="dialog-field" for="prompt-content">Системный промпт</label>
-              <textarea id="prompt-content" spellcheck="true" required disabled></textarea>
-              <div class="agent-form-actions">
-                <button class="danger-button" id="delete-agent" type="button">Удалить агента</button>
-                <button class="primary-button" id="save-prompt" type="submit" disabled>Сохранить</button>
-              </div>
-            </form>
-          </div>
-        </section>
-
-        <section class="memory-panel" id="skills-panel" aria-labelledby="skills-title" hidden>
-          <div class="memory-header">
-            <div>
-              <span class="section-label" id="skills-title">НАВЫКИ</span>
-              <p>Готовые инструкции для типовых задач. Модель видит список с описаниями и сама подгружает нужный навык. Добавленные здесь навыки доступны сразу; файлы, добавленные вручную, подхватываются после перезапуска.</p>
             </div>
-            <div class="skill-header-actions">
-              <button id="show-skill-archive" type="button">Архив</button>
-              <button class="primary-button" id="add-skill" type="button">＋ Добавить навык</button>
-            </div>
-          </div>
-          <p class="memory-status" id="skills-status" role="status"></p>
-          <p class="memory-status" id="skills-empty" hidden>Навыков пока нет.</p>
-          <div class="memory-workspace">
-            <nav class="memory-files" id="skills-list" aria-label="Навыки"></nav>
-            <div class="memory-editor">
-              <label for="skill-content" id="skill-title">Выберите навык</label>
-              <p class="memory-document-description" id="skill-description"></p>
-              <p class="skill-users" id="skill-users"></p>
-              <div class="skill-view-controls" aria-label="Режим просмотра навыка">
-                <button id="skill-view" type="button" aria-pressed="true" disabled>Просмотр</button>
-                <button id="skill-edit" type="button" aria-pressed="false" disabled>Редактировать</button>
-                <button id="delete-skill" type="button" disabled>Удалить</button>
-              </div>
-              <div class="message-content skill-preview" id="skill-preview" role="region" aria-labelledby="skill-title"></div>
-              <textarea id="skill-content" spellcheck="true" disabled hidden></textarea>
-              <button class="primary-button" id="save-skill" type="button" disabled hidden>Сохранить</button>
-            </div>
-          </div>
-        </section>
-
-        </section>
-
+          </form>
+        </div>
       </main>
-    </div>
-    <dialog class="tools-dialog skill-dialog" id="skill-archive-dialog" aria-labelledby="skill-archive-title">
-      <div class="tools-dialog-header">
-        <h2 id="skill-archive-title">Архив навыков</h2>
-        <button class="tools-close" id="skill-archive-close" type="button" aria-label="Закрыть">×</button>
-      </div>
-      <p>Удалённые навыки можно восстановить. Очистка архива удаляет их файлы без возможности восстановления через приложение.</p>
-      <p id="skill-archive-status" role="status"></p>
-      <div class="tools-list" id="skill-archive-list"></div>
-      <div class="skill-dialog-actions">
-        <button id="clear-skill-archive" type="button" disabled>Очистить архив</button>
-      </div>
-    </dialog>
-    <dialog class="tools-dialog skill-dialog" id="skill-dialog" aria-labelledby="skill-dialog-title">
-      <form id="skill-form">
-        <div class="tools-dialog-header">
-          <h2 id="skill-dialog-title">Добавить навык</h2>
-          <button class="tools-close" id="skill-close" type="button" aria-label="Закрыть">×</button>
-        </div>
-        <div class="skill-form-fields">
-          <label for="new-skill-name">Название</label>
-          <input id="new-skill-name" maxlength="120" required placeholder="Например, диагностика ошибки" />
-          <label for="new-skill-description">Когда использовать</label>
-          <input id="new-skill-description" maxlength="500" required placeholder="Опишите задачи, для которых нужен этот навык" />
-          <label for="new-skill-instructions">Инструкции (Markdown)</label>
-          <textarea id="new-skill-instructions" rows="10" maxlength="65536" required placeholder="Цель, порядок действий и ожидаемый результат"></textarea>
-        </div>
-        <p class="memory-status" id="skill-create-error" role="status"></p>
-        <div class="skill-dialog-actions">
-          <button id="skill-cancel" type="button">Отмена</button>
-          <button class="primary-button" id="skill-create" type="submit">Добавить</button>
-        </div>
-      </form>
-    </dialog>
-    <dialog class="tools-dialog project-dialog" id="project-dialog" aria-labelledby="project-dialog-title">
-      <form id="project-form">
-        <div class="tools-dialog-header">
-          <h2 id="project-dialog-title">Новый проект</h2>
-          <button class="tools-close" id="project-close" type="button" aria-label="Закрыть">×</button>
-        </div>
-        <p>Проект — рабочая папка с общими настройками. Инструменты включаются один раз для всех его сессий, а агент и модель запоминаются по последнему выбору.</p>
-        <label class="dialog-field">Название<input id="project-name" maxlength="100" autocomplete="off" required /></label>
-        <div class="dialog-field">
-          <span>Папка</span>
-          <div class="folder-row">
-            <span class="folder-path" id="project-folder">Не выбрана</span>
-            <button class="secondary-button" id="project-choose-folder" type="button">Выбрать…</button>
+
+      <main class="view page" id="view-team" hidden>
+        <div class="page-head"><h2>Команда</h2></div>
+        <p class="hint">Основной агент и его саб-агенты: стрелки — кому он поручал задачи в этой сессии. Щелчок по карточке открывает разговор, карточки можно перетаскивать. Потяните от точки на краю карточки саб-агента к другому — он сможет спрашивать его посреди задачи; щелчок по связи убирает её.</p>
+        <div class="team" id="team"></div>
+      </main>
+
+      <main class="view page" id="view-files" hidden>
+        <div class="page-head"><h2>Файлы</h2><span class="hint" id="files-root"></span></div>
+        <div class="split files">
+          <div class="files-tree" id="files-tree" aria-label="Файлы проекта"></div>
+          <div class="editor files-pane">
+            <div class="editor-actions">
+              <span class="files-path" id="files-path"></span>
+              <span class="files-actions"><span class="hint" id="files-status"></span>
+                <input id="files-line" type="number" min="1" placeholder="строка" title="Перейти к строке (Enter)" aria-label="Перейти к строке" hidden />
+                <button type="button" id="files-source" hidden>‹› Исходник</button>
+                <button type="button" id="files-edit" hidden>✎ Править</button>
+                <button class="primary" type="button" id="files-save" hidden>Сохранить</button></span>
+            </div>
+            <div class="files-body" id="files-body"><p class="hint files-note">Выберите файл слева.</p></div>
           </div>
         </div>
-        <p class="dialog-error" id="project-error" role="alert" hidden></p>
+      </main>
+
+      <main class="view page" id="view-wiki" hidden>
+        <div class="page-head">
+          <h2>Вики</h2>
+          <input id="wiki-search" type="search" placeholder="Поиск по вики" aria-label="Поиск по вики" />
+        </div>
+        <p class="hint">Заметки агента по статьям и ссылкам. Пришлите ссылку в чат и попросите сделать заметку. Файлы лежат в <code>data/wiki</code>.</p>
+        <div class="split">
+          <div class="list tree-list" id="wiki-list"></div>
+          <article class="reader" id="wiki-page"><p class="hint">Выберите страницу.</p></article>
+        </div>
+      </main>
+
+      <main class="view page" id="view-capabilities" hidden>
+        <div class="page-head">
+          <h2>Возможности</h2>
+          <button id="capabilities-reload" type="button" title="Перечитать файлы после ручной правки">↻ Перечитать с диска</button>
+        </div>
+        <p class="hint">Всё, что агент создал с вашего утверждения, — файлы в <code>data/</code>: их можно открыть и поправить руками.</p>
+        <nav class="subtabs" id="cap-tabs" aria-label="Виды возможностей"></nav>
+        <div class="tree-list" id="capabilities"></div>
+      </main>
+
+      <main class="view page" id="view-memory" hidden>
+        <div class="page-head">
+          <h2>Память</h2>
+          <button id="memory-update" type="button" title="Разобрать новые сообщения текущей сессии">Обновить из разговора</button>
+        </div>
+        <p class="hint">Факты о вас. В промпт попадает только профиль и записи, найденные по сообщению. Саб-агенты памяти не видят.</p>
+        <div class="split">
+          <div class="list tree-list" id="memory-list"></div>
+          <div class="editor">
+            <textarea id="memory-text" spellcheck="false" aria-label="Текст файла памяти"></textarea>
+            <div class="editor-actions"><span class="hint" id="memory-status"></span><button class="primary" id="memory-save" type="button">Сохранить</button></div>
+          </div>
+        </div>
+      </main>
+
+      <aside class="side" id="side" aria-label="Требует внимания" hidden>
+        <h3>Требует внимания <span class="count" id="cards-count"></span></h3>
+        <div id="cards"></div>
+      </aside>
+    </div>
+
+    <dialog id="project-dialog">
+      <form method="dialog" id="project-form">
+        <h3 id="project-dialog-title">Проект</h3>
+        <label>Название<input id="project-name" maxlength="100" placeholder="по умолчанию — имя папки" /></label>
+        <label>Папка<input id="project-path" required placeholder="/home/…/project" /></label>
+        <label>Права агента в папке
+          <select id="project-mode">
+            <option value="full">Полные: чтение и изменения с вашим подтверждением</option>
+            <option value="read">Только чтение: менять файлы агент не может</option>
+          </select>
+        </label>
+        <div class="folders">
+          <div class="folders-head"><button type="button" id="folder-up">↑</button><span id="folder-current"></span></div>
+          <ul id="folder-list"></ul>
+        </div>
+        <p class="error" id="project-error"></p>
         <div class="dialog-actions">
-          <button class="danger-button" id="project-delete" type="button" hidden>Удалить проект</button>
-          <button class="secondary-button" id="project-cancel" type="button">Отмена</button>
-          <button class="primary-button" id="project-save" type="submit">Создать</button>
+          <button type="button" id="project-delete" hidden>Удалить проект</button>
+          <span></span>
+          <button type="button" id="project-cancel">Отмена</button>
+          <button class="primary" type="submit">Сохранить</button>
         </div>
       </form>
     </dialog>
-    <dialog class="tools-dialog skill-dialog" id="agent-node-dialog" aria-labelledby="agent-node-title">
-      <form id="agent-node-form">
-        <div class="tools-dialog-header">
-          <h2 id="agent-node-title">Настройки агента</h2>
-          <button class="tools-close" id="agent-node-close" type="button" aria-label="Закрыть">×</button>
-        </div>
-        <label class="dialog-field">Имя на холсте — так его видят соседи<input id="agent-node-name" maxlength="100" autocomplete="off" /></label>
-        <p class="agent-node-about" id="agent-node-about"></p>
-        <div id="agent-node-prompt-field">
-          <label class="dialog-field" for="agent-node-prompt">Инструкции</label>
-          <textarea class="agent-prompt-text" id="agent-node-prompt" rows="7"></textarea>
-        </div>
-        <div class="agent-node-lists">
-          <section aria-labelledby="agent-node-tools-title">
-            <span class="section-label" id="agent-node-tools-title">Инструменты</span>
-            <ul class="agent-node-list" id="agent-node-tools"></ul>
-          </section>
-          <section aria-labelledby="agent-node-skills-title">
-            <span class="section-label" id="agent-node-skills-title">Навыки</span>
-            <ul class="agent-node-list" id="agent-node-skills"></ul>
-          </section>
-        </div>
-        <p>Инструкции, инструменты и навыки — общие для всех сессий этого агента и действуют со следующего хода. Инструменты и навыки меняются в настройках агента.</p>
-        <p class="dialog-error" id="agent-node-error" role="alert" hidden></p>
-        <div class="dialog-actions">
-          <button class="danger-button" id="agent-node-remove" type="button">Убрать с холста</button>
-          <button class="secondary-button" id="agent-node-agents" type="button">Все настройки агента…</button>
-          <button class="secondary-button" id="agent-node-cancel" type="button">Отмена</button>
-          <button class="primary-button" id="agent-node-save" type="submit">Сохранить</button>
-        </div>
-      </form>
-    </dialog>
-    <dialog class="tools-dialog folder-dialog" id="folder-dialog" aria-labelledby="folder-dialog-title">
-      <div class="tools-dialog-header">
-        <h2 id="folder-dialog-title">Выбор папки</h2>
-        <button class="tools-close" id="folder-close" type="button" aria-label="Закрыть">×</button>
-      </div>
-      <form class="folder-path-form" id="folder-path-form">
-        <button class="secondary-button" id="folder-up" type="button" title="На уровень выше" aria-label="На уровень выше">↑</button>
-        <input id="folder-path" placeholder="Вставьте путь или выберите ниже" aria-label="Путь к папке" autocomplete="off" />
-        <button class="secondary-button" type="submit">Перейти</button>
-      </form>
-      <div class="folder-list" id="folder-list"></div>
-      <p class="dialog-error" id="folder-error" role="alert" hidden></p>
-      <div class="dialog-actions">
-        <button class="secondary-button" id="folder-cancel" type="button">Отмена</button>
-        <button class="primary-button" id="folder-select" type="button" disabled>Выбрать эту папку</button>
+
+    <dialog id="source-dialog">
+      <div class="source">
+        <h3 id="source-title"></h3>
+        <p class="hint" id="source-path"></p>
+        <div id="source-files"></div>
+        <div class="dialog-actions"><span></span><button type="button" id="source-close">Закрыть</button></div>
       </div>
     </dialog>
+
+    <div class="toast" id="toast" role="alert" hidden></div>
   </body>
 </html>

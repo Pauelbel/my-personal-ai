@@ -119,6 +119,8 @@ class JsonlConversationStore:
             data["is_error"] = True
         if message.sender:
             data["sender"] = message.sender
+        if message.stats:
+            data["stats"] = message.stats.model_dump(exclude_none=True)
         return (json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
     @staticmethod

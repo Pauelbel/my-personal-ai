@@ -12,6 +12,18 @@ class StoredToolCall(BaseModel):
     arguments: str
 
 
+class MessageStats(BaseModel):
+    """Сводка хода под ответом: время модели и инструментов (без ожидания решений пользователя) и токены."""
+
+    seconds: float
+    # Сколько раз за ход звали модель: раунды с инструментами плюс финальный ответ.
+    rounds: int = 1
+    # Размер последнего запроса к модели и всё, что она написала за ход.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    tokens_per_second: float | None = None
+
+
 class Message(BaseModel):
     id: str
     session_id: str
@@ -24,8 +36,10 @@ class Message(BaseModel):
     tool_call_id: str | None = None
     tool_name: str | None = None
     is_error: bool = False
-    # Реплику «user» написал не человек, а агент с холста сессии: здесь его имя.
+    # Реплику «user» написал не человек, а агент: основной (задача саб-агенту) или саб-агент (результат задачи).
     sender: str | None = None
+    # Только у финального ответа хода.
+    stats: MessageStats | None = None
 
     @property
     def from_user(self) -> bool:

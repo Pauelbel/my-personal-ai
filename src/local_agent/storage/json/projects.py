@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
@@ -17,6 +18,8 @@ class JsonProjectRepository:
     def __init__(self, root: Path) -> None:
         self.root = root
         self._lock = RLock()
+        # Вызывается с id после каждой записи и удаления: так интерфейс узнаёт об изменениях без опроса.
+        self.on_change: Callable[[str], None] | None = None
 
     def initialize(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -55,7 +58,8 @@ class JsonProjectRepository:
             if not path.exists():
                 return False
             path.unlink()
-            return True
+        self._changed(path.stem)
+        return True
 
     def list(self) -> list[Project]:
         with self._lock:
@@ -72,11 +76,15 @@ class JsonProjectRepository:
             raise ValueError("Недопустимый ID проекта")
         return self.root / f"{project_id}.json"
 
-    @staticmethod
-    def _write(path: Path, project: Project) -> None:
+    def _changed(self, item_id: str) -> None:
+        if self.on_change is not None:
+            self.on_change(item_id)
+
+    def _write(self, path: Path, project: Project) -> None:
         temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
         try:
             temporary.write_text(project.model_dump_json(indent=2) + "\n", encoding="utf-8")
             os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
+        self._changed(path.stem)

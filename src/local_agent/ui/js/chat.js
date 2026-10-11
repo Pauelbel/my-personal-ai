@@ -1,340 +1,293 @@
-// Этот модуль показывает сообщения, вызовы инструментов и ответ агента, пока он ещё печатается.
+// Чат: история сессии и печатающийся ответ. Вызовы инструментов — шаги на общей направляющей,
+// под ответом — сводка хода и «Копировать», результаты саб-агентов выделены, код в ответах подсвечен.
+import { highlightCode } from "./highlight.js";
 import { appendMarkdown } from "./markdown.js";
 
-const FLUSH_MS = 100;
+const FLUSH_MS = 80;
+const STEP_ICON = { done: "✓", failed: "✕", pending: "…" };
+// Длинный отчёт саб-агента в основном чате свёрнут; развёрнутые остаются такими после перерисовки.
+const REPORT_FOLD_CHARS = 700;
+const REPORT_FOLD_LINES = 12;
+const unfolded = new Set();
 
 export function renderMessages(container, messages) {
   container.replaceChildren();
-
-  if (messages.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "message-empty";
-    empty.textContent = "Сообщений пока нет";
+  if (!messages.length) {
+    const empty = el("div", "empty");
+    const mascot = el("img");
+    mascot.src = "/ui/assets/meepo-mascot.png";
+    mascot.alt = "";
+    empty.append(mascot, el("strong", "", "Привет! Я Meepo."), "Расскажите, как вас зовут и чем займёмся.");
     container.append(empty);
     return;
   }
-
-  const results = new Map(
-    messages.filter((message) => message.role === "tool").map((message) => [message.tool_call_id, message]),
-  );
-  let toolBubble = null;
+  const results = new Map(messages.filter((item) => item.role === "tool").map((item) => [item.tool_call_id, item]));
+  // Вызовы инструментов подряд, даже из разных раундов, собираются в один блок шагов.
+  let steps = null;
+  const add = (node) => {
+    steps = null;
+    container.append(node);
+  };
   for (const message of messages) {
     if (message.role === "tool") continue;
-    if (message.sender) {
-      // Ответ агента с холста агенту сессии: короткая сворачиваемая строка, полный текст — по щелчку.
-      container.append(incomingNode(message));
-      toolBubble = null;
+    if (message.role === "user") {
+      add(message.sender ? reportNode(message) : userNode(message.content));
       continue;
     }
-    // Раунды инструментов и итоговый ответ одного хода показываем одним пузырём агента.
-    const shell = message.role === "assistant" && toolBubble ? toolBubble : messageShell(message.role);
-    const { item, content } = shell;
-    toolBubble = message.role === "assistant" && message.tool_calls?.length ? shell : null;
-    if (message.role === "assistant") {
-      if (message.content) renderAssistantText(content, message.content);
-      for (const call of message.tool_calls || []) content.append(toolCallNode(call, results.get(call.id)));
-    } else {
-      content.textContent = message.content;
+    if (message.content?.trim()) add(assistantNode(message));
+    for (const call of message.tool_calls || []) {
+      if (!steps) container.append(steps = el("div", "steps"));
+      steps.append(stepNode(call, results.get(call.id)));
     }
-    container.append(item);
   }
-  container.scrollTop = container.scrollHeight;
 }
 
-// Пузырь ответа, который модель ещё пишет: текст, таймер ожидания, лог хода и запрос подтверждения.
 export class StreamingMessage {
   constructor(container) {
     this.container = container;
-    this.text = "";
-    this.startedAt = Date.now();
-    const { item, content } = messageShell("assistant");
-    this.item = item;
-    this.item.classList.add("streaming");
-    this.content = content;
-    // Клик по статусу разворачивает лог: что делает агент, пока модель думает.
-    this.status = button("", "message-status");
-    this.status.setAttribute("aria-expanded", "false");
-    this.status.addEventListener("click", () => this.#toggleLog(this.log.hidden));
-    this.log = document.createElement("div");
-    this.log.className = "thinking-log";
-    this.log.hidden = true;
-    this.logCount = 0;
+    this.node = el("article", "msg assistant streaming");
+    this.textNode = el("div", "text");
+    this.status = el("div", "status");
+    this.trace = el("details", "trace");
+    this.trace.append(el("summary", "", "Ход"));
+    this.traceText = el("pre");
+    this.trace.append(this.traceText);
     this.reasoning = null;
-    // Фрагменты ответа и рассуждений копятся и выводятся не чаще раза в FLUSH_MS: иначе на каждый токен
-    // страница заново разбирает весь текст и пересчитывает раскладку, а набор текста в поле ввода тормозит.
-    this.pendingReasoning = "";
-    this.flushTimer = null;
-    this.content.before(this.status, this.log);
-    this.container.querySelector(".message-empty")?.remove();
-    this.container.append(this.item);
-    this.setStatus("Модель думает");
-    this.container.scrollTop = this.container.scrollHeight;
-    this.timer = setInterval(() => this.#renderStatus(), 1000);
-  }
-
-  attach() {
-    this.container.querySelector(".message-empty")?.remove();
-    if (this.item.parentNode !== this.container || this.item !== this.container.lastElementChild) {
-      this.container.append(this.item);
-    }
-    this.container.scrollTop = this.container.scrollHeight;
-  }
-
-  detach() {
-    this.item.remove();
-  }
-
-  // Текст до вызова инструмента уже сохранён отдельным сообщением: начинаем пузырь заново.
-  reset(label) {
-    this.#cancelFlush();
     this.text = "";
-    this.pendingReasoning = "";
-    this.content.replaceChildren();
-    this.setStatus(label);
+    this.timer = null;
+    // Сколько секунд идёт ход: рядом со статусом, чтобы долгий ответ не выглядел зависшим.
+    this.started = Date.now();
+    this.statusText = "Модель думает";
+    this.ticker = setInterval(() => this.#showStatus(), 1000);
+    this.#showStatus();
+    // Статус под текстом: при автопрокрутке он остаётся на виду, даже когда ответ длинный.
+    this.node.append(this.textNode, this.status, this.trace);
+    container.append(this.node);
+    scrollDown(container);
   }
 
   append(text) {
     this.text += text;
-    // Модель перестала думать и начала отвечать: лог больше не нужен на виду.
-    if (this.label) {
-      this.#toggleLog(false);
-      this.setStatus("");
+    if (this.statusText !== "Пишет ответ") this.setStatus("Пишет ответ");
+    this.timer ??= setTimeout(() => this.#flush(), FLUSH_MS);
+  }
+
+  addReasoning(text) {
+    if (!this.reasoning) {
+      this.reasoning = el("details", "trace");
+      this.reasoning.append(el("summary", "", "Рассуждения"), el("pre"));
+      this.node.insertBefore(this.reasoning, this.textNode);
+      this.setStatus("Рассуждает");
     }
-    this.#scheduleFlush();
-  }
-
-  #scheduleFlush() {
-    this.flushTimer ??= setTimeout(() => this.#flush(), FLUSH_MS);
-  }
-
-  #cancelFlush() {
-    clearTimeout(this.flushTimer);
-    this.flushTimer = null;
-  }
-
-  #flush() {
-    this.flushTimer = null;
-    if (this.pendingReasoning && this.reasoning) {
-      this.reasoning.textContent += this.pendingReasoning;
-      this.#followLog();
-    }
-    this.pendingReasoning = "";
-    this.content.replaceChildren();
-    appendMarkdown(this.content, this.text);
-    this.#scroll();
-  }
-
-  setStatus(label) {
-    this.label = label;
-    this.#renderStatus();
+    this.reasoning.querySelector("pre").textContent += text;
   }
 
   addLog(text) {
+    this.traceText.textContent += `${text}\n`;
+  }
+
+  // Модель позвала инструмент: напечатанное до вызова уже сохранено в истории.
+  reset(status) {
+    this.text = "";
+    this.textNode.replaceChildren();
+    this.reasoning?.remove();
     this.reasoning = null;
-    const line = document.createElement("div");
-    line.className = "log-line";
-    const time = document.createElement("span");
-    time.className = "log-time";
-    time.textContent = `+${((Date.now() - this.startedAt) / 1000).toFixed(1)} с`;
-    line.append(time, text);
-    this.#appendLog(line);
+    this.setStatus(status);
   }
 
-  // Рассуждения thinking-модели приходят кусками: дописываем их в один блок, пока его не прервёт строка лога.
-  addReasoning(text) {
-    if (!this.reasoning) {
-      this.reasoning = document.createElement("div");
-      this.reasoning.className = "log-reasoning";
-      this.#appendLog(this.reasoning);
-    }
-    this.pendingReasoning += text;
-    this.#scheduleFlush();
+  setStatus(text) {
+    this.statusText = text;
+    this.#showStatus();
   }
 
-  #appendLog(node) {
-    this.log.append(node);
-    this.logCount += 1;
-    this.#renderStatus();
-    this.#followLog();
-  }
-
-  #followLog() {
-    const { log } = this;
-    if (!log.hidden && log.scrollHeight - log.scrollTop - log.clientHeight < 80) log.scrollTop = log.scrollHeight;
-  }
-
-  #toggleLog(open) {
-    this.log.hidden = !open;
-    this.status.setAttribute("aria-expanded", String(open));
-    if (open) this.log.scrollTop = this.log.scrollHeight;
-    this.#scroll();
-  }
-
-  #renderStatus() {
-    const seconds = Math.floor((Date.now() - this.startedAt) / 1000);
-    this.status.textContent = this.label ? `${this.label}… ${seconds} с` : `Лог хода · ${this.logCount}`;
-    this.status.classList.toggle("idle", !this.label);
-    this.status.hidden = !this.label && this.logCount === 0;
-    this.#scroll();
-  }
-
-  askApproval(event, onDecision) {
-    const card = document.createElement("div");
-    card.className = "approval-card";
-    const title = document.createElement("strong");
-    const args = parseArguments(event.call.arguments);
-    const editing = event.call.name === "edit_file" && typeof args.old_text === "string";
-    // В запуске команды подтверждение просит узел графа: показываем, кто именно.
-    title.textContent = (event.actor ? `${event.actor}: ` : "") + (event.call.name === "write_file" && args.path
-      ? `Модель хочет записать файл ${args.path} (${(args.content || "").length} символов)`
-      : editing ? `Модель хочет изменить файл ${args.path}` : `Модель хочет выполнить «${event.tool_name}»`);
-    const preview = document.createElement("details");
-    // Правку показываем сразу: по ней видно, что именно заменится.
-    preview.open = editing;
-    const summary = document.createElement("summary");
-    summary.textContent = editing ? "Что заменится" : "Показать содержимое";
-    const body = document.createElement("pre");
-    if (editing) {
-      body.append(diffBlock("removed", args.old_text), diffBlock("added", args.new_text ?? ""));
-    } else {
-      body.textContent = event.call.name === "write_file" && typeof args.content === "string"
-        ? args.content
-        : JSON.stringify(args, null, 2);
-    }
-    preview.append(summary, body);
-    const actions = document.createElement("div");
-    actions.className = "approval-actions";
-    const allow = button("Разрешить", "primary-button");
-    const deny = button("Отклонить", "secondary-button");
-    const decide = async (approved) => {
-      allow.disabled = true;
-      deny.disabled = true;
-      await onDecision(approved);
-      card.remove();
-      this.setStatus(approved ? "Выполняется инструмент" : "Модель думает");
-    };
-    allow.addEventListener("click", () => decide(true));
-    deny.addEventListener("click", () => decide(false));
-    actions.append(allow, deny);
-    card.append(title, preview, actions);
-    this.item.append(card);
-    this.setStatus("Ждёт вашего подтверждения");
-    allow.focus();
+  attach() {
+    if (!this.node.isConnected) this.container.append(this.node);
   }
 
   finish() {
-    this.#cancelFlush();
-    clearInterval(this.timer);
-    this.item.remove();
+    clearTimeout(this.timer);
+    clearInterval(this.ticker);
+    this.node.remove();
   }
 
-  // Лента едет за ответом, только пока пользователь внизу: таймер и поток не отбирают прокрутку.
-  #scroll() {
-    const { container } = this;
-    if (container.scrollHeight - container.scrollTop - container.clientHeight < 80) {
-      container.scrollTop = container.scrollHeight;
-    }
+  #showStatus() {
+    const seconds = Math.floor((Date.now() - this.started) / 1000);
+    this.status.textContent = seconds ? `${this.statusText} · ${duration(seconds)}` : this.statusText;
+  }
+
+  #flush() {
+    this.timer = null;
+    const near = this.container.scrollHeight - this.container.scrollTop - this.container.clientHeight < 80;
+    this.textNode.replaceChildren();
+    renderMarkdown(this.textNode, this.text, false);
+    if (near) scrollDown(this.container);
   }
 }
 
-function messageShell(roleName) {
-  const item = document.createElement("article");
-  item.className = `message ${roleName}`;
-  const role = document.createElement("span");
-  role.className = "message-role";
-  role.textContent = roleName === "user" ? "Вы" : "Агент";
-  const content = document.createElement("div");
-  content.className = "message-content";
-  item.append(role, content);
-  return { item, content };
+export function renderMarkdown(target, text, withTools = true) {
+  appendMarkdown(target, text);
+  for (const code of target.querySelectorAll("pre > code")) {
+    highlightCode(code, code.dataset.language);
+    if (withTools) code.parentElement.append(copyButton("copy", () => code.textContent));
+  }
+  if (!withTools) return;
+  // Пути в `коде` открываются во вкладке «Файлы»: щелчок ловит app.js по классу path-link.
+  for (const code of target.querySelectorAll(":not(pre) > code")) markPath(code, code.textContent);
 }
 
-function renderAssistantText(container, text) {
-  const block = document.createElement("div");
-  block.className = "assistant-text";
-  appendMarkdown(block, text);
-  container.append(block);
-  for (const pre of block.querySelectorAll("pre")) {
-    const copy = button("Копировать", "code-copy");
-    copy.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(pre.querySelector("code")?.textContent ?? "");
-        copy.textContent = "Скопировано";
-      } catch {
-        copy.textContent = "Не удалось";
-      }
-      setTimeout(() => { copy.textContent = "Копировать"; }, 1500);
+// Похоже ли на путь: с «/» — любое, без — имя файла с известным расширением. «:42» в конце — строка.
+const FILE_EXTENSIONS = new Set(("md markdown txt py js mjs cjs ts tsx jsx json yaml yml toml ini cfg conf env xml html htm css scss "
+  + "sh bash ps1 sql csv log go rs java kt c h cpp hpp cs rb php vue lock").split(" "));
+
+function pathOf(text) {
+  const value = text.trim();
+  if (!value || value.length > 300 || /[\n<>{}()=,;|*?"'`]|:\/\//.test(value) || value.startsWith("-")) return null;
+  const [, raw, line] = /^(.*?)(?::(\d+))?(?::\d+)?$/.exec(value);
+  const path = raw.replace(/\/+$/, "");
+  if (!path) return null;
+  if (!path.includes("/")) {
+    const extension = /\.([A-Za-z0-9]+)$/.exec(path)?.[1]?.toLowerCase();
+    if (/\s/.test(path) || !FILE_EXTENSIONS.has(extension)) return null;
+  }
+  return { path, line: line ? Number(line) : null };
+}
+
+function markPath(node, text) {
+  const found = pathOf(text);
+  if (!found) return;
+  node.classList.add("path-link");
+  node.dataset.path = found.path;
+  if (found.line) node.dataset.line = String(found.line);
+  node.title = `Открыть во вкладке «Файлы»${found.line ? `, строка ${found.line}` : ""}`;
+}
+
+export function scrollDown(container) {
+  container.scrollTop = container.scrollHeight;
+}
+
+// Сводка хода одной строкой: «12,4 с · вход 2,9k · выход 312 · 165 ток/с».
+function statsText(stats) {
+  return [
+    duration(stats.seconds),
+    stats.input_tokens != null && `вход ${compact(stats.input_tokens)}`,
+    stats.output_tokens != null && `выход ${compact(stats.output_tokens)}`,
+    stats.tokens_per_second && `${Math.round(stats.tokens_per_second)} ток/с`,
+    stats.rounds > 1 && `запросов к модели: ${stats.rounds}`,
+  ].filter(Boolean).join(" · ");
+}
+
+function compact(value) {
+  const short = (number, unit) => `${number.toFixed(1).replace(/\.0$/, "").replace(".", ",")}${unit}`;
+  if (value < 1000) return String(value);
+  if (value < 1e6) return value < 1e4 ? short(value / 1e3, "k") : `${Math.round(value / 1e3)}k`;
+  return short(value / 1e6, "M");
+}
+
+function duration(seconds) {
+  if (seconds < 60) return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1).replace(".", ",")} с`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes} мин ${Math.round(seconds - minutes * 60)} с`;
+}
+
+function userNode(text) {
+  const node = el("article", "msg user");
+  node.append(el("div", "bubble", text));
+  return node;
+}
+
+function assistantNode(message) {
+  const node = el("article", "msg assistant");
+  const body = el("div", "text");
+  renderMarkdown(body, message.content);
+  node.append(body, footNode(message));
+  return node;
+}
+
+function reportNode(message) {
+  const node = el("article", "msg report");
+  const body = el("div", "text");
+  renderMarkdown(body, message.content);
+  const extra = [];
+  if (message.content.length > REPORT_FOLD_CHARS || message.content.split("\n").length > REPORT_FOLD_LINES) {
+    const fold = el("button", "msg-action fold");
+    fold.type = "button";
+    const sync = () => {
+      const open = unfolded.has(message.id);
+      node.classList.toggle("folded", !open);
+      fold.textContent = open ? "Свернуть" : "Показать полностью";
+    };
+    fold.addEventListener("click", () => {
+      if (!unfolded.delete(message.id)) unfolded.add(message.id);
+      sync();
     });
-    pre.classList.add("has-copy");
-    pre.append(copy);
+    sync();
+    extra.push(fold);
   }
+  node.append(el("div", "from", `от ${message.sender}`), body, footNode(message, extra));
+  return node;
 }
 
-function incomingNode(message) {
-  const item = document.createElement("article");
-  item.className = "message incoming";
-  const details = document.createElement("details");
-  const summary = document.createElement("summary");
-  // Координатор начинает реплику с пометки «[ответ: QA]»: в строке она не нужна, имя уже есть.
-  const text = message.content.replace(/^\[(?:ответ|от): [^\]]*\]\s*/, "");
-  summary.textContent = `⇠ ${message.sender}: ${firstLine(text)}`;
-  const body = document.createElement("div");
-  body.className = "message-content";
-  appendMarkdown(body, text);
-  details.append(summary, body);
-  item.append(details);
-  return item;
-}
-
-function firstLine(text) {
-  const line = text.trim().split("\n")[0];
-  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
-}
-
-function toolCallNode(call, result) {
-  const details = document.createElement("details");
-  details.className = "tool-call";
-  details.classList.toggle("failed", Boolean(result?.is_error));
-  const summary = document.createElement("summary");
-  const args = parseArguments(call.arguments);
-  if (call.name === "send_message") {
-    // Поручение агенту с холста читается как строка переписки, а не как вызов инструмента.
-    details.classList.add("delegation");
-    summary.textContent = `→ ${args.to ?? "?"}: ${firstLine(String(args.content ?? ""))}`;
-    const body = document.createElement("pre");
-    body.textContent = result?.is_error ? result.content : String(args.content ?? "");
-    details.append(summary, body);
-    return details;
+// Подвал ответа: сводка хода, если она сохранена, и копирование всего ответа в Markdown.
+function footNode(message, extra = []) {
+  const foot = el("div", `msg-foot${message.stats || extra.length ? "" : " bare"}`);
+  foot.append(...extra);
+  if (message.stats) {
+    const stats = el("span", "stats", statsText(message.stats));
+    stats.title = "Время работы модели и инструментов без ожидания ваших решений. "
+      + "Вход — размер последнего запроса к модели, выход — всё, что она написала за ход.";
+    foot.append(stats);
   }
-  const target = args.path || args.query || args.commit || args.name || "";
-  summary.textContent = `⚒ ${call.name}${target ? ` · ${target}` : ""}${result ? "" : " · нет результата"}`;
-  const body = document.createElement("pre");
-  body.textContent = result ? result.content : "Вызов не был выполнен";
-  details.append(summary, body);
-  return details;
+  foot.append(copyButton("msg-action push", () => message.content));
+  return foot;
 }
 
-function diffBlock(kind, text) {
-  const block = document.createElement("span");
-  block.className = `diff-${kind}`;
-  const sign = kind === "removed" ? "− " : "+ ";
-  block.textContent = text ? text.split("\n").map((line) => sign + line).join("\n") + "\n" : `${sign}(пусто)\n`;
-  return block;
+function stepNode(call, result) {
+  const state = !result ? "pending" : result.is_error ? "failed" : "done";
+  const node = el("details", `step ${state}`);
+  const args = parse(call.arguments);
+  const target = args.path || args.query || args.url || args.name || args.agent || (Array.isArray(args.names) ? args.names.join(", ") : "");
+  const summary = el("summary");
+  const icon = el("span", "step-icon", STEP_ICON[state]);
+  icon.title = { done: "Готово", failed: "Ошибка", pending: "Результата нет" }[state];
+  summary.append(icon, el("span", "step-name", call.name));
+  if (target) {
+    const label = el("span", "step-target", String(target));
+    if (args.path) markPath(label, String(args.path));
+    summary.append(label);
+  }
+  const body = el("pre");
+  body.textContent = `${JSON.stringify(args, null, 2)}\n\n→ ${result?.content ?? "—"}`;
+  node.append(summary, body);
+  return node;
 }
 
-function parseArguments(raw) {
+function copyButton(className, text) {
+  const button = el("button", className, "Копировать");
+  button.type = "button";
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text());
+      button.textContent = "Скопировано";
+    } catch {
+      button.textContent = "Не удалось";
+    }
+    setTimeout(() => { button.textContent = "Копировать"; }, 1500);
+  });
+  return button;
+}
+
+export function parse(raw) {
   try {
-    const value = JSON.parse(raw);
+    const value = JSON.parse(raw || "{}");
     return value && typeof value === "object" ? value : {};
   } catch {
     return {};
   }
 }
 
-function button(label, className) {
-  const node = document.createElement("button");
-  node.type = "button";
-  node.className = className;
-  node.textContent = label;
+export function el(tag, className = "", text = "") {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text) node.textContent = text;
   return node;
 }

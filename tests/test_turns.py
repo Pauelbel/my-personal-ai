@@ -24,7 +24,7 @@ class FakeProvider:
 
 
 class FailingProvider(FakeProvider):
-    async def chat(self, model: str, messages: list[ChatMessage]) -> ChatResult:
+    async def chat(self, model: str, messages: list[ChatMessage], tools=None) -> ChatResult:
         raise LLMProviderUnavailable("Не удалось подключиться к LM Studio")
 
 

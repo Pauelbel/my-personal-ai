@@ -24,23 +24,16 @@ def folder(tmp_path: Path, name: str = "code") -> Path:
     return path
 
 
-def test_sessions_share_project_folder_tools_and_last_model(tmp_path):
+def test_sessions_share_project_folder_and_last_model(tmp_path):
     workspace = folder(tmp_path)
     with TestClient(create_app(settings(tmp_path))) as client:
         project = client.post("/api/projects", json={"name": "Код", "workspace": str(workspace), "model": "m1"}).json()
         first = client.post("/api/sessions", json={"project_id": project["id"]}).json()
-        client.put(f"/api/sessions/{first['id']}/tools/write_file", json={"enabled": True})
-        client.put(f"/api/sessions/{first['id']}/tools/git", json={"enabled": False})
         client.put(f"/api/sessions/{first['id']}/config", json={"provider": "lm_studio", "model": "m2"})
         second = client.post("/api/sessions", json={"project_id": project["id"]}).json()
-        second_tools = client.get(f"/api/sessions/{second['id']}/tools").json()
 
     assert first["project_id"] == second["project_id"] == project["id"]
     assert second["model"] == "m2"
-    # Чтение включено у нового проекта сразу; переключатели в одной сессии видны во всех.
-    assert [tool["id"] for tool in second_tools if tool["enabled"]] == [
-        "list_files", "read_file", "search_files", "write_file", "search_docs"
-    ]
 
 
 def test_project_folder_must_exist_be_absolute_and_unique(tmp_path):
@@ -56,41 +49,19 @@ def test_project_folder_must_exist_be_absolute_and_unique(tmp_path):
     assert relative.status_code == 400
 
 
-def test_legacy_git_permissions_become_one_toggle(tmp_path):
-    workspace = folder(tmp_path)
-    configured = settings(tmp_path)
-    with TestClient(create_app(configured)) as client:
-        project = client.post("/api/projects", json={"name": "Код", "workspace": str(workspace)}).json()
-        session = client.post("/api/sessions", json={"project_id": project["id"]}).json()
-    path = tmp_path / "projects" / f"{project['id']}.json"
-    saved = json.loads(path.read_text(encoding="utf-8"))
-    saved["enabled_tools"] = ["git_log", "git_show", "read_file"]
-    path.write_text(json.dumps(saved), encoding="utf-8")
-    with TestClient(create_app(configured)) as client:
-        tools = client.get(f"/api/sessions/{session['id']}/tools").json()
-        assert [tool["id"] for tool in tools if tool["enabled"]] == ["read_file", "git"]
-        result = client.put(f"/api/sessions/{session['id']}/tools/git", json={"enabled": False})
-        assert result.status_code == 200 and result.json()["enabled"] is False
-    with TestClient(create_app(configured)) as client:
-        tools = client.get(f"/api/sessions/{session['id']}/tools").json()
-        assert [tool["id"] for tool in tools if tool["enabled"]] == ["read_file"]
-
-
 def test_deleting_project_moves_sessions_to_drafts(tmp_path):
     workspace = folder(tmp_path)
     with TestClient(create_app(settings(tmp_path))) as client:
         project = client.post("/api/projects", json={"name": "Код", "workspace": str(workspace)}).json()
         session = client.post("/api/sessions", json={"project_id": project["id"]}).json()
-        client.put(f"/api/sessions/{session['id']}/tools/read_file", json={"enabled": True})
         deleted = client.delete(f"/api/projects/{project['id']}")
         after = client.get(f"/api/sessions/{session['id']}").json()
         projects = client.get("/api/projects").json()
 
     assert deleted.status_code == 204
     assert [item["id"] for item in projects] == ["drafts"]
-    # В «Черновиках» действуют их папка и инструменты, а доступа к папке удалённого проекта больше нет.
+    # В «Черновиках» действует их папка, а доступа к папке удалённого проекта больше нет.
     assert after["project_id"] == "drafts"
-    assert after["enabled_tools"] == []
     assert workspace.exists()
 
 
@@ -152,7 +123,7 @@ def test_legacy_sessions_get_a_project_on_start(tmp_path):
         again = client.get("/api/projects").json()
 
     [project] = [item for item in projects if item["id"] != "drafts"]
-    assert project["workspace"] == str(workspace.resolve()) and project["enabled_tools"] == ["read_file"]
+    assert project["workspace"] == str(workspace.resolve())
     assert {key: item["project_id"] for key, item in sessions.items()} == {
         "with-folder": project["id"], "plain": "drafts", "orphan": "drafts", "lost-folder": "drafts",
         "node": project["id"],
@@ -183,3 +154,18 @@ def test_folder_browser_lists_only_folders(tmp_path):
     assert relative.status_code == 400
     assert missing.status_code == 404
     assert file.status_code == 400
+
+
+def test_project_is_named_after_its_folder_by_default(tmp_path):
+    workspace = folder(tmp_path, "job_wifi")
+    other = folder(tmp_path, "my-personal-ai")
+    with TestClient(create_app(settings(tmp_path))) as client:
+        created = client.post("/api/projects", json={"workspace": str(workspace)}).json()
+        renamed = client.put(f"/api/projects/{created['id']}", json={"name": "  ", "workspace": str(other)}).json()
+        # Подпись домашней папки из выбора папки — не название: при старте оно меняется на имя папки.
+        legacy = client.post("/api/projects", json={"name": f"Домашняя папка ({Path.home().name})", "workspace": str(workspace)}).json()
+    with TestClient(create_app(settings(tmp_path))) as client:
+        names = {item["id"]: item["name"] for item in client.get("/api/projects").json()}
+
+    assert created["name"] == "job_wifi" and renamed["name"] == "my-personal-ai"
+    assert names[legacy["id"]] == "job_wifi"

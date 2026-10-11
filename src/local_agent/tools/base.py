@@ -20,3 +20,12 @@ class Tool(Protocol):
     requires_approval: bool
 
     async def execute(self, arguments: dict[str, object], workspace: Path) -> ToolResult: ...
+
+
+def summary_line(text: str, limit: int = 110) -> str:
+    """Одна строка описания для компактного реестра: первое предложение, без переносов."""
+    line = " ".join(text.split())
+    for mark in (". ", "; "):
+        if mark in line:
+            line = line.split(mark, 1)[0]
+    return line if len(line) <= limit else line[: limit - 1] + "…"

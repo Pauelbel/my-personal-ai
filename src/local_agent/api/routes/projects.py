@@ -1,6 +1,6 @@
 """Маршруты проектов: список, создание, изменение и удаление."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,9 +15,10 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 class ProjectCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    name: str = Field(min_length=1, max_length=100)
+    # Пусто — имя папки.
+    name: str = Field(default="", max_length=100)
     workspace: str = Field(min_length=1)
-    agent_id: str = Field(default="default", min_length=1)
+    agent_id: str = Field(default="main", min_length=1)
     provider: str = Field(default="lm_studio", min_length=1)
     model: str | None = None
 
@@ -25,8 +26,9 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    name: str = Field(min_length=1, max_length=100)
+    name: str = Field(default="", max_length=100)
     workspace: str = Field(min_length=1)
+    mode: Literal["full", "read"] | None = None
 
 
 def get_project_service(request: Request) -> ProjectService:
@@ -64,7 +66,7 @@ def update_project(
     service: Annotated[ProjectService, Depends(get_project_service)],
 ) -> Project:
     try:
-        project = service.update(project_id, name=payload.name, workspace=payload.workspace)
+        project = service.update(project_id, name=payload.name, workspace=payload.workspace, mode=payload.mode)
     except ProjectError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if project is None:

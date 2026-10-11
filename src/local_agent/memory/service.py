@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
@@ -15,6 +16,7 @@ from local_agent.memory.conversation import ConversationService
 from local_agent.memory.markdown import MarkdownMemoryStore, MemoryDocument
 from local_agent.memory.models import Message
 from local_agent.memory.operations import MemoryPatch
+from local_agent.memory.search import MemorySearch, entry_chunks
 from local_agent.memory.validator import MemoryPatchRejected, validate_patch
 from local_agent.sessions.models import Session
 
@@ -70,6 +72,7 @@ class MemoryService:
         *,
         memory_model: str,
         max_context_chars: int,
+        index_path: Path | None = None,
     ) -> None:
         self._store = store
         self._conversation = conversation
@@ -77,6 +80,7 @@ class MemoryService:
         self._memory_model = memory_model.strip()
         self._max_context_chars = max_context_chars
         self._update_lock = asyncio.Lock()
+        self._search = MemorySearch(store.root, index_path or store.root.parent / "index" / "memory.sqlite")
 
     def initialize(self) -> None:
         self._store.initialize()
@@ -91,10 +95,58 @@ class MemoryService:
         return self._store.write(name, content)
 
     def context(self) -> str:
-        return self._store.context(self._max_context_chars)
+        """Вся память целиком: только для разбора новых сообщений, в промпт агента не вставляется."""
+        return self._store.context(None)
 
-    def forget_session(self, session_id: str) -> None:
-        self._store.forget(session_id)
+    def profile(self) -> list[str]:
+        """Короткий профиль: записи profile.md — имя и ключевые факты, которые нужны в каждом разговоре."""
+        try:
+            document = self._store.read("profile.md")
+        except (OSError, ValueError):
+            return []
+        return [entry for _section, _line, entry in entry_chunks(document.content, "")]
+
+    def search(self, query: str, limit: int = 5) -> list[tuple[str, str, str]]:
+        return self._search.search(query, limit)
+
+    def prompt_context(self, query: str) -> str:
+        """Профиль и записи, найденные по сообщению, в пределах max_context_chars."""
+        lines: list[str] = []
+        used = 0
+        seen: set[str] = set()
+        found = [f"{entry} ({file.removesuffix('.md')}: {section})" for file, section, entry in self.search(query)
+                 if file != "profile.md"]
+        for line in [*self.profile(), *found]:
+            key = line.casefold()
+            if key in seen or used + len(line) > self._max_context_chars:
+                continue
+            seen.add(key)
+            lines.append(f"- {line}")
+            used += len(line) + 3
+        return "\n".join(lines)
+
+    def remember(self, session_id: str, file: str, section: str, content: str) -> str:
+        """Записывает факт сразу, через тот же patch-контракт; источник — последняя реплика пользователя."""
+        checkpoint = self._store.checkpoint(session_id)
+        try:
+            messages = self._conversation.after(session_id, checkpoint)
+        except ValueError as exc:
+            raise MemoryServiceError("Checkpoint памяти не соответствует истории сессии") from exc
+        source = next(
+            (message for message in reversed(messages) if message.role == "user" and message.sender is None), None,
+        )
+        if source is None:
+            raise MemoryServiceError("Нет новой реплики пользователя, на которую можно сослаться")
+        raw = json.dumps({"version": 2, "operations": [{
+            "op": "add", "file": file, "section": section, "content": content, "source_message_ids": [source.id],
+        }]}, ensure_ascii=False)
+        try:
+            operations = validate_patch(raw, session_id=session_id, new_messages=messages, documents=self._documents())
+        except MemoryPatchRejected as exc:
+            raise MemoryServiceError(str(exc)) from exc
+        self._store.apply(MemoryPatch(version=2, operations=operations), session_id=session_id,
+                          last_processed_message_id=None)
+        return f"Запомнил в {file}, раздел «{section}»: {content}"
 
     def pending_user_messages(self, session_id: str) -> int:
         """Сколько реплик пользователя ещё не разобрано; нужно для автоматического обновления."""
@@ -106,7 +158,7 @@ class MemoryService:
 
     async def update_session(self, session: Session) -> MemoryUpdateResult:
         if session.parent_id:
-            # Реплики «user» в сессии агента с холста пишут другие агенты, а не пользователь.
+            # Реплики «user» в сессии саб-агента пишет основной агент, а не пользователь.
             raise MemoryServiceError("Память не обновляется из переписки агентов между собой")
         async with self._update_lock:
             checkpoint = self._store.checkpoint(session.id)
@@ -123,7 +175,7 @@ class MemoryService:
                     applied_operations=0,
                     last_processed_message_id=checkpoint,
                 )
-            # Ответы агентов с холста приходят репликами «user», но пользователь их не писал.
+            # Результаты саб-агентов приходят репликами «user», но пользователь их не писал.
             dialogue = [message for message in messages if message.is_dialogue and message.sender is None]
             if not dialogue:
                 # Только служебные сообщения инструментов: разбирать нечего, просто сдвигаем checkpoint.

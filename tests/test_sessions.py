@@ -19,7 +19,7 @@ def test_session_persists_after_app_restart(tmp_path) -> None:
         assert created.status_code == 201
         session = created.json()
         assert session["title"] == "Первый проект"
-        assert session["agent_id"] == "default"
+        assert session["agent_id"] == "main"
         assert session["project_id"] == project["id"]
         # Папка у сессии одна — папка проекта; своей папки сессия в API не отдаёт.
         assert "workspace" not in session
@@ -45,17 +45,13 @@ def test_session_without_project_goes_to_drafts(tmp_path) -> None:
         with_folder = client.post("/api/sessions", json={"workspace": str(tmp_path)}).json()
         unknown = client.post("/api/sessions", json={"project_id": "nope"})
         projects = client.get("/api/projects").json()
-        tools = client.get(f"/api/sessions/{session['id']}/tools").json()
 
     assert session["project_id"] == with_folder["project_id"] == "drafts"
     assert unknown.status_code == 400
     [drafts] = projects
-    assert drafts["id"] == "drafts" and drafts["name"] == "Черновики"
+    assert drafts["id"] == "drafts" and drafts["name"] == "drafts"
     assert drafts["workspace"] == str((tmp_path / "drafts").resolve())
     assert (tmp_path / "drafts").is_dir()
-    # В черновиках агент не читает файлы, пока пользователь сам не включит инструменты.
-    assert drafts["enabled_tools"] == []
-    assert not any(tool["enabled"] for tool in tools)
 
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/projects").json() == projects

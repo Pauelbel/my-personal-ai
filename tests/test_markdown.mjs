@@ -8,6 +8,7 @@ class MockNode {
     this.value = value;
     this.children = [];
     this.style = {};
+    this.dataset = {};
   }
 
   append(child) { this.children.push(child); }

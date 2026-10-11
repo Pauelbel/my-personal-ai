@@ -3,6 +3,7 @@
 import asyncio
 import fnmatch
 import os
+import re
 from pathlib import Path
 
 from local_agent.tools.base import ToolResult
@@ -26,7 +27,8 @@ def _relative(relative_path: object) -> Path:
     if not isinstance(relative_path, str) or not relative_path.strip():
         raise ValueError("Укажите относительный путь")
     requested = Path(relative_path)
-    if requested.is_absolute() or requested.drive:
+    # «C:/…» на Linux — обычный относительный путь, но модель так просит абсолютный путь Windows.
+    if requested.is_absolute() or requested.drive or re.match(r"^[A-Za-z]:", relative_path):
         raise ValueError("Нужен путь относительно рабочей папки")
     return requested
 

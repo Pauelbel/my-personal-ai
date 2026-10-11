@@ -10,6 +10,10 @@ class LLMProviderError(Exception):
     """Провайдер не смог вернуть корректный ответ модели."""
 
 
+class LLMEmptyResponse(LLMProviderError):
+    """Модель ответила пустотой: ни текста, ни вызовов (бывает у thinking-моделей, ушедших в рассуждения)."""
+
+
 class LLMProviderUnavailable(LLMProviderError):
     """Сервер провайдера недоступен или превысил время ожидания."""
 
@@ -38,6 +42,8 @@ async def stream_chat(
             yield item
         return
     result = await provider.chat(model, messages, tools) if tools else await provider.chat(model, messages)
+    if not (result.content or "").strip() and not result.tool_calls:
+        raise LLMEmptyResponse("Модель вернула пустой ответ")
     if result.content:
         yield result.content
     yield result

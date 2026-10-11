@@ -1,13 +1,13 @@
 """Проект — рабочая папка с общими настройками для всех её сессий."""
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 # Системный проект «Черновики»: создаётся при старте, его нельзя удалить. Сюда попадают сессии,
 # созданные без проекта, и сессии удалённых проектов.
 DRAFTS_PROJECT_ID = "drafts"
-DRAFTS_PROJECT_NAME = "Черновики"
 
 
 class Project(BaseModel):
@@ -18,8 +18,10 @@ class Project(BaseModel):
     created_at: datetime
     updated_at: datetime
     # Выбор последней сессии проекта: новая сессия в проекте начинает с него.
-    agent_id: str = "default"
+    agent_id: str = "main"
     provider: str = "lm_studio"
     model: str = ""
-    # Инструменты включаются один раз на проект и действуют во всех его сессиях.
-    enabled_tools: list[str] = Field(default_factory=list)
+    # full — все инструменты; read — только чтение: инструменты, меняющие файлы или систему, агенту недоступны.
+    mode: Literal["full", "read"] = "full"
+    # Подключённые к модели инструменты запоминаются на проект; None — ещё не выбирали (подключено чтение файлов).
+    active_tools: list[str] | None = None

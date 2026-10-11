@@ -73,18 +73,43 @@ class SearchDocsTool:
             if not start.is_dir():
                 raise ValueError("Это не папка")
             prefix = start.relative_to(root).as_posix()
-            with closing(self._open(root)) as db:
-                skipped = _sync(db, root)
-                rows = _search(db, stems, short, "" if prefix == "." else prefix, limit)
+            name = hashlib.sha256(str(root).encode()).hexdigest()[:16]
+            index = MarkdownIndex(root, self._index_root / f"{name}.sqlite")
+            rows, skipped = index.query(stems, short, "" if prefix == "." else prefix, limit)
             return ToolResult(_format(rows, skipped))
         except (OSError, ValueError, sqlite3.Error) as exc:
             return ToolResult(str(exc), is_error=True)
 
-    def _open(self, root: Path) -> sqlite3.Connection:
-        # Индекс лежит вне рабочей папки: не засоряет проект и не попадает в git status.
-        self._index_root.mkdir(parents=True, exist_ok=True)
-        name = hashlib.sha256(str(root).encode()).hexdigest()[:16]
-        db = sqlite3.connect(self._index_root / f"{name}.sqlite", timeout=30)
+
+class MarkdownIndex:
+    """Полнотекстовый индекс Markdown-файлов папки: документация проекта, вики, долговременная память.
+
+    Индекс лежит вне индексируемой папки и обновляется при каждом поиске по изменённым файлам.
+    chunker режет текст файла на (заголовок, строка, текст): по умолчанию — разделы Markdown.
+    """
+
+    def __init__(self, root: Path, db_path: Path, chunker=None) -> None:
+        self.root = root
+        self.db_path = db_path
+        self._chunker = chunker or _chunks
+
+    def search(self, query: str, limit: int = DEFAULT_LIMIT, prefix: str = "") -> list[tuple[str, str, int, str]]:
+        """Разделы по ключевым словам; пустой список, если в запросе нет слов для поиска."""
+        try:
+            stems, short = _terms(query)
+        except ValueError:
+            return []
+        return self.query(stems, short, prefix, limit)[0]
+
+    def query(self, stems: list[str], short: list[str], prefix: str, limit: int) -> tuple[list, bool]:
+        self.root.mkdir(parents=True, exist_ok=True)
+        with closing(self._open()) as db:
+            skipped = _sync(db, self.root.resolve(), self._chunker)
+            return _search(db, stems, short, prefix, limit), skipped
+
+    def _open(self) -> sqlite3.Connection:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(self.db_path, timeout=30)
         if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
             with db:
                 db.execute("DROP TABLE IF EXISTS files")
@@ -98,7 +123,7 @@ class SearchDocsTool:
         return db
 
 
-def _sync(db: sqlite3.Connection, root: Path) -> bool:
+def _sync(db: sqlite3.Connection, root: Path, chunker=None) -> bool:
     """Переиндексирует изменённые файлы и забывает удалённые. True — файлов больше лимита, часть пропущена."""
     found: dict[str, tuple[int, int]] = {}
     skipped = False
@@ -134,7 +159,7 @@ def _sync(db: sqlite3.Connection, root: Path) -> bool:
                 text = ""
             db.executemany(
                 "INSERT INTO chunks (path, title, text, line) VALUES (?, ?, ?, ?)",
-                [(path, title, body, line) for title, line, body in _chunks(text, Path(path).stem)],
+                [(path, title, body, line) for title, line, body in (chunker or _chunks)(text, Path(path).stem)],
             )
             db.execute("INSERT OR REPLACE INTO files (path, mtime_ns, size) VALUES (?, ?, ?)", (path, *state))
     return skipped

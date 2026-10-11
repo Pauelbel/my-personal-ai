@@ -17,6 +17,8 @@ class Agent:
     skills: tuple[str, ...] | None = None
     # None — общий лимит runtime.
     max_tool_rounds: int | None = None
+    # Саб-агенты, которых этот агент может спросить посреди своей задачи (связи на холсте «Команда»).
+    agents: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

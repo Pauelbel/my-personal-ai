@@ -61,7 +61,7 @@ function tokenizer(language) {
   return compiled.get(language);
 }
 
-export function languageOf(path) {
+function languageOf(path) {
   const name = path.split("/").pop().toLowerCase();
   const extension = name.includes(".") ? name.split(".").pop() : "";
   return BY_EXTENSION[extension] ?? (name === ".env" || name.startsWith(".env.") ? "config" : null);
@@ -92,4 +92,16 @@ export function highlightInto(pre, text, path) {
   }
   fragment.append(text.slice(last));
   pre.replaceChildren(fragment);
+}
+
+const ALIASES = {
+  python: "py", py: "py", javascript: "js", js: "js", typescript: "ts", ts: "ts", json: "json", css: "css",
+  html: "html", xml: "xml", bash: "sh", sh: "sh", shell: "sh", zsh: "sh", powershell: "ps1", yaml: "yaml",
+  yml: "yaml", toml: "toml", ini: "ini", java: "java", go: "go", rust: "rs", c: "c", cpp: "cpp", csharp: "cs",
+};
+
+// Подсветка блока кода из ответа модели по языку из ```язык.
+export function highlightCode(code, language) {
+  const extension = ALIASES[(language || "").toLowerCase()];
+  if (extension) highlightInto(code, code.textContent, `code.${extension}`);
 }

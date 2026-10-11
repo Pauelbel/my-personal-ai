@@ -154,6 +154,8 @@ export function appendMarkdown(parent, source) {
       if (index < lines.length) index += 1;
       const pre = document.createElement("pre");
       const code = document.createElement("code");
+      const language = line.trim().slice(fence[1].length).trim().split(/\s+/)[0];
+      if (language) code.dataset.language = language;
       code.textContent = codeLines.join("\n");
       pre.append(code);
       parent.append(pre);

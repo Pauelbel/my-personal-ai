@@ -1,6 +1,6 @@
 """Сервис создаёт сессии и предоставляет их API без знания формата хранения.
 
-Каждая сессия принадлежит проекту и берёт из него рабочую папку и инструменты: сервис всегда
+Каждая сессия принадлежит проекту и берёт из него рабочую папку: сервис всегда
 отдаёт её уже с этими значениями, поэтому runtime и инструменты о проектах не знают.
 """
 
@@ -13,8 +13,6 @@ from local_agent.projects.models import DRAFTS_PROJECT_ID, Project
 from local_agent.sessions.models import Session
 from local_agent.sessions.repository import SessionRepository
 from local_agent.storage.json.projects import JsonProjectRepository
-from local_agent.team.models import Canvas
-from local_agent.tools.registry import normalize_tool_ids
 
 
 class InvalidWorkspaceError(ValueError):
@@ -50,7 +48,6 @@ class SessionService:
         provider: str,
         project_id: str | None = None,
         parent_id: str | None = None,
-        node_id: str | None = None,
         hidden: bool = False,
     ) -> Session:
         # Своей папки у сессии нет: её задаёт проект. Без проекта сессия попадает в «Черновики».
@@ -65,7 +62,6 @@ class SessionService:
             provider=provider,
             project_id=project_id or DRAFTS_PROJECT_ID,
             parent_id=parent_id,
-            node_id=node_id,
             hidden=hidden,
         )
         return self._effective(self._repository.save(session))
@@ -103,21 +99,6 @@ class SessionService:
             })
         return self._effective(updated)
 
-    def set_tool_enabled(self, session_id: str, tool_id: str, enabled: bool) -> Session | None:
-        session = self.get(session_id)
-        if session is None:
-            return None
-        tools = set(session.enabled_tools)
-        if enabled:
-            tools.add(tool_id)
-        else:
-            tools.discard(tool_id)
-        # В проекте переключатель общий для всех его сессий.
-        if project := self._project(session):
-            self._projects.patch(project.id, {"enabled_tools": sorted(tools)})
-            return self.get(session_id)
-        return self._repository.patch(session_id, {"enabled_tools": sorted(tools)})
-
     def assign_project(self, session_id: str, project_id: str) -> Session | None:
         """Переносит сессию в проект; устаревшая своя папка сессии при этом стирается."""
         return self._effective(
@@ -136,27 +117,27 @@ class SessionService:
         return session.model_copy(
             update={
                 "workspace": project.workspace if project else session.workspace,
-                "enabled_tools": normalize_tool_ids(project.enabled_tools if project else session.enabled_tools),
             }
         )
 
-    def reassign_agent(self, old_agent_id: str, new_agent_id: str) -> int:
-        """Агента удалили: его сессии продолжают работу с другим агентом, а не падают на следующем сообщении."""
-        moved = 0
-        for session in self._repository.list():
-            if session.agent_id == old_agent_id:
-                self._repository.patch(session.id, {"agent_id": new_agent_id})
-                moved += 1
-        return moved
+    def project_of(self, session: Session) -> Project | None:
+        return self._project(session)
 
-    def set_canvas(self, session_id: str, canvas: Canvas) -> Session | None:
-        return self._effective(self._repository.patch(session_id, {"canvas": canvas}))
+    def set_active_tools(self, session_id: str, tool_ids: list[str]) -> None:
+        """Подключённые инструменты запоминаются на проект: в новой сессии проекта они уже под рукой."""
+        session = self._repository.get(session_id)
+        project = self._project(session) if session else None
+        if project is not None:
+            self._projects.patch(project.id, {"active_tools": tool_ids})
 
-    def set_node_session(self, session_id: str, node_id: str, child_id: str) -> None:
-        """Запоминает скрытую сессию узла холста, чтобы агент продолжал её в следующих ходах."""
+    def set_pending(self, session_id: str, thread: str | None, pending: dict | None) -> None:
+        """Ход ждёт решения пользователя (thread и pending заданы) или больше не ждёт (оба None)."""
+        self._repository.patch(session_id, {"pending_thread": thread, "pending": pending})
+
+    def set_task(self, session_id: str, **fields) -> None:
         session = self._repository.get(session_id)
         if session is not None:
-            self._repository.patch(session_id, {"node_sessions": {**session.node_sessions, node_id: child_id}})
+            self._repository.patch(session_id, {"task": {**(session.task or {}), **fields}})
 
     def set_summary(self, session_id: str, summary: str, until_message_id: str) -> None:
         self._repository.patch(
@@ -171,7 +152,7 @@ class SessionService:
         if deleted:
             for callback in self._on_deleted:
                 callback(session_id)
-            # Скрытые сессии агентов с холста живут, только пока жива их сессия.
+            # Дочерние сессии саб-агентов живут, только пока жива их сессия.
             for child in self._repository.list():
                 if child.parent_id == session_id:
                     self.delete(child.id)

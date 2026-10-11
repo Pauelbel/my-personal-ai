@@ -35,11 +35,24 @@ class Settings(BaseSettings):
     drafts_path: Path = Path("data/drafts")
     conversations_path: Path = Path("data/conversations")
     memory_path: Path = Path("data/memory")
-    doc_index_path: Path = Path("data/doc_index")
-    # Шаг — один ход одного агента холста; на нём ход команды останавливается, даже если агенты не договорились.
-    max_run_steps: int = Field(default=20, gt=0)
+    # Пусто — рядом с остальными данными, в папке над sessions_path (обычно data/).
+    tools_path: Path | None = None
+    wiki_path: Path | None = None
+    index_path: Path | None = None
+    checkpoints_path: Path | None = None
+    mcp_config_path: Path | None = None
+    logs_path: Path | None = None
+    # Модель для саб-агентов, чтобы они не делили одну модель с основным: провайдер из LLM_PROVIDERS и ID модели.
+    # Пусто — модель сессии, которая поручила задачу.
+    subagent_provider: str = ""
+    subagent_model: str = ""
+    # Сколько задач саб-агентов выполняется одновременно; остальные ждут очереди.
+    max_parallel_tasks: int = Field(default=2, gt=0)
+    # Запускать MCP-серверы (браузер, веб-поиск) при старте.
+    mcp_enabled: bool = True
     memory_model: str = ""
-    max_memory_context_chars: int = Field(default=12000, gt=0)
+    # Сколько символов памяти (профиль и найденные записи) попадает в промпт.
+    max_memory_context_chars: int = Field(default=800, gt=0)
     memory_auto_update_messages: int = Field(default=10, ge=0)
     log_level: str = "INFO"
     max_context_messages: int = Field(default=20, gt=0)
@@ -47,6 +60,14 @@ class Settings(BaseSettings):
     response_reserve_tokens: int = Field(default=1024, ge=0)
     llm_timeout_seconds: float = Field(default=120.0, gt=0)
     allowed_hosts: str = "127.0.0.1,localhost"
+
+    @property
+    def data_dir(self) -> Path:
+        return self.sessions_path.parent
+
+    def data_path(self, name: str, default: str) -> Path:
+        value = getattr(self, name)
+        return value if value is not None else self.data_dir / default
 
     @property
     def allowed_host_set(self) -> set[str]:
