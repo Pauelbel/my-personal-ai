@@ -3,8 +3,10 @@
 import json
 import math
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import date
+from pathlib import Path
 
 from local_agent.llm.models import ChatMessage, ToolCall
 from local_agent.memory.models import Message
@@ -17,6 +19,10 @@ MONTHS = (
 MESSAGE_OVERHEAD_TOKENS = 4
 # Результаты инструментов из прошлых ходов обрезаются: целиком нужен только текущий ход.
 OLD_TOOL_RESULT_CHARS = 2000
+# Картинки модель видит в последних репликах пользователя — чтобы можно было переспросить о них;
+# у более старых остаются только имена. Картинка стоит модели сотни токенов, оценка — с запасом.
+IMAGE_MESSAGES = 3
+IMAGE_TOKENS = 800
 # Браузер (Playwright MCP) живёт между ходами, а его снимки из прошлых ходов обрезаны: модели напоминаем,
 # какая страница открыта, — иначе она отвечает по устаревшему обрывку или выдумывает.
 BROWSER_TOOL_PREFIX = "browser_"
@@ -35,7 +41,7 @@ def estimate_tokens(text: str | None) -> int:
 
 def estimate_message_tokens(message: ChatMessage) -> int:
     calls = sum(estimate_tokens(call.name + call.arguments) for call in message.tool_calls)
-    return MESSAGE_OVERHEAD_TOKENS + estimate_tokens(message.content) + calls
+    return MESSAGE_OVERHEAD_TOKENS + estimate_tokens(message.content) + calls + IMAGE_TOKENS * len(message.images)
 
 
 @dataclass(frozen=True)
@@ -121,7 +127,9 @@ def build_context(
     max_messages: int,
     max_tokens: int,
     tools: list[dict[str, object]] | None = None,
+    images: Callable[[str], Path | None] = lambda name: None,
 ) -> Context:
+    """images — файл картинки по имени из сообщения (data/attachments)."""
     groups = _groups(history)
     budget = (
         max_tokens
@@ -129,14 +137,16 @@ def build_context(
         - estimate_tokens(system_prompt)
         - estimate_tokens(json.dumps(tools, ensure_ascii=False) if tools else "")
     )
-    last_user = max((index for index, group in enumerate(groups) if group[0].role == "user"), default=-1)
+    users = [index for index, group in enumerate(groups) if group[0].role == "user"]
+    last_user = users[-1] if users else -1
+    seen = set(users[-IMAGE_MESSAGES:])
 
     selected: list[list[ChatMessage]] = []
     included = 0
     dialogue = 0
     for index in range(len(groups) - 1, -1, -1):
         group = groups[index]
-        messages = _to_chat(group, truncate_tools=index < last_user)
+        messages = _to_chat(group, truncate_tools=index < last_user, images=images if index in seen else None)
         cost = sum(estimate_message_tokens(message) for message in messages)
         turns = sum(1 for message in group if message.role != "tool")
         # Последнюю группу берём всегда: без неё модели нечего отвечать.
@@ -172,8 +182,17 @@ def _groups(history: list[Message]) -> list[list[Message]]:
     return groups
 
 
-def _to_chat(group: list[Message], *, truncate_tools: bool) -> list[ChatMessage]:
+def _to_chat(
+    group: list[Message], *, truncate_tools: bool, images: Callable[[str], Path | None] | None = None,
+) -> list[ChatMessage]:
     head = group[0]
+    if head.attachments:
+        # Имена картинок — в тексте: по ним агент вставляет картинку в заметку вики.
+        files = [path for name in head.attachments if images and (path := images(name))]
+        names = ", ".join(head.attachments)
+        note = f"[Картинки: {names}]" if files else f"[Картинки: {names} — их уже не видно, попроси прислать снова]"
+        content = f"{head.content}\n\n{note}" if head.content else note
+        return [ChatMessage(role=head.role, content=content, images=tuple(str(path) for path in files))]
     if not head.tool_calls:
         return [ChatMessage(role=head.role, content=head.content)]
     calls = tuple(ToolCall(id=call.id, name=call.name, arguments=call.arguments) for call in head.tool_calls)

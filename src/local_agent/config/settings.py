@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # Пусто — рядом с остальными данными, в папке над sessions_path (обычно data/).
     tools_path: Path | None = None
     wiki_path: Path | None = None
+    attachments_path: Path | None = None
     index_path: Path | None = None
     checkpoints_path: Path | None = None
     mcp_config_path: Path | None = None

@@ -17,6 +17,7 @@ from local_agent.agent.runtime import AgentRuntime, RuntimeLimits
 from local_agent.agent.summary import ConversationSummarizer
 from local_agent.agent.turn_hub import TurnHub
 from local_agent.api.middleware import LocalOriginMiddleware, RequestLoggingMiddleware
+from local_agent.api.routes.attachments import router as attachments_router
 from local_agent.api.routes.attention import router as attention_router
 from local_agent.api.routes.capabilities import router as capabilities_router
 from local_agent.api.routes.events import router as events_router
@@ -44,6 +45,7 @@ from local_agent.events import EventBus
 from local_agent.llm.base import LLMProvider
 from local_agent.llm.openai_compatible import OpenAICompatibleProvider
 from local_agent.llm.registry import LLMRegistry
+from local_agent.memory.attachments import AttachmentStore
 from local_agent.memory.conversation import ConversationService
 from local_agent.memory.markdown import MarkdownMemoryStore
 from local_agent.memory.service import MemoryService
@@ -128,11 +130,16 @@ def create_app(
             session_repository.on_change = lambda session_id: state.events.publish({"type": "changed", "session_id": session_id})
             project_repository.on_change = lambda project_id: state.events.publish({"type": "projects", "project_id": project_id})
             memory_store = MarkdownMemoryStore(active_settings.memory_path)
+            state.attachments = AttachmentStore(data("attachments_path", "attachments"))
+
+            def forget_attachments(session_id: str) -> None:
+                # Картинки сессии уходят вместе с её историей; в заметки вики попали их копии.
+                state.attachments.delete(name for message in conversation_store.list(session_id) for name in message.attachments)
 
             state.session_service = SessionService(
                 session_repository,
                 projects=project_repository,
-                on_deleted=(conversation_store.delete, memory_store.forget),
+                on_deleted=(forget_attachments, conversation_store.delete, memory_store.forget),
             )
             state.project_service = ProjectService(project_repository, state.session_service)
             state.project_service.adopt_sessions()
@@ -151,7 +158,9 @@ def create_app(
                 index_path=index_path / "memory.sqlite",
             )
             state.memory_service.initialize()
-            state.wiki_service = WikiService(data("wiki_path", "wiki"), index_path / "wiki.sqlite")
+            state.wiki_service = WikiService(
+                data("wiki_path", "wiki"), index_path / "wiki.sqlite", attachments=state.attachments.path,
+            )
             state.wiki_service.initialize()
 
             state.tool_registry = ToolRegistry([
@@ -237,6 +246,7 @@ def create_app(
 
             state.agent_runtime.core_tools.append(core_tools)
             state.agent_runtime.archive_lines = state.capabilities.archive_lines
+            state.agent_runtime.attachment_path = state.attachments.path
             warn_unknown_references(
                 state.agent_registry.all(),
                 {tool.id for tool in state.tool_registry.all()},
@@ -265,7 +275,7 @@ def create_app(
     app.add_middleware(LocalOriginMiddleware, allowed_hosts=active_settings.allowed_host_set)
     app.add_middleware(RequestLoggingMiddleware)
     for router in (
-        health_router, sessions_router, projects_router, folders_router, files_router, messages_router,
+        health_router, sessions_router, projects_router, folders_router, files_router, messages_router, attachments_router,
         memory_router, models_router, turns_router, capabilities_router, attention_router, wiki_router, team_router,
         events_router, links_router,
     ):

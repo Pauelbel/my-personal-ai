@@ -18,6 +18,8 @@ MAX_RESULT_CHARS = 6000
 # Тексты заметок для lint: около 13 тысяч токенов — с запасом помещается в окно от 32k.
 MAX_LINT_CHARS = 40_000
 EDIT_KINDS = {"merge": "слить дубли", "contradiction": "противоречие", "outdated": "устарело", "fix": "исправить"}
+# Сколько тегов показывать агенту: самые частые, редкие — хвост, который только раздувает ответ.
+MAX_TAGS_SHOWN = 40
 
 
 class WikiSearchTool:
@@ -105,6 +107,7 @@ class WikiMatchTool:
         if not keywords:
             return ToolResult("Укажите ключевые слова текста", is_error=True)
         found = await asyncio.to_thread(self._wiki.match, keywords, (), 1)
+        tags = await asyncio.to_thread(_known_tags, self._wiki)
         if not found or len(found[0].shared) < MATCH_THRESHOLD:
             # Одно общее слово — не повод сливать, но повод связать: так на графе появляется линия.
             near = [f"- {item.entry.path} — {item.entry.description} (общее: {item.shared[0]})" for item in found[:5]]
@@ -112,6 +115,7 @@ class WikiMatchTool:
                 "В index.md нет заметки, с которой совпали бы 2+ ключевых слова. "
                 "Создай новую заметку через wiki_save_note без path."
                 + ("\nБлизкие по теме заметки — если они правда связаны, укажи их в related:\n" + "\n".join(near) if near else "")
+                + tags
             )
         best = found[0]
         try:
@@ -125,7 +129,8 @@ class WikiMatchTool:
             "проверь, что ничего не противоречит, — и сохрани через wiki_save_note "
             f"с path={best.entry.path}.\n"
             + ("Ещё похожие:\n" + "\n".join(others) + "\n" if others else "")
-            + f"\nТекущий текст {best.entry.path}:\n\n{text}"
+            + tags
+            + f"\n\nТекущий текст {best.entry.path}:\n\n{text}"
         )
 
 
@@ -156,6 +161,11 @@ class WikiSaveNoteTool:
                 "type": "array", "items": {"type": "string"},
                 "description": "Пути связанных заметок из index.md — станут ссылками и линиями графа",
             },
+            "images": {
+                "type": "array", "items": {"type": "string"},
+                "description": "Картинки из сообщения пользователя, которые нужно вставить в заметку: имена из строки "
+                "«[Картинки: …]», например 1a2b3c4d5e6f.png. Уже вставленные в заметку картинки сохраняются сами",
+            },
             "path": {"type": "string", "description": "Только при дополнении: путь заметки из wiki_match"},
             "replaces": {
                 "type": "array", "items": {"type": "string"},
@@ -170,7 +180,7 @@ class WikiSaveNoteTool:
         self._wiki = wiki
 
     def validate(self, arguments: dict) -> str | None:
-        for name in ("ideas", "keywords", "tags", "related", "replaces"):
+        for name in ("ideas", "keywords", "tags", "related", "replaces", "images"):
             # Мысли могут содержать запятые: строкой их делим только по строкам.
             if problem := _coerce_list(arguments, name, by_comma=name != "ideas"):
                 return problem
@@ -187,6 +197,7 @@ class WikiSaveNoteTool:
             source=str(arguments.get("source") or ""),
             details=str(arguments.get("details") or ""),
             related=tuple(arguments.get("related") or ()),
+            images=tuple(arguments.get("images") or ()),
         )
         path = arguments.get("path") or None
         try:
@@ -223,6 +234,12 @@ class WikiLintTool:
             f"Сегодня {date.today().isoformat()}. Заметок: {len(entries)}.",
             "index.md:\n" + "\n".join(entry.line() for entry in entries),
         ]
+        if tags := self._wiki.tags():
+            parts.append(
+                "Теги (сколько заметок): " + ", ".join(f"{tag} {count}" for tag, count in tags[:MAX_TAGS_SHOWN])
+                + ". Если среди них есть синонимы или один тег на двух языках (например, qa и тестирование), "
+                "предложи правку fix: в notes — заметки с лишним тегом, в change — какой тег на какой заменить."
+            )
         if pairs:
             parts.append(
                 "Похожие заметки (общие ключевые слова) — проверь на дубли и противоречия:\n"
@@ -359,6 +376,17 @@ class WikiProposeEditsTool:
             "из исходных заметок без потерь. После сохранения коротко скажи, что сделано.\n\n"
             + "Тексты заметок:\n\n" + "\n\n".join(texts)
         )
+
+
+def _known_tags(wiki: WikiService) -> str:
+    """Теги, которые уже есть в вики: агент выбирает из них, а не заводит синонимы."""
+    tags = wiki.tags()[:MAX_TAGS_SHOWN]
+    if not tags:
+        return ""
+    return (
+        "\nТеги вики (сколько заметок): " + ", ".join(f"{tag} {count}" for tag, count in tags)
+        + ". Для tags бери подходящие из них; новый тег — только для темы, которой в вики ещё нет."
+    )
 
 
 def _edit(edit: object) -> dict:

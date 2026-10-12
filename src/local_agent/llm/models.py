@@ -17,6 +17,8 @@ class ChatMessage:
     content: str | None
     tool_calls: tuple[ToolCall, ...] = ()
     tool_call_id: str | None = None
+    # Пути к файлам картинок реплики пользователя: провайдер кладёт их в запрос рядом с текстом.
+    images: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

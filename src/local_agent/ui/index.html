@@ -75,9 +75,11 @@
                 </span>
                 <span class="usage" id="usage"></span>
               </div>
+              <div class="attachments" id="attachments" aria-label="Картинки к сообщению" hidden></div>
               <div class="composer-row">
                 <span class="prompt-mark" aria-hidden="true">◆</span>
                 <textarea id="input" rows="1" placeholder="Сообщение агенту" aria-label="Сообщение"></textarea>
+                <button class="attach" id="attach" type="button" title="Добавить картинку — или вставьте её из буфера (Ctrl+V), или перетащите сюда">＋</button>
                 <button class="send" id="send" type="submit" title="Отправить">↵</button>
               </div>
               <div class="frame-foot">
@@ -117,7 +119,6 @@
           <div class="wiki-chat-head">
             <strong>○ Чат вики</strong>
             <span class="wiki-tools" id="wiki-tools">
-              <input id="wiki-search" type="search" placeholder="Поиск по вики" aria-label="Поиск по вики" />
               <button id="wiki-lint" type="button" title="Агент в чате вики найдёт противоречия, устаревшее и дубли и покажет список правок — применит только отмеченные">lint</button>
             </span>
             <button type="button" class="ghost" id="wiki-chat-clear" title="Начать разговор заново: агент его забудет, заметки останутся">Очистить</button>
@@ -132,9 +133,11 @@
                 <span class="frame-left"><span class="frame-label">◇ вики</span><span class="model-name" id="wiki-chat-model"></span></span>
                 <span class="wiki-chat-status" id="wiki-chat-status"></span>
               </div>
+              <div class="attachments" id="wiki-attachments" aria-label="Картинки к сообщению" hidden></div>
               <div class="composer-row">
                 <span class="prompt-mark" aria-hidden="true">◆</span>
-                <textarea id="wiki-chat-input" rows="1" placeholder="Текст, ссылка или вопрос" aria-label="Сообщение в чат вики"></textarea>
+                <textarea id="wiki-chat-input" rows="1" placeholder="Текст, ссылка, картинка или вопрос" aria-label="Сообщение в чат вики"></textarea>
+                <button class="attach" id="wiki-attach" type="button" title="Добавить картинку — или вставьте её из буфера (Ctrl+V), или перетащите сюда">＋</button>
                 <button class="send" type="button" id="wiki-chat-send" title="Отправить (Enter)">↵</button>
               </div>
               <div class="frame-foot"><span>Enter — отправить · /lint — проверка</span></div>
@@ -152,6 +155,10 @@
             <button type="button" data-mode="list" aria-pressed="true">Список</button>
             <button type="button" data-mode="graph" aria-pressed="false">Граф</button>
           </nav>
+          <div class="wiki-find">
+            <input id="wiki-search" type="search" placeholder="Найти заметку · Ctrl+K" aria-label="Найти заметку" autocomplete="off" />
+            <div class="wiki-tags" id="wiki-tags" aria-label="Теги"></div>
+          </div>
           <div class="split" id="wiki-split">
             <div class="list tree-list" id="wiki-list"></div>
             <div class="graph" id="wiki-graph" hidden></div>

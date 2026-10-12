@@ -160,6 +160,8 @@ def test_agent_adds_note_without_card_and_ui_reads_it(tmp_path):
     assert "создай новую" in match.casefold() and "Создана заметка rag_основы.md" in saved
     assert events[-1]["type"] == "done"
     assert [item["path"] for item in pages] == ["rag_основы.md"]
+    # Описание и теги — для поиска в интерфейсе без запроса к серверу.
+    assert pages[0]["description"] == "Поиск кусков документов перед ответом" and pages[0]["tags"] == []
     assert page["meta"]["type"] == "note" and page["body"].lstrip().startswith("# RAG: основы")
     # Мысль с запятой осталась одной мыслью.
     assert "- Куски, ищут по эмбеддингам" in page["content"]
@@ -259,3 +261,31 @@ def test_summary_put_into_description_is_kept_in_details(tmp_path):
     assert "## Подробности" in text and "Пирамида: Unit 70%, E2E 10%" in text and "\n### Классификация" in text
     assert "- Классификация тестирования\n- Техники тест-дизайна (EP, BVA)\n- Баг-репорты\n" in text
     assert "\\n" not in text
+
+
+def test_tags_find_notes_and_variants_of_one_word_merge(tmp_path):
+    import asyncio
+
+    from local_agent.wiki.tools import WikiLintTool, WikiMatchTool
+
+    service = wiki(tmp_path)
+    service.save_note(fields(tags=("тестирование", "методологии")))
+    # Файл, поправленный руками: тот же тег в другой форме.
+    (tmp_path / "wiki" / "bdd.md").write_text(
+        '---\ntitle: "BDD"\ndescription: "Сценарии на Gherkin"\ntags: ["Методология", "qa"]\n---\n\n# BDD\n',
+        encoding="utf-8",
+    )
+    pages = {page.path: page for page in service.pages()}
+    # Список для интерфейса: описание и теги; «Методология» и «методологии» — один тег.
+    assert pages["bdd.md"].description == "Сценарии на Gherkin"
+    assert pages["bdd.md"].tags == ("методологии", "qa")
+    assert service.tags() == [("методологии", 2), ("qa", 1), ("тестирование", 1)]
+    # Новая заметка с вариантом существующего тега получает его, а не заводит ещё один.
+    service.save_note(fields(title="Чек-лист", keywords=("чек-лист", "релиз"), tags=("Методология", "чек-листы")))
+    assert notes.parse("x.md", service.read("чек-лист.md")).tags == ("методологии", "чек-листы")
+
+    # Агент видит теги вики, когда подбирает заметку, и при проверке — чтобы слить синонимы.
+    matched = asyncio.run(WikiMatchTool(service).execute({"keywords": ["gherkin", "сценарии"]}, None)).content
+    assert "Теги вики (сколько заметок): методологии 3, qa 1" in matched
+    lint = asyncio.run(WikiLintTool(service).execute({}, None)).content
+    assert "Теги (сколько заметок): методологии 3" in lint and "синонимы" in lint

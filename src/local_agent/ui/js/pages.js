@@ -18,29 +18,38 @@ function branch(items, lines, build) {
 // ---------- вики ----------
 
 const INDEX_PAGE = "index.md";
+// Сколько заметок в «Недавних» и сколько тегов видно над списком, пока не нажали «ещё».
+const RECENT_SHOWN = 5;
+const TAGS_SHOWN = 10;
+const UNTAGGED = "без тегов";
 // Открытая заметка запоминается: после перезагрузки страницы она открывается снова.
 let wikiCurrent = recall("wiki-page");
 const wikiClosed = new Set();
-// Последний показанный список: после открытия страницы он перерисовывается без нового запроса.
-let wikiShown = { items: [], query: "" };
-// «Список» — дерево заметок, «Граф» — точки и ссылки между ними; читалка справа в обоих видах.
+// Все заметки с описаниями и тегами: по ним список фильтруется сразу, без запроса к серверу.
+let wikiPages = [];
+// Выбранный тег сужает список до его заметок; null — все заметки.
+let wikiTag = null;
+let wikiAllTags = false;
+// Последний показанный список: после открытия заметки он перерисовывается без нового запроса
+// и без перестановки «Недавних» под курсором.
+let wikiShown = { query: "", textHits: [], recent: [] };
+// «Список» — заметки по темам, «Граф» — точки и ссылки между ними; читалка справа в обоих видах.
 let wikiMode = recall("wiki-mode") === "graph" ? "graph" : "list";
 let wikiGraph = null;
 
 export async function showWiki(toast) {
   try {
     const query = $("#wiki-search").value.trim();
-    const graphShown = wikiMode === "graph" && !query;
+    const graphShown = wikiMode === "graph" && !query && !wikiTag;
     renderWikiMode(toast, graphShown);
+    wikiPages = await api.wiki();
+    renderWikiTags(toast);
     if (graphShown) {
       wikiGraph ??= createGraph($("#wiki-graph"), { onOpen: (path) => openWiki(path, toast) });
       wikiGraph.update(await api.wikiGraph(), wikiCurrent);
     } else {
-      const items = query
-        ? (await api.wikiSearch(query)).map((item) => ({ path: item.path, title: item.title, note: item.text }))
-        : (await api.wiki()).map((page) => ({ path: page.path, title: page.title }));
-      const unique = [...new Map(items.map((item) => [item.path, item])).values()];
-      renderWikiList(unique, query, toast);
+      const textHits = query ? await api.wikiSearch(query) : [];
+      renderWikiList({ query, textHits, recent: recentPages() }, toast);
     }
     if (wikiCurrent && !query) await openWiki(wikiCurrent, toast, false);
   } catch (error) {
@@ -48,8 +57,28 @@ export async function showWiki(toast) {
   }
 }
 
+// Стрелки ходят по списку, Enter в поиске открывает первую найденную заметку, Esc очищает поиск.
+export function wikiKeys(event, toast) {
+  const search = $("#wiki-search");
+  const rows = [...$("#wiki-list").querySelectorAll("button.trow-main")];
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const next = rows.indexOf(document.activeElement) + (event.key === "ArrowDown" ? 1 : -1);
+    (next < 0 ? search : rows[Math.min(next, rows.length - 1)])?.focus();
+  } else if (event.key === "Enter" && event.target === search) {
+    event.preventDefault();
+    rows.find((row) => !row.closest(".group"))?.click();
+  } else if (event.key === "Escape" && (search.value || wikiTag)) {
+    // Esc здесь только очищает поиск: ответ в основном чате он не останавливает.
+    event.stopPropagation();
+    search.value = "";
+    wikiTag = null;
+    search.focus();
+    void showWiki(toast);
+  }
+}
 
-// Поиск всегда показывает список найденного: граф по запросу не фильтруется.
+// Поиск и выбранный тег всегда показывают список: граф по ним не фильтруется.
 function renderWikiMode(toast, graphShown) {
   $("#wiki-split").classList.toggle("graph-mode", graphShown);
   $("#wiki-list").hidden = graphShown;
@@ -60,58 +89,132 @@ function renderWikiMode(toast, graphShown) {
       wikiMode = tab.dataset.mode;
       remember("wiki-mode", wikiMode);
       $("#wiki-search").value = "";
+      wikiTag = null;
       void showWiki(toast);
     };
   }
 }
 
-// Без поиска — index.md и дерево папок data/wiki, с поиском — найденные страницы одной группой с фрагментом текста.
-function renderWikiList(items, query, toast) {
-  wikiShown = { items, query };
+// Теги над списком — самые частые первыми, с числом заметок.
+function renderWikiTags(toast) {
+  const tags = tagCounts();
+  const shown = wikiAllTags ? tags : tags.slice(0, TAGS_SHOWN);
+  if (wikiTag && !shown.some(([tag]) => tag === wikiTag)) shown.push([wikiTag, 0]);
+  const chips = shown.map(([tag, count]) => tagChip(tag, toast, count));
+  if (tags.length > TAGS_SHOWN) {
+    const more = el("button", "chip", wikiAllTags ? "свернуть" : `ещё ${tags.length - TAGS_SHOWN}`);
+    more.type = "button";
+    more.addEventListener("click", () => {
+      wikiAllTags = !wikiAllTags;
+      renderWikiTags(toast);
+    });
+    chips.push(more);
+  }
+  $("#wiki-tags").replaceChildren(...chips);
+}
+
+function tagCounts() {
+  const counts = new Map();
+  for (const page of wikiPages) for (const tag of page.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ru"));
+}
+
+// Тег над списком и под заметкой: щелчок оставляет в списке только его заметки, повторный — снимает фильтр.
+function tagChip(tag, toast, count = 0) {
+  const chip = el("button", `chip${tag === wikiTag ? " on" : ""}`, `#${tag}`);
+  chip.type = "button";
+  chip.title = tag === wikiTag ? "Показать все заметки" : `Только заметки с тегом «${tag}»`;
+  if (count) chip.append(el("span", "chip-count", ` ${count}`));
+  chip.addEventListener("click", () => {
+    wikiTag = tag === wikiTag ? null : tag;
+    void showWiki(toast);
+  });
+  return chip;
+}
+
+// Недавние: открытые здесь заметки, затем недавно изменённые (сервер отдаёт их первыми).
+function recentPages() {
+  let opened = [];
+  try {
+    opened = JSON.parse(recall("wiki-recent")) ?? [];
+  } catch {
+    // Испорченная запись — просто без открытых.
+  }
+  const byPath = new Map(wikiPages.map((page) => [page.path, page]));
+  const paths = [...(Array.isArray(opened) ? opened : []), ...byPath.keys()];
+  return [...new Set(paths)].filter((path) => byPath.has(path)).slice(0, RECENT_SHOWN).map((path) => byPath.get(path));
+}
+
+// Без поиска — «Недавние» и заметки по темам (главный тег — самый частый в вики из тегов заметки);
+// с поиском — совпадения в названии, описании и тегах (сразу, без сервера), ниже — найденное в тексте.
+function renderWikiList(shown, toast) {
+  wikiShown = shown;
+  const { query, textHits, recent } = shown;
   const root = $("#wiki-list");
-  if (!items.length) {
-    root.replaceChildren(el("p", "hint", query ? "Ничего не нашлось." : "Заметок пока нет."));
+  if (!wikiPages.length) {
+    root.replaceChildren(el("p", "hint", "Заметок пока нет."));
     return;
   }
-  const open = (path) => () => openWiki(path, toast);
+  const pages = wikiTag ? wikiPages.filter((page) => page.tags.includes(wikiTag)) : wikiPages;
+  // Длинное название в узкой колонке обрезано: целиком — с описанием — во всплывающей подсказке.
+  const item = (page, detail = "") => ({ path: page.path, title: page.title, hint: [page.title, page.description].join("\n"), detail });
+  let sections;
   if (query) {
-    root.replaceChildren(treeRow({ label: `найдено: ${items.length}`, group: true }), ...branch(items, [], (item, lines, last) => treeRow({
-      prefix: guide(lines, last), label: item.title, title: item.path, current: item.path === wikiCurrent, onClick: open(item.path),
-      detail: item.note, detailPrefix: stem(lines, last),
-    })));
-    return;
-  }
-  const tree = { folders: new Map(), pages: [{ path: INDEX_PAGE, title: INDEX_PAGE, index: true }] };
-  for (const item of items) {
-    const parts = item.path.split("/");
-    let node = tree;
-    for (const folder of parts.slice(0, -1)) {
-      if (!node.folders.has(folder)) node.folders.set(folder, { folders: new Map(), pages: [] });
-      node = node.folders.get(folder);
+    const words = query.toLowerCase().split(/\s+/);
+    const named = pages.filter((page) => {
+      const text = [page.title, page.description, ...page.tags].join(" ").toLowerCase();
+      return words.every((word) => text.includes(word));
+    });
+    const skip = new Set(named.map((page) => page.path));
+    const allowed = new Set(pages.map((page) => page.path));
+    const inText = [...new Map(textHits.map((hit) => [hit.path, hit])).values()]
+      .filter((hit) => allowed.has(hit.path) && !skip.has(hit.path));
+    sections = [
+      ["В названии и тегах", named.map((page) => item(page, page.description))],
+      ["В тексте", inText.map((hit) => ({ path: hit.path, title: hit.title, hint: hit.path, detail: hit.text }))],
+    ];
+  } else if (wikiTag) {
+    sections = [[`#${wikiTag}`, byTitle(pages).map((page) => item(page))]];
+  } else {
+    const counts = new Map(tagCounts());
+    const topics = new Map();
+    for (const page of pages) {
+      const topic = page.tags.reduce((best, tag) => (counts.get(tag) > (counts.get(best) ?? 0) ? tag : best), null);
+      const name = topic ? `#${topic}` : UNTAGGED;
+      topics.set(name, [...(topics.get(name) ?? []), page]);
     }
-    node.pages.push(item);
+    const ordered = [...topics].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], "ru"));
+    sections = [
+      ["Недавние", recent.map((page) => item(page))],
+      ...ordered.map(([name, group]) => [name, byTitle(group).map((page) => item(page))]),
+    ];
   }
-  const rows = (node, path, lines) => branch([...node.folders.entries(), ...node.pages], lines, (entry, ancestors, last) => {
-    if (!Array.isArray(entry)) {
-      return [treeRow({
-        prefix: guide(ancestors, last), label: entry.title, current: entry.path === wikiCurrent, onClick: open(entry.path),
-        title: entry.index ? "Индекс: строка на каждую заметку, агент обновляет его сам" : entry.path,
-        note: entry.index ? "индекс" : "",
-      })];
-    }
-    const [name, child] = entry;
-    const folder = path ? `${path}/${name}` : name;
-    const opened = !wikiClosed.has(folder);
+  const rows = sections.filter(([, items]) => items.length).flatMap(([name, items]) => {
+    // Найденное не сворачивается: свёрнутая группа спрятала бы результат поиска.
+    const opened = Boolean(query) || !wikiClosed.has(name);
     const head = treeRow({
-      prefix: guide(ancestors, last), label: name, group: true, open: opened,
-      onClick: () => {
-        if (!wikiClosed.delete(folder)) wikiClosed.add(folder);
-        renderWikiList(items, query, toast);
+      label: `${name} · ${items.length}`, group: true, open: opened,
+      onClick: query ? undefined : () => {
+        if (!wikiClosed.delete(name)) wikiClosed.add(name);
+        renderWikiList(wikiShown, toast);
       },
     });
-    return opened ? [head, ...rows(child, folder, [...ancestors, !last])] : [head];
+    return opened ? [head, ...branch(items, [], (entry, lines, last) => treeRow({
+      prefix: guide(lines, last), label: entry.title, title: entry.hint, current: entry.path === wikiCurrent,
+      onClick: () => openWiki(entry.path, toast), detail: entry.detail, detailPrefix: stem(lines, last),
+    }))] : [head];
   });
-  root.replaceChildren(treeRow({ label: `data/wiki · ${items.length}`, group: true }), ...rows(tree, "", []));
+  if (!query && !wikiTag) {
+    rows.push(treeRow({
+      label: INDEX_PAGE, note: "индекс", current: wikiCurrent === INDEX_PAGE, onClick: () => openWiki(INDEX_PAGE, toast),
+      title: "Индекс: строка на каждую заметку, агент обновляет его сам",
+    }));
+  }
+  root.replaceChildren(...(rows.length ? rows : [el("p", "hint", "Ничего не нашлось.")]));
+}
+
+function byTitle(pages) {
+  return [...pages].sort((a, b) => a.title.localeCompare(b.title, "ru"));
 }
 
 // Заметка по пути — из чата вики: пути в ответах агента открывают её здесь.
@@ -124,10 +227,20 @@ async function openWiki(path, toast, refreshList = true) {
     const page = await api.wikiPage(path);
     wikiCurrent = path;
     remember("wiki-page", path);
+    if (path !== INDEX_PAGE) {
+      const opened = recentPages().map((item) => item.path).filter((item) => item !== path);
+      remember("wiki-recent", JSON.stringify([path, ...opened].slice(0, RECENT_SHOWN)));
+    }
     const reader = $("#wiki-page");
     reader.replaceChildren(el("p", "hint", `data/wiki/${path}`));
-    if (page.meta) reader.append(noteMeta(page.meta));
-    renderMarkdown(reader, page.body);
+    // Теги — как в списке: варианты одного слова там уже сведены к одному тегу.
+    const tags = wikiPages.find((item) => item.path === path)?.tags ?? page.meta?.tags.map((tag) => tag.toLowerCase().trim());
+    if (page.meta) reader.append(noteMeta(page.meta, tags, toast));
+    // Картинки заметки лежат в вики рядом с ней: адрес — от папки заметки.
+    renderMarkdown(reader, page.body, true, (src) => {
+      const file = wikiPath(path, src);
+      return file ? `/api/wiki/file?path=${encodeURIComponent(file)}` : null;
+    });
     // Ссылки на другие заметки открываются здесь же, а не переходом браузера.
     for (const link of reader.querySelectorAll("a[data-href]")) {
       const target = wikiTarget(path, link.dataset.href);
@@ -138,7 +251,7 @@ async function openWiki(path, toast, refreshList = true) {
       });
     }
     wikiGraph?.setCurrent(path);
-    if (refreshList) renderWikiList(wikiShown.items, wikiShown.query, toast);
+    if (refreshList && !$("#wiki-list").hidden) renderWikiList(wikiShown, toast);
   } catch (error) {
     if (refreshList) {
       toast(error);
@@ -151,12 +264,12 @@ async function openWiki(path, toast, refreshList = true) {
   }
 }
 
-// Поля OKF над текстом: тип, теги и описание в одну строку.
-function noteMeta(meta) {
+// Поля OKF над текстом: тип, теги (щелчок — заметки с этим тегом) и описание.
+function noteMeta(meta, tags, toast) {
   const box = el("div", "note-meta");
   const chips = el("div", "note-chips");
   if (meta.type) chips.append(el("span", "chip type", meta.type));
-  for (const tag of meta.tags) chips.append(el("span", "chip", `#${tag}`));
+  for (const tag of tags) chips.append(tagChip(tag, toast));
   if (chips.childElementCount) box.append(chips);
   if (meta.description) box.append(el("p", "note-description", meta.description));
   return box;
@@ -164,9 +277,14 @@ function noteMeta(meta) {
 
 // Путь заметки по относительной ссылке из заметки from; внешние ссылки и не .md — null.
 function wikiTarget(from, href) {
+  const path = wikiPath(from, href);
+  return path?.endsWith(".md") ? path : null;
+}
+
+// Путь файла вики по относительной ссылке из заметки from; внешние ссылки — null.
+function wikiPath(from, href) {
   if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("/") || href.startsWith("#")) return null;
   const clean = decodeURIComponent(href.split("#")[0]);
-  if (!clean.endsWith(".md")) return null;
   const parts = from.split("/").slice(0, -1);
   for (const part of clean.split("/")) {
     if (part === "..") parts.pop();

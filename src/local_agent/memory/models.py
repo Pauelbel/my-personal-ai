@@ -40,6 +40,8 @@ class Message(BaseModel):
     sender: str | None = None
     # Только у финального ответа хода.
     stats: MessageStats | None = None
+    # Картинки, которые пользователь вставил в реплику: имена файлов в data/attachments.
+    attachments: list[str] = Field(default_factory=list)
 
     @property
     def from_user(self) -> bool:

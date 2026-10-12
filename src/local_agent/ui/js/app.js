@@ -1,9 +1,10 @@
 // Точка входа интерфейса: проекты и сессии, чат со стримингом, карточки решений, задачи саб-агентов, разделы.
 import { api } from "./api.js";
+import { imageInput } from "./attach.js";
 import { StreamingMessage, el, renderMessages, scrollDown } from "./chat.js";
 import { renderCards, renderDock } from "./panel.js";
 import { initFiles, openPath, showFiles } from "./files.js";
-import { reloadCapabilities, saveMemory, showCapabilities, showMemory, showWiki } from "./pages.js";
+import { reloadCapabilities, saveMemory, showCapabilities, showMemory, showWiki, wikiKeys } from "./pages.js";
 import { initWikiChat, LINT_PROMPT, refreshWikiChat, sendWiki } from "./wikichat.js";
 import { makeResizable } from "./resize.js";
 import { renderAgentBar, renderTeam } from "./team.js";
@@ -17,6 +18,9 @@ const SEP = "\u0000";
 const RUNNING = new Set(["queued", "running"]);
 // Узкий экран: панель проектов выезжает поверх чата и закрывается после выбора сессии.
 const narrow = window.matchMedia("(max-width: 900px)");
+
+// Картинки в поле ввода основного чата (attach.js).
+let images = null;
 
 const state = {
   sessions: [],
@@ -480,11 +484,14 @@ async function send() {
     return;
   }
   const session = current();
-  if (!content || !session) return;
+  if ((!content && !images.count) || !session) return;
+  const attachments = await images.names();
+  if (!content && !attachments.length) return;
   if (state.streaming === session.id) {
     try {
-      await api.enqueue(session.id, content);
+      await api.enqueue(session.id, content, attachments);
       input.value = "";
+      images.clear();
       autosize();
       await syncTurn();
     } catch (error) {
@@ -498,7 +505,12 @@ async function send() {
     await changeModel();
   }
   state.failed = null;
-  await run(session.id, (signal, onEvent) => api.send(session.id, content, signal, onEvent), () => { input.value = ""; autosize(); }, content);
+  const sent = () => {
+    input.value = "";
+    images.clear();
+    autosize();
+  };
+  await run(session.id, (signal, onEvent) => api.send(session.id, content, signal, onEvent, false, attachments), sent, content, attachments);
 }
 
 // ■ и Esc: ход останавливает сервер, поток сам закончится событием stopped.
@@ -533,7 +545,10 @@ async function retry() {
   const failed = state.failed;
   if (!failed || state.streaming) return;
   state.failed = null;
-  await run(failed.sessionId, (signal, onEvent) => api.send(failed.sessionId, failed.content, signal, onEvent, true), () => {}, failed.content);
+  await run(
+    failed.sessionId, (signal, onEvent) => api.send(failed.sessionId, failed.content, signal, onEvent, true, failed.attachments),
+    () => {}, failed.content, failed.attachments,
+  );
 }
 
 // Ход открытой сессии идёт на сервере (из очереди, из другой вкладки, до перезагрузки): подключаемся к нему с начала.
@@ -560,7 +575,7 @@ function detach() {
 }
 
 // content — текст хода: если ход сорвётся, его можно повторить кнопкой.
-async function run(sessionId, start, onSaved = () => {}, content = null) {
+async function run(sessionId, start, onSaved = () => {}, content = null, attachments = []) {
   const controller = new AbortController();
   state.streaming = sessionId;
   state.controller = controller;
@@ -599,7 +614,7 @@ async function run(sessionId, start, onSaved = () => {}, content = null) {
   } catch (error) {
     if (error.name !== "AbortError") {
       toast(error);
-      if (content) state.failed = { sessionId, content, reason: error.message };
+      if (content || attachments.length) state.failed = { sessionId, content, attachments, reason: error.message };
     }
   } finally {
     // Пока этот поток заканчивался, могли подключиться к другому: его состояние не трогаем.
@@ -941,6 +956,7 @@ function bind() {
     void (state.streaming ? stop() : send());
   });
   $("#input").addEventListener("input", autosize);
+  images = imageInput({ box: $("#composer .composer-box"), input: $("#input"), strip: $("#attachments"), button: $("#attach"), toast });
   $("#input").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -961,6 +977,8 @@ function bind() {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => showWiki(toast), 250);
   });
+  $("#wiki-search").addEventListener("keydown", (event) => wikiKeys(event, toast));
+  $("#wiki-list").addEventListener("keydown", (event) => wikiKeys(event, toast));
   $("#wiki-lint").addEventListener("click", lintWiki);
   initWikiChat({ toast, model: () => $("#model-select").value.split(SEP) });
   makeResizable($("#wiki-chat-resizer"), { grid: $("#view-wiki"), variables: ["--wiki-chat-w"], min: 280 });
@@ -989,6 +1007,14 @@ function bind() {
     document.documentElement.dataset.theme = next;
     remember("app-theme", next);
     showTheme();
+  });
+  // Ctrl+K — найти заметку вики из любого раздела. По коду клавиши: в русской раскладке это «Л».
+  document.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.code !== "KeyK" || document.querySelector("dialog[open]")) return;
+    event.preventDefault();
+    if (state.view !== "wiki") showView("wiki");
+    $("#wiki-search").focus();
+    $("#wiki-search").select();
   });
   // Esc останавливает ответ, а на узком экране сначала закрывает выехавшую панель.
   document.addEventListener("keydown", (event) => {

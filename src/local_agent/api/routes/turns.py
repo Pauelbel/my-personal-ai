@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from local_agent.agent.runtime import (
     AgentRuntime,
@@ -29,9 +29,17 @@ router = APIRouter(prefix="/sessions/{session_id}", tags=["turns"])
 class TurnCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    content: str = Field(min_length=1)
+    content: str = ""
+    # Картинки, вставленные в реплику: имена из POST /attachments. С картинкой текст можно не писать.
+    attachments: list[str] = []
     # Повтор после сбоя: реплика уже сохранена и осталась без ответа.
     retry: bool = False
+
+    @model_validator(mode="after")
+    def not_empty(self):
+        if not self.content and not self.attachments:
+            raise ValueError("Пустое сообщение")
+        return self
 
 
 class Decision(BaseModel):
@@ -55,8 +63,9 @@ async def create_turn(
     runtime: Annotated[AgentRuntime, Depends(get_agent_runtime)],
 ) -> Message:
     try:
+        _check_attachments(request, payload.attachments)
         return await runtime.run_turn(
-            session_id, payload.content, request.state.request_id
+            session_id, payload.content, request.state.request_id, tuple(payload.attachments),
         )
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -91,7 +100,13 @@ async def stream_turn(
     hub = get_turn_hub(request)
     if hub.running(session_id) is not None or runtime.is_busy(session_id):
         raise HTTPException(status_code=409, detail="В этой сессии ещё выполняется предыдущий ход: сообщение можно поставить в очередь")
-    turn = hub.start(session_id, runtime.stream_turn(session_id, payload.content, request.state.request_id, retry=payload.retry))
+    _check_attachments(request, payload.attachments)
+    if payload.attachments and session.pending:
+        # Сообщение при карточке — ответ на неё словами, картинку к такому ответу не приложить.
+        raise HTTPException(status_code=409, detail="Ход ждёт решения по карточке: сначала ответьте на неё, картинку пришлите следующим сообщением")
+    turn = hub.start(session_id, runtime.stream_turn(
+        session_id, payload.content, request.state.request_id, retry=payload.retry, attachments=tuple(payload.attachments),
+    ))
     return _follow(hub, turn)
 
 
@@ -145,7 +160,14 @@ async def stop_turn(session_id: str, request: Request) -> None:
 class QueuedMessage(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    content: str = Field(min_length=1)
+    content: str = ""
+    attachments: list[str] = []
+
+    @model_validator(mode="after")
+    def not_empty(self):
+        if not self.content and not self.attachments:
+            raise ValueError("Пустое сообщение")
+        return self
 
 
 @router.post("/queue", status_code=201)
@@ -155,13 +177,20 @@ async def enqueue(
 ) -> dict:
     if sessions.get(session_id) is None:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
-    return get_turn_hub(request).enqueue(session_id, payload.content)
+    _check_attachments(request, payload.attachments)
+    return get_turn_hub(request).enqueue(session_id, payload.content, tuple(payload.attachments))
 
 
 @router.delete("/queue/{item_id}", status_code=204)
 async def dequeue(session_id: str, item_id: str, request: Request) -> None:
     if not get_turn_hub(request).remove(session_id, item_id):
         raise HTTPException(status_code=404, detail="Сообщения в очереди нет")
+
+
+def _check_attachments(request: Request, names: list[str]) -> None:
+    store = request.app.state.attachments
+    if missing := [name for name in names if store.path(name) is None]:
+        raise HTTPException(status_code=400, detail=f"Картинки не найдены: {', '.join(missing)} — вставьте их заново")
 
 
 def get_turn_hub(request: Request) -> TurnHub:

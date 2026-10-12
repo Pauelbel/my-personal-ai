@@ -90,8 +90,8 @@ class TurnHub:
     def queue(self, session_id: str) -> list[dict]:
         return list(self._queues.get(session_id, []))
 
-    def enqueue(self, session_id: str, content: str) -> dict:
-        item = {"id": uuid4().hex, "content": content}
+    def enqueue(self, session_id: str, content: str, attachments: tuple[str, ...] = ()) -> dict:
+        item = {"id": uuid4().hex, "content": content, "attachments": list(attachments)}
         self._queues.setdefault(session_id, []).append(item)
         self._changed(session_id)
         # Ход мог закончиться, пока сообщение шло: тогда оно уходит сразу.
@@ -149,7 +149,9 @@ class TurnHub:
         if session.pending:
             return
         item = items.pop(0)
-        self.start(session_id, self._runtime.stream_turn(session_id, item["content"], f"queue-{item['id'][:8]}"))
+        self.start(session_id, self._runtime.stream_turn(
+            session_id, item["content"], f"queue-{item['id'][:8]}", attachments=tuple(item["attachments"]),
+        ))
 
     def _changed(self, session_id: str) -> None:
         self._publish({"type": "changed", "session_id": session_id})

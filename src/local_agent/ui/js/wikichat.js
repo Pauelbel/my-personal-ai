@@ -2,6 +2,7 @@
 // отвечает по ним и проверяет вики (/lint). Модель помнит только последние реплики — старое забывается само,
 // «Очистить» начинает разговор заново. Ход, очередь и карточки — обычные API сессии.
 import { api } from "./api.js";
+import { imageInput } from "./attach.js";
 import { el, renderMessages, scrollDown, StreamingMessage } from "./chat.js";
 import { renderCards } from "./panel.js";
 import { openNote, showWiki } from "./pages.js";
@@ -13,6 +14,8 @@ const MAX_INPUT_SHARE = 0.4;
 
 const chat = { session: null, messages: [], memory: 3, running: false, queue: [], controller: null, bubble: null, shownCard: null };
 let toast = () => {};
+// Картинки в поле ввода чата вики (attach.js).
+let images = null;
 // [provider, model] — модель, выбранная под полем ввода основного чата: чат вики работает на ней же.
 let modelOf = () => [null, null];
 
@@ -29,7 +32,10 @@ export function initWikiChat(options) {
     }
   });
   input.addEventListener("input", autosize);
-  $("#wiki-chat-send").addEventListener("click", () => void (chat.running && !input.value.trim() ? stop() : submit()));
+  images = imageInput({
+    box: $(".wiki-chat-composer .composer-box"), input, strip: $("#wiki-attachments"), button: $("#wiki-attach"), toast,
+  });
+  $("#wiki-chat-send").addEventListener("click", () => void (chat.running && !input.value.trim() && !images.count ? stop() : submit()));
   $("#wiki-chat-clear").addEventListener("click", () => void clear());
   $("#wiki-chat-toggle").addEventListener("click", () => setOpen(true));
   $("#wiki-chat-close").addEventListener("click", () => setOpen(false));
@@ -44,19 +50,19 @@ export function initWikiChat(options) {
 }
 
 // Сообщение в чат вики от кнопок и команд: /lint из основного чата, «Проверить (lint)».
-export async function sendWiki(text, onSaved = () => {}) {
+export async function sendWiki(text, onSaved = () => {}, attachments = []) {
   setOpen(true);
   try {
     const [provider, model] = modelOf();
     const { session } = await api.ensureWikiChat(provider || null, model || null);
     chat.session = session;
     if (chat.running) {
-      await api.enqueue(session.id, text);
+      await api.enqueue(session.id, text, attachments);
       onSaved();
       await refreshWikiChat(true);
       return;
     }
-    await run((signal, onEvent) => api.send(session.id, text, signal, onEvent), onSaved);
+    await run((signal, onEvent) => api.send(session.id, text, signal, onEvent, false, attachments), onSaved);
   } catch (error) {
     toast(error);
   }
@@ -89,11 +95,14 @@ export async function refreshWikiChat(force = false) {
 async function submit() {
   const input = $("#wiki-chat-input");
   const text = input.value.trim();
-  if (!text) return;
+  if (!text && !images.count) return;
+  const attachments = await images.names();
+  if (!text && !attachments.length) return;
   await sendWiki(text === "/lint" ? LINT_PROMPT : text, () => {
     input.value = "";
+    images.clear();
     autosize();
-  });
+  }, attachments);
 }
 
 async function stop() {

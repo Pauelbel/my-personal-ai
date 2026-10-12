@@ -389,6 +389,7 @@ def to_chat(item: dict) -> ChatMessage:
         content=item.get("content"),
         tool_calls=tuple(ToolCall(**call) for call in item.get("tool_calls") or ()),
         tool_call_id=item.get("tool_call_id"),
+        images=tuple(item.get("images") or ()),
     )
 
 
@@ -398,6 +399,8 @@ def from_chat(message: ChatMessage) -> dict:
         item["tool_calls"] = [{"id": call.id, "name": call.name, "arguments": call.arguments} for call in message.tool_calls]
     if message.tool_call_id:
         item["tool_call_id"] = message.tool_call_id
+    if message.images:
+        item["images"] = list(message.images)
     return item
 
 

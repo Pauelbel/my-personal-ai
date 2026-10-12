@@ -11,8 +11,11 @@
 
 import posixpath
 import re
+import shutil
 import threading
-from dataclasses import dataclass
+from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +28,7 @@ MAX_PAGE_CHARS = 60_000
 MIN_KEYWORDS = 2
 # Описание попадает в строку index.md: оно должно быть короче абзаца.
 MAX_DESCRIPTION_CHARS = 160
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"})
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,8 @@ class WikiPage:
     title: str
     updated_at: datetime
     size: int
+    description: str = ""
+    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -54,11 +60,17 @@ class NoteFields:
     source: str = ""
     details: str = ""
     related: tuple[str, ...] = ()
+    # Имена картинок из чата (data/attachments), которые надо вставить в заметку.
+    images: tuple[str, ...] = ()
 
 
 class WikiService:
-    def __init__(self, root: Path, index_path: Path, history_path: Path | None = None) -> None:
+    def __init__(
+        self, root: Path, index_path: Path, history_path: Path | None = None,
+        attachments: Callable[[str], Path | None] = lambda name: None,
+    ) -> None:
         self.root = root
+        self._attachment = attachments
         self.history = history_path or root.parent / f"{root.name}-history"
         self._index = MarkdownIndex(root, index_path)
         self._lock = threading.RLock()
@@ -73,8 +85,19 @@ class WikiService:
         result = []
         for relative, path in self._files():
             stat = path.stat()
-            result.append(WikiPage(relative, _title(path), datetime.fromtimestamp(stat.st_mtime, UTC), stat.st_size))
+            note = _parsed(relative, path)
+            result.append(WikiPage(
+                relative, note.title, datetime.fromtimestamp(stat.st_mtime, UTC), stat.st_size,
+                note.description, notes.clean_keywords(note.tags),
+            ))
+        names = _tag_names(Counter(tag for page in result for tag in page.tags))
+        result = [replace(page, tags=tuple(dict.fromkeys(names[tag] for tag in page.tags))) for page in result]
         return sorted(result, key=lambda page: page.updated_at, reverse=True)
+
+    def tags(self) -> list[tuple[str, int]]:
+        """Теги вики и сколько у каждого заметок — самые частые первыми."""
+        counts = Counter(tag for page in self.pages() for tag in page.tags)
+        return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
 
     def read(self, path: str) -> str:
         if path == INDEX_FILE:
@@ -82,6 +105,14 @@ class WikiService:
                 self._entries()
             return (self.root / INDEX_FILE).read_text(encoding="utf-8")
         return self._path(path).read_text(encoding="utf-8")
+
+    def image(self, path: str) -> Path:
+        """Файл картинки заметки по пути от корня вики — для читалки в интерфейсе."""
+        root = self.root.resolve()
+        target = (root / path).resolve()
+        if target.suffix.lower() not in IMAGE_SUFFIXES or not target.is_relative_to(root) or not target.is_file():
+            raise ValueError("Такой картинки в вики нет")
+        return target
 
     def note(self, path: str) -> Note:
         return notes.parse(path, self.read(path))
@@ -239,13 +270,39 @@ class WikiService:
                     related.append((self._title_of(item), notes.relative_link(target, item)))
                 else:
                     unknown.append(item)
+            # Картинки: прежние остаются, новые копируются из чата в images/ — у заметки своя копия.
+            pictures: dict[str, str] = {}
+            for old in (path, *replaces):
+                if old:
+                    for label, image in notes.images_of(old, self.read(old)):
+                        pictures.setdefault(image, label)
+            copies = []
+            for name in dict.fromkeys(fields.images):
+                source = self._attachment(name)
+                if source is None:
+                    raise ValueError(f"Картинки {name} нет: имена картинок — в сообщении пользователя, в строке «[Картинки: …]»")
+                image = f"{notes.IMAGES_DIR}/{name}"
+                pictures.setdefault(image, title)
+                copies.append((source, self.root / image))
+            # Картинка уже стоит в «Подробностях» — второй раз в конце её не повторяем.
+            inline = {image for _, image in notes.images_of(target, details)}
+            images = [(label, notes.relative_link(target, image)) for image, label in pictures.items() if image not in inline]
+            # «Методологии» при теге «методология» — тот же тег: иначе по тегам ничего не найти.
+            known = [tag for tag, _ in self.tags()]
+            tags = tuple(dict.fromkeys(
+                next((old for old in known if notes.same_keyword(tag, old)), tag)
+                for tag in notes.clean_keywords(fields.tags)
+            ))
             content = notes.render(
                 type=" ".join(fields.type.split()) or "note", title=title,
-                description=description, tags=notes.clean_keywords(fields.tags),
+                description=description, tags=tags,
                 source=" ".join(fields.source.split()) or f"текст из чата, {datetime.now(UTC):%Y-%m-%d}",
-                ideas=list(ideas), details=details, related=related, keywords=keywords,
+                ideas=list(ideas), details=details, related=related, keywords=keywords, images=images,
             )
             _check_size(content)
+            for source, copy in copies:
+                copy.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, copy)
             for old in (path, *replaces):
                 if old:
                     self._backup(old)
@@ -392,8 +449,20 @@ def _check_size(content: str) -> None:
         raise ValueError(f"Страница длиннее {MAX_PAGE_CHARS} символов: разбейте её на несколько")
 
 
+def _tag_names(counts: Counter) -> dict[str, str]:
+    """«Методологии» и «методология» — один тег: варианты слова сводятся к самому частому, файлы не меняются."""
+    names: dict[str, str] = {}
+    for tag, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+        names[tag] = next((name for name in dict.fromkeys(names.values()) if notes.same_keyword(tag, name)), tag)
+    return names
+
+
 def _title(path: Path) -> str:
+    return _parsed(path.name, path).title
+
+
+def _parsed(relative: str, path: Path) -> Note:
     try:
-        return notes.parse(path.name, path.read_text(encoding="utf-8")).title
+        return notes.parse(relative, path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError):
-        return path.stem
+        return Note(relative, title=path.stem)

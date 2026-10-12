@@ -38,6 +38,18 @@ function appendInline(parent, source) {
         continue;
       }
     }
+    if (source.startsWith("![", index)) {
+      const match = /^!\[([^\]]*)\]\(([^\s)]+)\)/.exec(source.slice(index));
+      if (match) {
+        // Адрес картинки задаёт тот, кто показывает текст (renderMarkdown): у заметки вики он свой.
+        const image = document.createElement("img");
+        image.alt = match[1];
+        image.dataset.src = match[2];
+        parent.append(image);
+        index += match[0].length;
+        continue;
+      }
+    }
     if (source[index] === "[") {
       const match = /^\[([^\]]+)\]\(([^\s)]+)\)/.exec(source.slice(index));
       if (match) {

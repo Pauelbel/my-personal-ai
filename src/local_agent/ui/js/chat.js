@@ -32,7 +32,7 @@ export function renderMessages(container, messages) {
   for (const message of messages) {
     if (message.role === "tool") continue;
     if (message.role === "user") {
-      add(message.sender ? reportNode(message) : userNode(message.content));
+      add(message.sender ? reportNode(message) : userNode(message));
       continue;
     }
     if (message.content?.trim()) add(assistantNode(message));
@@ -174,8 +174,22 @@ export class StreamingMessage {
   }
 }
 
-export function renderMarkdown(target, text, withTools = true) {
+// images — адрес картинки по ссылке из текста; по умолчанию показываются только картинки самого приложения.
+export function renderMarkdown(target, text, withTools = true, images = (src) => (src.startsWith("/api/") ? src : null)) {
   appendMarkdown(target, text);
+  for (const image of target.querySelectorAll("img[data-src]")) {
+    const url = images(image.dataset.src);
+    if (!url) {
+      // Чужие адреса не грузим: картинка из интернета выдала бы, что страницу открыли.
+      image.replaceWith(document.createTextNode(`[картинка: ${image.alt || image.dataset.src}]`));
+      continue;
+    }
+    const link = el("a", "md-image");
+    Object.assign(link, { href: url, target: "_blank", rel: "noopener" });
+    Object.assign(image, { src: url, loading: "lazy" });
+    image.replaceWith(link);
+    link.append(image);
+  }
   for (const code of target.querySelectorAll("pre > code")) {
     highlightCode(code, code.dataset.language);
     if (withTools) code.parentElement.append(copyButton("copy", () => code.textContent));
@@ -250,10 +264,26 @@ function plural(count, one, few, many) {
   return `${count} ${word}`;
 }
 
-function userNode(text) {
+function userNode(message) {
   const node = el("article", "msg user");
-  node.append(el("div", "bubble", text));
+  const bubble = el("div", "bubble", message.content);
+  if (message.attachments?.length) bubble.prepend(imagesNode(message.attachments));
+  node.append(bubble);
   return node;
+}
+
+// Картинки реплики: миниатюры, щелчок открывает картинку целиком.
+function imagesNode(names) {
+  const box = el("div", "msg-images");
+  for (const name of names) {
+    const link = el("a");
+    Object.assign(link, { href: `/api/attachments/${name}`, target: "_blank", rel: "noopener" });
+    const image = el("img");
+    Object.assign(image, { src: link.href, alt: name, loading: "lazy" });
+    link.append(image);
+    box.append(link);
+  }
+  return box;
 }
 
 function assistantNode(message) {

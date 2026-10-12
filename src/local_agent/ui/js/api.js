@@ -61,7 +61,10 @@ export const api = {
   deleteSession: (id) => request(`/sessions/${id}`, { method: "DELETE" }),
   configure: (id, provider, model) => request(`/sessions/${id}/config`, json("PUT", { provider, model })),
   messages: (id) => request(`/sessions/${id}/messages`),
-  send: (id, content, signal, onEvent, retry = false) => stream(`/sessions/${id}/turns/stream`, { content, retry }, signal, onEvent),
+  send: (id, content, signal, onEvent, retry = false, attachments = []) =>
+    stream(`/sessions/${id}/turns/stream`, { content, retry, attachments }, signal, onEvent),
+  // Картинка как data URL → её имя для сообщения.
+  attach: (data) => request("/attachments", json("POST", { data })),
   team: (id) => request(`/sessions/${id}/team`),
   link: (agentId, target) => request(`/agents/${encodeURIComponent(agentId)}/links/${encodeURIComponent(target)}`, { method: "PUT" }),
   unlink: (agentId, target) => request(`/agents/${encodeURIComponent(agentId)}/links/${encodeURIComponent(target)}`, { method: "DELETE" }),
@@ -71,7 +74,7 @@ export const api = {
   turn: (id) => request(`/sessions/${id}/turn`),
   follow: (id, start, signal, onEvent) => stream(`/sessions/${id}/turn/stream?${q({ start })}`, null, signal, onEvent),
   stop: (id) => request(`/sessions/${id}/turn/stop`, { method: "POST" }),
-  enqueue: (id, content) => request(`/sessions/${id}/queue`, json("POST", { content })),
+  enqueue: (id, content, attachments = []) => request(`/sessions/${id}/queue`, json("POST", { content, attachments })),
   dequeue: (id, itemId) => request(`/sessions/${id}/queue/${itemId}`, { method: "DELETE" }),
 
   projects: () => request("/projects"),

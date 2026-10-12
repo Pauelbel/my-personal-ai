@@ -1,8 +1,10 @@
 """HTTP-адаптер вызывает OpenAI-compatible API: LM Studio, Ollama или облачный сервер."""
 
+import base64
 import json
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import httpx
 
@@ -12,6 +14,7 @@ from local_agent.llm.models import ChatMessage, ChatResult, ReasoningDelta, Tool
 CONTEXT_CACHE_SECONDS = 60
 # Сколько символов пояснения сервера показать в ошибке: «model does not exist» и подобное.
 ERROR_DETAIL_CHARS = 300
+IMAGE_MEDIA = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
 
 
 class OpenAICompatibleProvider:
@@ -215,6 +218,12 @@ class OpenAICompatibleProvider:
     @staticmethod
     def _message_payload(message: ChatMessage) -> dict[str, object]:
         payload: dict[str, object] = {"role": message.role, "content": message.content}
+        if message.images:
+            # Картинки — частями содержимого в формате OpenAI: так их понимают Ollama, LM Studio и vLLM.
+            payload["content"] = [
+                {"type": "text", "text": message.content or ""},
+                *({"type": "image_url", "image_url": {"url": _data_url(Path(path))}} for path in message.images if Path(path).is_file()),
+            ]
         if message.tool_calls:
             payload["tool_calls"] = [
                 {"id": call.id, "type": "function", "function": {"name": call.name, "arguments": call.arguments}}
@@ -240,3 +249,8 @@ class OpenAICompatibleProvider:
             raise LLMProviderError(self._http_error(exc.response)) from exc
         except ValueError as exc:
             raise LLMProviderError(f"{self.name} вернул некорректный JSON") from exc
+
+
+def _data_url(path: Path) -> str:
+    media = IMAGE_MEDIA.get(path.suffix.lower(), "image/png")
+    return f"data:{media};base64,{base64.b64encode(path.read_bytes()).decode()}"

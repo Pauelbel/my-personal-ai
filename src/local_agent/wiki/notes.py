@@ -42,6 +42,9 @@ MAX_SLUG_CHARS = 80
 
 FRONTMATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
 LINK = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
+# Картинки, вставленные в заметки из чата, лежат в этой папке вики.
+IMAGES_DIR = "images"
 INDEX_LINE = re.compile(r"^- \[[^\]]*\]\(([^)]+)\) — (.*)$")
 SECTION = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 
@@ -219,9 +222,23 @@ def links_of(path: str, body: str) -> tuple[str, ...]:
     return tuple(found)
 
 
+def images_of(path: str, body: str) -> list[tuple[str, str]]:
+    """Картинки заметки: (подпись, путь от корня вики) — при пересборке заметки они не теряются."""
+    folder = posixpath.dirname(path)
+    found: dict[str, str] = {}
+    for label, target in IMAGE.findall(body):
+        target = unquote(target)
+        if re.match(r"^[a-z][a-z0-9+.-]*:", target) or target.startswith("/"):
+            continue
+        resolved = posixpath.normpath(posixpath.join(folder, target))
+        if not resolved.startswith("../"):
+            found.setdefault(resolved, label)
+    return [(label, target) for target, label in found.items()]
+
+
 def render(
     *, type: str, title: str, description: str, tags: tuple[str, ...], source: str, ideas: list[str],
-    details: str, related: list[tuple[str, str]], keywords: tuple[str, ...],
+    details: str, related: list[tuple[str, str]], keywords: tuple[str, ...], images: list[tuple[str, str]] = (),
 ) -> str:
     """Заметка по шаблону; related — (заголовок, относительная ссылка) связанных заметок."""
     head = [
@@ -236,6 +253,8 @@ def render(
     parts.append("## Ключевые мысли\n\n" + "\n".join(f"- {_one_line(idea)}" for idea in ideas))
     if details := clean_details(details):
         parts.append("## Подробности\n\n" + details)
+    if images:
+        parts.append("## Картинки\n\n" + "\n\n".join(f"![{label}]({target})" for label, target in images))
     if related:
         parts.append("## Связанные заметки\n\n" + "\n".join(f"- [{label}]({target})" for label, target in related))
     parts.append(f"## {KEYWORDS_HEADING}\n\n" + ", ".join(keywords))

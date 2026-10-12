@@ -10,6 +10,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from uuid import uuid4
 
 from langgraph.types import Command
@@ -104,6 +105,8 @@ class AgentRuntime:
         self.finished_hooks: list[FinishedHook] = []
         # Архив возможностей для реестра основного агента; задаёт приложение.
         self.archive_lines: Callable[[], list[str]] | None = None
+        # Файл картинки из реплики по её имени (data/attachments); задаёт приложение.
+        self.attachment_path: Callable[[str], Path | None] = lambda name: None
         self._graph = build_agent_graph(
             GraphDeps(sessions, conversation, providers, self.toolbox, self.catalog_text), checkpointer,
         )
@@ -205,9 +208,11 @@ class AgentRuntime:
         lock = self._session_locks.get(session_id)
         return lock is not None and lock.locked()
 
-    async def run_turn(self, session_id: str, content: str, request_id: str) -> Message:
+    async def run_turn(
+        self, session_id: str, content: str, request_id: str, attachments: tuple[str, ...] = (),
+    ) -> Message:
         """Ход без стриминга: подтверждать некому, поэтому все вызовы с подтверждением отклоняются."""
-        events = self.stream_turn(session_id, content, request_id)
+        events = self.stream_turn(session_id, content, request_id, attachments=attachments)
         while True:
             answer: Message | None = None
             pending = False
@@ -224,9 +229,11 @@ class AgentRuntime:
 
     async def stream_turn(
         self, session_id: str, content: str, request_id: str, sender: str | None = None, *, retry: bool = False,
+        attachments: tuple[str, ...] = (),
     ) -> AsyncIterator[dict]:
         """sender — кто написал реплику, если не пользователь (например, основной агент саб-агенту);
-        retry — повтор после сбоя: та же реплика без ответа не сохраняется второй раз."""
+        retry — повтор после сбоя: та же реплика без ответа не сохраняется второй раз;
+        attachments — имена картинок, которые пользователь вставил в реплику."""
         lock = self._session_locks.setdefault(session_id, asyncio.Lock())
         if lock.locked():
             raise SessionBusyError("В этой сессии ещё выполняется предыдущий ход")
@@ -244,7 +251,7 @@ class AgentRuntime:
             if session.pending_thread:
                 # Прошлый ход оборвался посреди графа (сбой или остановка сервера): начинаем с чистого листа.
                 await self._forget(session.id, session.pending_thread)
-            async for event in self._start(session, content, request_id, sender, retry):
+            async for event in self._start(session, content, request_id, sender, retry, tuple(attachments)):
                 yield event
 
     async def resume(self, session_id: str, decision: object, request_id: str) -> AsyncIterator[dict]:
@@ -269,6 +276,7 @@ class AgentRuntime:
 
     async def _start(
         self, session: Session, content: str, request_id: str, sender: str | None, retry: bool = False,
+        attachments: tuple[str, ...] = (),
     ) -> AsyncIterator[dict]:
         agent = self.agent_for(session)
         provider_id = session.provider or agent.llm_provider
@@ -283,10 +291,12 @@ class AgentRuntime:
         if retry and last and last[-1].role == "user" and last[-1].content == content:
             user_message = last[-1]
         else:
-            user_message = await asyncio.to_thread(self._conversation.add_user_message, session.id, content, sender)
+            user_message = await asyncio.to_thread(
+                self._conversation.add_user_message, session.id, content, sender, attachments,
+            )
         wiki = session.kind == "wiki"
         if sender is None and not session.parent_id and not wiki:
-            self._sessions.name_from_first_message(session.id, content, self._conversation.count(session.id))
+            self._sessions.name_from_first_message(session.id, content or "Картинка", self._conversation.count(session.id))
         yield {"type": "user_message", "message": user_message}
 
         box = self.toolbox(session)
@@ -317,6 +327,7 @@ class AgentRuntime:
             max_messages=self._limits.max_context_messages,
             max_tokens=budget - estimate_tokens(catalog),
             tools=definitions,
+            images=self.attachment_path,
         )
         used = sum(estimate_message_tokens(message) for message in context.messages) + estimate_tokens(catalog)
         yield log(

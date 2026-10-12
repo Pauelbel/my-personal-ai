@@ -3,6 +3,7 @@
 import re
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from local_agent.wiki import notes
@@ -33,7 +34,10 @@ class PageView(PageContent):
 @router.get("")
 def pages(request: Request) -> list[dict]:
     return [
-        {"path": page.path, "title": page.title, "updated_at": page.updated_at.isoformat(), "size": page.size}
+        {
+            "path": page.path, "title": page.title, "updated_at": page.updated_at.isoformat(), "size": page.size,
+            "description": page.description, "tags": list(page.tags),
+        }
         for page in request.app.state.wiki_service.pages()
     ]
 
@@ -107,11 +111,13 @@ def graph(request: Request) -> dict:
 def search(q: str, request: Request) -> list[dict]:
     return [
         {"path": path, "title": title, "line": line, "text": snippet(plain_text(text), q)}
-        for path, title, line, text in request.app.state.wiki_service.search(q, limit=10)
+        for path, title, line, text in request.app.state.wiki_service.search(q, limit=SEARCH_LIMIT)
     ]
 
 
 SNIPPET_CHARS = 160
+# Совпадения по названию и тегам интерфейс находит сам; сервер ищет по тексту заметок.
+SEARCH_LIMIT = 20
 MARKUP = [
     (re.compile(r"!?\[([^\]]*)\]\([^)]*\)"), r"\1"),          # ссылки и картинки — только текст
     (re.compile(r"^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+", re.MULTILINE), ""),  # заголовки, цитаты, списки
@@ -139,6 +145,15 @@ def snippet(text: str, query: str) -> str:
     start = max(0, hit - SNIPPET_CHARS // 3)
     piece = text[start:start + SNIPPET_CHARS]
     return ("…" if start else "") + piece + ("…" if start + SNIPPET_CHARS < len(text) else "")
+
+
+@router.get("/file")
+def image(path: str, request: Request) -> FileResponse:
+    """Картинка из заметки: путь от корня вики, как он записан в заметке."""
+    try:
+        return FileResponse(request.app.state.wiki_service.image(path))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/page", response_model=PageView)
