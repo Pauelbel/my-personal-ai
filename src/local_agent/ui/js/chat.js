@@ -1,5 +1,6 @@
 // Чат: история сессии и печатающийся ответ. Вызовы инструментов — строки в общей рамке,
 // под ответом — сводка хода и «Копировать», результаты саб-агентов выделены, код в ответах подсвечен.
+import { renderDiagrams } from "./diagrams.js";
 import { highlightCode } from "./highlight.js";
 import { appendMarkdown } from "./markdown.js";
 
@@ -195,6 +196,8 @@ export function renderMarkdown(target, text, withTools = true, images = (src) =>
     if (withTools) code.parentElement.append(copyButton("copy", () => code.textContent));
   }
   if (!withTools) return;
+  // Диаграммы — только в готовом тексте: пока ответ печатается, блок ещё не дописан.
+  renderDiagrams(target);
   // Пути в `коде` открываются во вкладке «Файлы»: щелчок ловит app.js по классу path-link.
   for (const code of target.querySelectorAll(":not(pre) > code")) markPath(code, code.textContent);
 }

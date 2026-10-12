@@ -305,6 +305,9 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 .thumb-remove:hover:not(:disabled) { background: var(--fg); opacity: 1; }
 .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .msg-images img { display: block; max-width: 220px; max-height: 160px; border-radius: 6px; object-fit: cover; }
+.diagram { position: relative; margin: 10px 0; padding: 12px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.diagram-source { position: absolute; top: 6px; right: 6px; padding: 1px 8px; font: 12px var(--mono); color: var(--muted); background: var(--surface); }
 .md-image img { display: block; max-width: 100%; max-height: 480px; margin: 8px 0; border-radius: 6px; border: 1px solid var(--line); }
 /* Очередь: сообщения, которые уйдут после ответа */
 .queue { display: flex; flex-direction: column; gap: 2px; margin: 0 0 6px; padding: 4px 8px; border: 1px dashed var(--line-strong); border-radius: 10px; font: 12.5px var(--mono); }
