@@ -154,7 +154,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .tools-rows { display: flex; flex-direction: column; }
 .step { font: 13px/1.6 var(--mono); color: var(--muted); }
 .step summary {
-  display: grid; grid-template-columns: 1.4em minmax(0, 20ch) minmax(0, 1fr) auto; align-items: baseline; gap: 12px;
+  display: grid; grid-template-columns: 1.4em minmax(0, min(calc(var(--name-ch, 20) * 1ch), 28ch)) minmax(0, 1fr) auto; align-items: baseline; gap: 12px;
   padding: 1px 4px; border-radius: 4px; cursor: pointer; list-style: none;
 }
 .step summary::-webkit-details-marker { display: none; }
@@ -389,7 +389,8 @@ button.trow-main:hover:not(:disabled) { background: transparent; }
 /* Вики: слева чат вики со своим полем ввода, справа заметки */
 .wiki-view { display: grid; grid-template-columns: var(--wiki-chat-w, minmax(320px, 420px)) 0 minmax(0, 1fr); min-height: 0; }
 .wiki-view.chat-hidden { grid-template-columns: minmax(0, 1fr); }
-.wiki-view.chat-hidden .resizer { display: none; }
+/* Только разделитель самого чата: разделитель списка и заметки держит свою колонку в #wiki-split. */
+.wiki-view.chat-hidden > .resizer { display: none; }
 /* Разделитель панелей: невидимая полоса для мыши поверх границы колонок; при наведении и перетаскивании
    граница подсвечивается тонкой линией. --line-at — где граница относительно разделителя. */
 .resizer { position: relative; z-index: 2; cursor: col-resize; touch-action: none; --line-at: -1px; }

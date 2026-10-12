@@ -37,13 +37,21 @@ class Toolbox:
         return self._by_id.get(name)
 
     def is_active(self, name: str) -> bool:
-        return self.all_active or name in self.active or any(tool.id == name for tool in self.core)
+        return self.all_active or name in self._with_kits() or any(tool.id == name for tool in self.core)
 
     def bound(self) -> list[Tool]:
         if self.all_active:
             return [*self.core, *self.catalog]
-        active = [tool for tool in self.catalog if tool.id in self.active]
-        return [*self.core, *active]
+        active = self._with_kits()
+        return [*self.core, *(tool for tool in self.catalog if tool.id in active)]
+
+    def _with_kits(self) -> set[str]:
+        """Подключённые и их наборы: инструмент с kit (основные действия браузера) подключает весь набор,
+        а набор при этом слотов не занимает."""
+        active = set(self.active)
+        for tool_id in self.active:
+            active.update(getattr(self._by_id.get(tool_id), "kit", ()))
+        return active
 
     def definitions(self) -> list[dict[str, object]]:
         return [

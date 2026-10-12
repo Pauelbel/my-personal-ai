@@ -13,6 +13,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -25,7 +26,40 @@ logger = logging.getLogger(__name__)
 
 START_TIMEOUT_SECONDS = 90
 CALL_TIMEOUT_SECONDS = 120
-MAX_RESULT_CHARS = 15_000
+# Снимок страницы средней величины (каталог на 20 товаров) должен входить целиком: в контексте хода
+# остаётся только последний снимок (agent/context.py), так что больше одного такого куска там не бывает.
+MAX_RESULT_CHARS = 30_000
+TRUNCATED_BROWSER_HINT = (
+    " Нужный элемент найди через browser_browser_find, часть страницы сними через browser_browser_snapshot "
+    "с target, а данные со всей страницы собери через browser_browser_evaluate."
+)
+# Ссылку на элемент модель часто переписывает из снимка Playwright как есть: «[ref=e41]» вместо «e41».
+# «{builtin}» в аргументах сервера — папка встроенных файлов: так mcp.json не зависит от того, где лежит приложение.
+# browser_cursor.js рисует в окне браузера курсор агента и места кликов.
+BUILTIN_DIR = Path(__file__).parent
+# MCP-клиент передаёт серверу только HOME, PATH, USER и пару других переменных. Без переменных экрана
+# Playwright молча запускает браузер без окна, поэтому их добавляем; остальное окружение (ключи API) не передаём.
+DISPLAY_VARIABLES = (
+    "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS",
+)
+ELEMENT_REF = re.compile(r"^\s*\[?\s*ref\s*=\s*([A-Za-z0-9_-]+)\s*\]?\s*$")
+# Playwright переносит мышь мгновенно: несколько наведений или кликов подряд глазом не различить — курсор
+# просто оказывается на последнем элементе. В видимом окне после таких действий ждём, пока курсор доедет и постоит.
+POINTER_TOOLS = frozenset({"browser_hover", "browser_click", "browser_drag"})
+POINTER_PAUSE_SECONDS = 0.7
+# Снимок страницы после действия Playwright пишет в файл в своей рабочей папке и присылает ссылку, которую
+# модель прочитать не может. Подставляем снимок в ответ, а файл удаляем, чтобы они не копились.
+SNAPSHOT_LINK = re.compile(r"^- \[Snapshot\]\((?P<path>[^)]+\.yml)\)$", re.MULTILINE)
+# Основной набор браузера подключается целиком: не видя, например, browser_hover, модель решает, что навести
+# курсор нечем, и пишет код для run_code_unsafe. Набор не занимает слотов activate (capabilities/toolbox.py).
+BROWSER_KIT = (
+    "browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_find", "browser_click",
+    "browser_type", "browser_hover", "browser_press_key", "browser_select_option", "browser_wait_for",
+    "browser_evaluate",
+)
+# Произвольный код в процессе Playwright с правами пользователя модели не показываем: данные со страницы
+# собирает browser_evaluate, а он выполняется внутри страницы.
+HIDDEN_TOOLS = frozenset({"browser_run_code_unsafe"})
 
 # Русские описания инструментов стандартных серверов: их видят интерфейс и агент. Сервер присылает
 # описания на английском; перевод задаётся в mcp.json, в «descriptions» сервера, по имени инструмента.
@@ -78,21 +112,32 @@ BROWSER_DESCRIPTIONS = {
         "Эмулировать медиафункции CSS для страницы — например, переключить светлую и тёмную цветовую схему. "
         "Пропущенные параметры не меняются, null снимает подмену."
     ),
-    "browser_evaluate": "Выполнить выражение JavaScript на странице или для элемента",
+    "browser_evaluate": (
+        "Выполнить JavaScript на странице и вернуть результат. Так собирают данные со всей страницы разом: "
+        "список товаров, цены, ссылки, атрибуты и классы (например, рейтинг, заданный классом), которых нет "
+        "в снимке. function: () => [...document.querySelectorAll('article')].map((item) => ({ ... }))"
+    ),
     "browser_file_upload": "Загрузить один или несколько файлов",
     "browser_drop": (
         "Бросить на элемент файлы или данные с MIME-типом, как будто их перетащили снаружи страницы. "
         "Нужен хотя бы один из параметров «paths» или «data»."
     ),
     "browser_find": (
-        "Найти в снимке доступности текущей страницы текст или регулярное выражение. Возвращает совпавшие узлы "
-        "с несколькими строками контекста (как фрагменты в поиске), каждый — с путём от корня дерева. Это дешевле, "
-        "чем снимать весь снимок, когда нужно только найти элемент и его ref."
+        "Найти в снимке доступности текущей страницы текст (параметр text) или регулярное выражение (regex). "
+        "Возвращает совпавшие узлы с их ref и несколькими строками контекста. "
+        "Это дешевле, чем снимать весь снимок, когда нужно только найти элемент и его ref."
     ),
     "browser_fill_form": "Заполнить несколько полей формы",
     "browser_press_key": "Нажать клавишу на клавиатуре",
-    "browser_type": "Ввести текст в редактируемый элемент. Элемент задаётся его ref из browser_browser_snapshot или browser_browser_find.",
-    "browser_navigate": "Перейти по адресу",
+    "browser_type": (
+        "Ввести текст в поле на странице. target — ref поля из browser_browser_snapshot, например e41; "
+        "submit: true нажмёт Enter после ввода."
+    ),
+    "browser_navigate": (
+        "Перейти по адресу. Поисковики (Google, DuckDuckGo) показывают этому браузеру капчу: искать — через "
+        "search_search, а сюда передавать адрес найденной страницы. Если на странице всё же капча или проверка "
+        "«вы не робот», попроси пользователя пройти её в открытом окне браузера и продолжи после его ответа."
+    ),
     "browser_navigate_back": "Вернуться на предыдущую страницу в истории",
     "browser_network_requests": (
         "Вернуть пронумерованный список сетевых запросов с момента загрузки страницы. "
@@ -110,14 +155,21 @@ BROWSER_DESCRIPTIONS = {
         "Сделать снимок экрана текущей страницы. Действовать по скриншоту нельзя — для действий используй "
         "browser_browser_snapshot."
     ),
-    "browser_snapshot": "Снять снимок доступности текущей страницы — это лучше, чем скриншот",
+    "browser_snapshot": (
+        "Снять снимок доступности страницы: что на ней есть и ref элементов. После переходов, кликов и ввода "
+        "свежий снимок и так приходит в ответе. Большую страницу смотри частями: depth — обзор верхних "
+        "уровней, target — ref нужного блока."
+    ),
     "browser_click": (
-        "Кликнуть по элементу на веб-странице. Элемент задаётся его ref из browser_browser_snapshot или browser_browser_find: "
-        "сначала сними снимок, потом кликай — CSS-селекторы наугад не работают."
+        "Кликнуть по элементу на веб-странице. target — ref элемента из browser_browser_snapshot "
+        "или browser_browser_find, например e41 (не «[ref=e41]»): сначала сними снимок, потом кликай. "
+        "Пункт выпадающего списка (option в combobox) так не выбрать — для этого browser_browser_select_option."
     ),
     "browser_drag": "Перетащить один элемент на другой (drag and drop)",
     "browser_hover": "Навести курсор на элемент страницы",
-    "browser_select_option": "Выбрать вариант в выпадающем списке",
+    "browser_select_option": (
+        "Выбрать вариант в выпадающем списке (select, combobox): target — ref списка, values — тексты или значения вариантов"
+    ),
     "browser_tabs": "Показать, открыть, закрыть или выбрать вкладку браузера.",
     "browser_wait_for": "Подождать, пока текст появится или исчезнет или пока пройдёт заданное время",
 }
@@ -135,10 +187,12 @@ DEFAULT_CONFIG = {
         "browser": {
             "description": "Браузер Playwright: открыть страницу, кликнуть, заполнить, извлечь данные",
             "command": "npx",
-            "args": ["-y", "@playwright/mcp@latest", "--isolated"],
+            # Версия закреплена: разбор ответов и описания выше завязаны на формат ответов и имена параметров.
+            "args": ["-y", "@playwright/mcp@0.0.83", "--isolated", "--init-script", "{builtin}/browser_cursor.js"],
             "auto_approve": [
                 "browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_take_screenshot",
                 "browser_wait_for", "browser_tabs", "browser_console_messages", "browser_network_requests",
+                "browser_hover",
             ],
             "descriptions": BROWSER_DESCRIPTIONS,
             "enabled": True,
@@ -156,10 +210,14 @@ class ServerState:
 
 
 class MCPTool:
-    def __init__(self, server: str, session, tool, auto_approve: set[str], descriptions: dict | None = None) -> None:
+    def __init__(
+        self, server: str, session, tool, auto_approve: set[str], descriptions: dict | None = None,
+        *, visible: bool = False, workdir: Path | None = None,
+    ) -> None:
         self.server = server
         self.remote_name = tool.name
         self.id = sanitize(f"{server}_{tool.name}")
+        self.kit = tuple(sanitize(f"{server}_{name}") for name in BROWSER_KIT) if tool.name in BROWSER_KIT else ()
         self.name = tool.title or tool.name
         # Перевод из mcp.json, если есть; иначе — описание сервера как есть.
         translated = (descriptions or {}).get(tool.name)
@@ -168,9 +226,12 @@ class MCPTool:
         self.parameters = schema if schema.get("type") == "object" else {"type": "object", "properties": {}}
         read_only = bool(tool.annotations and tool.annotations.read_only_hint)
         self.requires_approval = not (read_only or tool.name in auto_approve)
+        self._pause = POINTER_PAUSE_SECONDS if visible and tool.name in POINTER_TOOLS else 0.0
+        self._workdir = workdir
         self._session = session
 
     async def execute(self, arguments: dict[str, object], workspace: Path | None) -> ToolResult:
+        arguments = {key: _element_ref(value) if key in {"target", "ref"} else value for key, value in arguments.items()}
         try:
             result = await asyncio.wait_for(self._session.call_tool(self.remote_name, arguments), CALL_TIMEOUT_SECONDS)
         except TimeoutError:
@@ -183,10 +244,44 @@ class MCPTool:
                 parts.append(item.text)
             else:
                 parts.append(f"[{getattr(item, 'type', 'данные')}: не текст, пропущено]")
-        text = "\n".join(parts).strip() or "Пустой ответ"
+        text = SNAPSHOT_LINK.sub(self._snapshot, "\n".join(parts)).strip() or "Пустой ответ"
         if len(text) > MAX_RESULT_CHARS:
-            text = text[:MAX_RESULT_CHARS] + "\n… (обрезано)"
-        return ToolResult(text, is_error=bool(getattr(result, "is_error", False)))
+            # Модель должна понимать, что видит не всё, иначе отвечает по обрывку как по целому.
+            text = text[:MAX_RESULT_CHARS] + f"\n… (обрезано: показано {MAX_RESULT_CHARS} из {len(text)} символов, дальше не видно)."
+            if self.remote_name.startswith("browser_"):
+                text += TRUNCATED_BROWSER_HINT
+        failed = bool(getattr(result, "is_error", False))
+        if self._pause and not failed:
+            await asyncio.sleep(self._pause)
+        return ToolResult(text, is_error=failed)
+
+    def _snapshot(self, link: re.Match) -> str:
+        """Содержимое файла снимка вместо ссылки на него; файл больше не нужен."""
+        if self._workdir is None:
+            return link.group(0)
+        root = self._workdir.resolve()
+        path = (root / link["path"]).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            return link.group(0)
+        snapshot = path.read_text(encoding="utf-8", errors="replace").strip()
+        path.unlink(missing_ok=True)
+        return f"```yaml\n{snapshot}\n```"
+
+
+def server_environment(extra: dict | None) -> dict[str, str]:
+    """Окружение MCP-сервера: стандартный набор клиента, переменные экрана и «env» из mcp.json."""
+    from mcp.client.stdio import get_default_environment
+
+    env = get_default_environment()
+    env.update({name: os.environ[name] for name in DISPLAY_VARIABLES if os.environ.get(name)})
+    env.update({str(key): str(value) for key, value in (extra or {}).items()})
+    return env
+
+
+def _element_ref(value: object) -> object:
+    """«[ref=e41]» и «ref=e41» → «e41»; селекторы и всё остальное — как есть."""
+    match = ELEMENT_REF.match(value) if isinstance(value, str) else None
+    return match.group(1) if match else value
 
 
 class MCPManager:
@@ -238,19 +333,23 @@ class MCPManager:
         # и логи консоли в .playwright-mcp), остаётся в журналах, а не в папке, откуда запущено приложение.
         workdir = Path(settings.get("cwd") or self._logs_path / f"mcp-{state.name}")
         workdir.mkdir(parents=True, exist_ok=True)
+        args = [str(item).replace("{builtin}", str(BUILTIN_DIR)) for item in settings.get("args", [])]
         params = StdioServerParameters(
-            command=settings["command"], args=[str(item) for item in settings.get("args", [])],
-            env=settings.get("env") or None, cwd=workdir,
+            command=settings["command"], args=args, env=server_environment(settings.get("env")), cwd=workdir,
         )
         auto_approve = set(settings.get("auto_approve", []))
         descriptions = settings.get("descriptions") if isinstance(settings.get("descriptions"), dict) else {}
+        visible = "--headless" not in args
         try:
             with (self._logs_path / f"mcp-{state.name}.log").open("a", encoding="utf-8") as errlog:
                 async with stdio_client(params, errlog=errlog) as (read, write):
                     async with ClientSession(read, write) as session:
                         await asyncio.wait_for(session.initialize(), START_TIMEOUT_SECONDS)
                         listed = await asyncio.wait_for(session.list_tools(), START_TIMEOUT_SECONDS)
-                        tools = [MCPTool(state.name, session, tool, auto_approve, descriptions) for tool in listed.tools]
+                        tools = [
+                            MCPTool(state.name, session, tool, auto_approve, descriptions, visible=visible, workdir=workdir)
+                            for tool in listed.tools if tool.name not in HIDDEN_TOOLS
+                        ]
                         for tool in tools:
                             if self._registry.get(tool.id) is None:
                                 self._registry.register(tool)

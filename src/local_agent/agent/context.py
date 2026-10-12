@@ -2,7 +2,8 @@
 
 import json
 import math
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from datetime import date
 
 from local_agent.llm.models import ChatMessage, ToolCall
@@ -16,6 +17,15 @@ MONTHS = (
 MESSAGE_OVERHEAD_TOKENS = 4
 # Результаты инструментов из прошлых ходов обрезаются: целиком нужен только текущий ход.
 OLD_TOOL_RESULT_CHARS = 2000
+# Браузер (Playwright MCP) живёт между ходами, а его снимки из прошлых ходов обрезаны: модели напоминаем,
+# какая страница открыта, — иначе она отвечает по устаревшему обрывку или выдумывает.
+BROWSER_TOOL_PREFIX = "browser_"
+PAGE_URL = re.compile(r"^- Page URL: (\S+)", re.MULTILINE)
+PAGE_TITLE = re.compile(r"^- Page Title: (.+)$", re.MULTILINE)
+# Снимок страницы в ответе браузерного инструмента. Внутри хода целиком нужен только последний: прежние
+# устарели, их ref уже не работают, а места в контексте они занимают больше всего.
+SNAPSHOT_SECTION = "### Snapshot\n"
+STALE_SNAPSHOT = SNAPSHOT_SECTION + "(снимок устарел: страница с тех пор менялась, свежий — ниже)"
 
 
 def estimate_tokens(text: str | None) -> int:
@@ -43,6 +53,7 @@ def build_system_prompt(
     today: date | None = None,
     capabilities: str = "",
     project_context: str = "",
+    browser: str = "",
 ) -> str:
     # Части идут от редко меняющихся к частым: LM Studio переиспользует кэш общего начала промпта.
     if project_context:
@@ -64,7 +75,43 @@ def build_system_prompt(
         system_prompt += f"\n\nСегодня {WEEKDAYS[today.weekday()]}, {today.day} {MONTHS[today.month - 1]} {today.year} года."
     if summary:
         system_prompt += "\n\nКраткое содержание более ранней части этого разговора:\n" + summary
+    if browser:
+        system_prompt += "\n\n" + browser
     return system_prompt
+
+
+def browser_state(history: list[Message]) -> str:
+    """Какая страница открыта в браузере агента — по последнему результату браузерного инструмента."""
+    for message in reversed(history):
+        if message.role != "tool" or not (message.tool_name or "").startswith(BROWSER_TOOL_PREFIX):
+            continue
+        if message.tool_name.endswith("browser_close"):
+            return ""
+        url = PAGE_URL.search(message.content)
+        if not url:
+            continue
+        title = PAGE_TITLE.search(message.content)
+        page = f"{url.group(1)} — {title.group(1).strip()}" if title else url.group(1)
+        return (
+            f"Браузер открыт и продолжает работать между сообщениями: сейчас в нём страница {page}. "
+            "Снимки страницы из прошлых сообщений устарели и обрезаны — прежде чем кликать, вводить или "
+            "рассказывать, что на странице, сними свежий browser_browser_snapshot."
+        )
+    return ""
+
+
+def drop_stale_snapshots(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Старые снимки страницы сворачиваются в строку; адрес страницы и выполненное действие остаются —
+    по ним видно, что уже сделано. Результаты остальных инструментов (собранные данные) не трогаются."""
+    snapshots = [
+        index for index, message in enumerate(messages)
+        if message.role == "tool" and SNAPSHOT_SECTION in (message.content or "")
+    ]
+    result = list(messages)
+    for index in snapshots[:-1]:
+        head = result[index].content.split(SNAPSHOT_SECTION, 1)[0]
+        result[index] = replace(result[index], content=head + STALE_SNAPSHOT)
+    return result
 
 
 def build_context(

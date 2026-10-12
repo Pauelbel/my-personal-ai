@@ -23,9 +23,10 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from local_agent.agent.context import drop_stale_snapshots
 from local_agent.agent.errors import AgentRuntimeError
 from local_agent.capabilities.toolbox import Toolbox
-from local_agent.llm.base import LLMEmptyResponse, stream_chat
+from local_agent.llm.base import LLMEmptyResponse, LLMRepetition, stream_chat
 from local_agent.llm.models import ChatMessage, ChatResult, ReasoningDelta, ToolCall
 from local_agent.llm.registry import LLMRegistry
 from local_agent.memory.conversation import ConversationService
@@ -120,7 +121,7 @@ def _call_model(deps: GraphDeps):
         ))
         if offered:
             write(log("Подключены: " + ", ".join(item["function"]["name"] for item in offered)))
-        messages = [to_chat(item) for item in state["messages"]]
+        messages = drop_stale_snapshots([to_chat(item) for item in state["messages"]])
         if deps.catalog is not None and messages and messages[0].role == "system":
             messages[0] = ChatMessage("system", (messages[0].content or "").replace(
                 CATALOG_MARKER, deps.catalog(session, box),
@@ -145,12 +146,19 @@ def _call_model(deps: GraphDeps):
                     else:
                         result = item
                 break
-            except LLMEmptyResponse:
+            except (LLMEmptyResponse, LLMRepetition) as exc:
+                looped = isinstance(exc, LLMRepetition)
                 if attempt == len(attempts) - 1:
                     raise AgentRuntimeError(
+                        "Модель несколько раз зациклилась и повторяла одно и то же. Попробуйте переформулировать "
+                        "или начать новую сессию" if looped else
                         "Модель несколько раз вернула пустой ответ. Попробуйте переформулировать или начать новую сессию"
                     ) from None
-                write(log("Модель вернула пустой ответ — повторяю" + (" без инструментов" if attempts[attempt + 1] is None else "")))
+                # Напечатанное в оборванной попытке не сохраняем: повтор начнёт ответ заново.
+                partial.clear()
+                problem = "зациклилась" if looped else "вернула пустой ответ"
+                write(log(f"Модель {problem} — повторяю" + (" без инструментов" if attempts[attempt + 1] is None else "")))
+                write({"type": "retry"})
             except (asyncio.CancelledError, GeneratorExit):
                 # «Стоп» или закрытая вкладка: сохраняем то, что модель успела написать.
                 if text := "".join(partial).strip():
@@ -162,7 +170,8 @@ def _call_model(deps: GraphDeps):
         write(log(_round_summary(result, elapsed)))
         written = result.output_tokens if isinstance(result.output_tokens, int) and result.output_tokens > 0 else 0
         totals = {"spent": state.get("spent", 0.0) + elapsed, "output_tokens": state.get("output_tokens", 0) + written}
-        text = "".join(partial)
+        # Не «partial»: в нём могут быть рассуждения, пришедшие текстом, а result.content уже очищен от них.
+        text = result.content or ""
         if result.tool_calls:
             if rounds >= max_rounds:
                 raise AgentRuntimeError("Модель превысила лимит раундов вызова инструментов")

@@ -14,7 +14,13 @@ from uuid import uuid4
 
 from langgraph.types import Command
 
-from local_agent.agent.context import build_context, build_system_prompt, estimate_message_tokens, estimate_tokens
+from local_agent.agent.context import (
+    browser_state,
+    build_context,
+    build_system_prompt,
+    estimate_message_tokens,
+    estimate_tokens,
+)
 from local_agent.agent.errors import (
     AgentRuntimeError,
     NothingPendingError,
@@ -178,9 +184,15 @@ class AgentRuntime:
         )
         if not sub_agent:
             agents = self._agents.all()
+            # Инструменты рядом с ролью: по ним видно, по силам ли агенту задача (браузер, файлы, поиск).
             parts.append(
-                "Саб-агенты — помощники с постоянной ролью, задачу поручают через delegate:\n"
-                + "\n".join(f"- {item.id} — {summary_line(item.description or item.name)}" for item in agents)
+                "Саб-агенты — помощники с постоянной ролью, задачу поручают через delegate. Поручай, только если "
+                "задачу можно сделать его инструментами; иначе делай сам или предложи дать агенту нужное:\n"
+                + "\n".join(
+                    f"- {item.id} — {summary_line(item.description or item.name)} "
+                    f"(инструменты: {', '.join(item.tools) if item.tools else 'нет'})"
+                    for item in agents
+                )
                 if agents else "Саб-агентов пока нет."
             )
         if not sub_agent and self.archive_lines is not None and (archived := self.archive_lines()):
@@ -299,7 +311,7 @@ class AgentRuntime:
         context = build_context(
             build_system_prompt(
                 agent.system_prompt, memory_context, summary, today=date.today(),
-                capabilities=CATALOG_MARKER, project_context=project_context,
+                capabilities=CATALOG_MARKER, project_context=project_context, browser=browser_state(history),
             ),
             history,
             max_messages=self._limits.max_context_messages,

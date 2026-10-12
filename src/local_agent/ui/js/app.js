@@ -582,6 +582,8 @@ async function run(sessionId, start, onSaved = () => {}, content = null) {
       } else if (event.type === "delta") bubble.append(event.text);
       else if (event.type === "reasoning") bubble.addReasoning(event.text);
       else if (event.type === "log") bubble.addLog(event.text);
+      // Модель зациклилась или ответила пустотой — сервер повторяет запрос, оборванный текст убираем.
+      else if (event.type === "retry") bubble.reset("Повторяю запрос");
       else if (event.type === "tool_calls") {
         push(event.message);
         bubble.reset("Выполняется инструмент");

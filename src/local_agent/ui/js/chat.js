@@ -57,6 +57,7 @@ class ToolBox {
     this.key = null;
     this.calls = 0;
     this.requests = 0;
+    this.widest = 0;
     this.first = null;
     this.last = null;
     this.node.addEventListener("toggle", () => {
@@ -79,7 +80,10 @@ class ToolBox {
       if (finished) previous = this.last = finished;
       this.rows.append(stepNode(call, result, seconds));
       this.calls += 1;
+      this.widest = Math.max(this.widest, call.name.length);
     }
+    // Колонка имён — по самому длинному имени в рамке: шрифт моноширинный, ширина в символах точная.
+    this.node.style.setProperty("--name-ch", String(this.widest));
     this.title.textContent = `◇ инструменты · ${this.calls} `;
     this.title.append(el("span", "tools-caret", "▾"));
     const span = this.first && this.last ? (this.last - this.first) / 1000 : null;
@@ -302,7 +306,9 @@ function stepNode(call, result, seconds) {
   const state = !result ? "pending" : result.is_error ? "failed" : "done";
   const node = el("details", `step ${state}`);
   const args = parse(call.arguments);
-  const target = args.path || args.query || args.url || args.name || args.agent || (Array.isArray(args.names) ? args.names.join(", ") : "");
+  // Браузер: element — что за элемент, text — что ввели, target — ссылка на элемент из снимка.
+  const target = args.path || args.query || args.url || args.name || args.agent || (Array.isArray(args.names) ? args.names.join(", ") : "")
+    || [args.element, args.text && `«${args.text}»`].filter(Boolean).join(" ← ") || args.target || "";
   const summary = el("summary");
   const icon = el("span", "step-icon", STEP_ICON[state]);
   icon.title = { done: "Готово", failed: "Ошибка", pending: "Выполняется" }[state];

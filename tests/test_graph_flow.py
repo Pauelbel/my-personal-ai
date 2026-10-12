@@ -173,6 +173,28 @@ def test_empty_model_answer_is_retried(tmp_path):
     assert provider.requests[-1]["tools"] is None
 
 
+def test_looping_model_is_cut_and_retried(tmp_path):
+    from local_agent.llm.models import ChatResult, ReasoningDelta
+
+    class Looping(ScriptedProvider):
+        async def chat_stream(self, model, messages, tools=None, options=None):
+            self.requests.append({"model": model, "messages": list(messages), "tools": tools})
+            if len(self.requests) == 1:
+                while True:
+                    yield ReasoningDelta("I'll click Checkout.\nI'll type Ivan.\nI'll click Finish.\nI'll report the result.\n")
+            yield "Ответ со второй попытки"
+            yield ChatResult(content="Ответ со второй попытки", input_tokens=100, output_tokens=5)
+
+    provider = Looping()
+    with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
+        session = post_session(client, {"model": "test"}).json()
+        events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Оформи заказ"}))
+
+    assert {"type": "retry"} in events
+    assert events[-1]["type"] == "done" and events[-1]["message"]["content"] == "Ответ со второй попытки"
+    assert len(provider.requests) == 2
+
+
 def test_attention_lists_pending_cards(tmp_path):
     workspace = workspace_with_note(tmp_path)
     provider = ScriptedProvider(call("write_file", path="out.txt", content="итог"))

@@ -154,3 +154,70 @@ def test_ollama_window_comes_from_loaded_models() -> None:
 async def _drain(stream):
     async for _ in stream:
         pass
+
+
+def test_looping_stream_is_cut_and_closed() -> None:
+    import pytest
+
+    from local_agent.llm.base import LLMRepetition, stream_chat
+    from local_agent.llm.models import ChatResult, ReasoningDelta
+
+    plan = (
+        "I'll click \"Add to cart\" for Sauce Labs Onesie (e102).\nI'll click on the Cart (e32).\n"
+        "I'll type \"Ivan\" in the First Name field.\nI'll click \"Finish\".\nI'll report the result.\n"
+    )
+    closed = []
+
+    class Looping:
+        async def chat_stream(self, model, messages, tools=None):
+            try:
+                for _ in range(500):
+                    yield ReasoningDelta(plan)
+                yield ChatResult(content="", tool_calls=())
+            finally:
+                closed.append(True)
+
+    async def consume(provider):
+        return [item async for item in stream_chat(provider, "m", [ChatMessage("user", "x")])]
+
+    with pytest.raises(LLMRepetition):
+        asyncio.run(consume(Looping()))
+    assert closed == [True]
+
+    class Long:
+        async def chat_stream(self, model, messages, tools=None):
+            for number in range(300):
+                yield f"Шаг {number}: проверить поле {number * 7} и записать результат в отчёт. "
+            yield ChatResult(content="ok", tool_calls=())
+
+    # Длинный, но не повторяющийся ответ доходит целиком.
+    assert len(asyncio.run(consume(Long()))) == 301
+
+
+def test_thinking_leaked_as_text_is_cut_from_answer() -> None:
+    import pytest
+
+    from local_agent.llm.base import LLMEmptyResponse, stream_chat
+    from local_agent.llm.models import ChatResult
+
+    call = ToolCall(id="c1", name="browser_browser_hover", arguments='{"target": "e1"}')
+
+    class Leaking:
+        def __init__(self, text, calls=()):
+            self.text, self.calls = text, calls
+
+        async def chat_stream(self, model, messages, tools=None):
+            yield self.text
+            yield ChatResult(content=self.text, tool_calls=self.calls)
+
+    async def result(provider):
+        return [item async for item in stream_chat(provider, "m", [ChatMessage("user", "x")])][-1]
+
+    # Gemma 4 через Ollama: рассуждения пришли текстом и закрыты маркером — в ответ идёт только хвост.
+    assert asyncio.run(result(Leaking("Навожу курсор на первую книгу…<channel|>Готово."))).content == "Готово."
+    hover = asyncio.run(result(Leaking("Навожу курсор по очереди.<channel|>", (call,))))
+    assert hover.content is None and hover.tool_calls == (call,)
+    assert asyncio.run(result(Leaking("Обычный ответ"))).content == "Обычный ответ"
+    # Одни рассуждения без ответа и вызовов — как пустой ответ: граф повторит запрос.
+    with pytest.raises(LLMEmptyResponse):
+        asyncio.run(result(Leaking("План действий<channel|>  ")))
