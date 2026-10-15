@@ -401,10 +401,15 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 .composer textarea { scrollbar-width: none; }
 .composer textarea::-webkit-scrollbar { display: none; }
 #model-select {
-  min-width: 0; max-width: 240px; border: 0; background: transparent; border-radius: 4px; padding: 0 2px;
+  min-width: 0; max-width: 240px; border: 0; border-radius: 4px; padding: 0 16px 0 2px;
   font: 600 12px var(--mono); color: var(--fg); cursor: pointer;
+  /* Своя стрелка: у нативной текст длинного названия залезает под неё. */
+  appearance: none; -webkit-appearance: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: transparent no-repeat right 4px center / 8px 5px
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23888'/%3E%3C/svg%3E");
 }
-#model-select:hover { background: var(--surface-2); }
+#model-select:hover { background-color: var(--surface-2); }
 .mode { border: 0; background: transparent; padding: 0 4px; font: 600 12px var(--mono); color: var(--danger); white-space: nowrap; text-transform: uppercase; letter-spacing: .03em; }
 .mode::before { content: "· "; color: var(--muted); font-weight: 400; }
 .mode:hover:not(:disabled) { background: transparent; filter: brightness(1.2); }

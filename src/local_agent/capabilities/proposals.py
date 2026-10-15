@@ -109,8 +109,9 @@ class ProposeTool:
         if kind == "agent":
             current = self._capabilities.agents.get(item_id)
             proposal |= {
-                "tools": _strings(arguments["tools"]) if "tools" in arguments or current is None else list(current.tools),
-                "skills": _strings(arguments["skills"]) if "skills" in arguments or current is None
+                "tools": _strings(arguments.get("tools")) if "tools" in arguments or current is None
+                else list(current.tools),
+                "skills": _strings(arguments.get("skills")) if "skills" in arguments or current is None
                 else list(current.skills or ()),
             }
         if update:
