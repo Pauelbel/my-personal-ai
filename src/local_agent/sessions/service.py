@@ -51,7 +51,7 @@ class SessionService:
         hidden: bool = False,
         kind: str = "chat",
     ) -> Session:
-        # Своей папки у сессии нет: её задаёт проект. Без проекта — только служебная сессия вики.
+        # Своей папки у сессии нет: её задаёт проект. Без проекта — служебная сессия вики и личный чат с агентом.
         if project_id is None and kind == "chat":
             raise ValueError("Сессия разговора живёт в проекте")
         now = datetime.now(UTC)
@@ -143,6 +143,12 @@ class SessionService:
         if session is not None:
             self._repository.patch(session_id, {"task": {**(session.task or {}), **fields}})
 
+    def trust(self, session_id: str, group: str) -> None:
+        """Дальше в этой сессии вызовы группы group идут без подтверждения."""
+        session = self._repository.get(session_id)
+        if session is not None and group not in session.trusted:
+            self._repository.patch(session_id, {"trusted": [*session.trusted, group]})
+
     def set_summary(self, session_id: str, summary: str, until_message_id: str) -> None:
         self._repository.patch(
             session_id, {"summary": summary, "summary_until_message_id": until_message_id}
@@ -161,6 +167,17 @@ class SessionService:
                 if child.parent_id == session_id:
                     self.delete(child.id)
         return deleted
+
+    def clear(self, session_id: str) -> Session | None:
+        """«Очистить»: разговор начинается заново, а сама сессия, её агент и место в проекте остаются."""
+        if self._repository.get(session_id) is None:
+            return None
+        for callback in self._on_deleted:
+            callback(session_id)
+        return self._effective(self._repository.patch(session_id, {
+            "summary": "", "summary_until_message_id": None, "pending_thread": None, "pending": None, "task": None,
+            "context_tokens": None, "context_window": None, "tokens_per_second": None, "updated_at": datetime.now(UTC),
+        }))
 
     def set_usage(self, session_id: str, usage: dict[str, object]) -> None:
         self._repository.set_usage(session_id, usage)

@@ -62,6 +62,20 @@ class ProjectService:
             updates["mode"] = mode
         return self._repository.patch(project_id, updates)
 
+    def set_route(self, project_id: str, kind: str, agent_id: str) -> Project | None:
+        project = self._repository.get(project_id)
+        if project is None or not (kind := route_kind(kind)):
+            return project
+        return self._repository.patch(project_id, {"routes": {**project.routes, kind: agent_id}})
+
+    def forget_route(self, project_id: str, kind: str) -> Project | None:
+        project = self._repository.get(project_id)
+        if project is None:
+            return None
+        return self._repository.patch(project_id, {"routes": {
+            key: value for key, value in project.routes.items() if key != route_kind(kind)
+        }})
+
     def delete(self, project_id: str) -> bool:
         """Проект удаляется вместе с сессиями и их историей; папка на диске остаётся."""
         if self._repository.get(project_id) is None:
@@ -89,7 +103,8 @@ class ProjectService:
         project_of = {session.id: session.project_id for session in sessions}
         # Сначала обычные сессии, затем скрытые: им нужен уже известный проект хозяйки.
         for session in sorted(sessions, key=lambda item: item.parent_id is not None):
-            if session.project_id in known or session.kind == "wiki":
+            # Чат вики и личные чаты с агентами живут вне проектов: проект им не нужен.
+            if session.project_id in known or session.kind != "chat":
                 continue
             parent_project = project_of.get(session.parent_id)
             project_id = parent_project if parent_project in known else fallback
@@ -141,6 +156,11 @@ class ProjectService:
             if project.workspace == resolved and project.id != ignore:
                 raise ProjectError(f"Для этой папки уже есть проект «{project.name}»")
         return resolved
+
+
+def route_kind(kind: str) -> str:
+    """Тип задачи маршрута — коротко и в одном регистре: «Автотесты » и «автотесты» — один маршрут."""
+    return " ".join(kind.split()).casefold()[:60]
 
 
 def folder_name(workspace: str) -> str:

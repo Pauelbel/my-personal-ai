@@ -16,11 +16,6 @@ class ModelList(BaseModel):
     default_model: str
 
 
-class ProviderInfo(BaseModel):
-    id: str
-    name: str
-
-
 def get_llm_registry(request: Request) -> LLMRegistry:
     return request.app.state.llm_registry
 
@@ -41,10 +36,3 @@ async def list_models(
     except LLMProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return ModelList(models=models, default_model=request.app.state.settings.default_model)
-
-
-@router.get("/providers", response_model=list[ProviderInfo])
-def list_providers(
-    registry: Annotated[LLMRegistry, Depends(get_llm_registry)],
-) -> list[ProviderInfo]:
-    return [ProviderInfo(id=provider_id, name=name) for provider_id, name in registry.items()]

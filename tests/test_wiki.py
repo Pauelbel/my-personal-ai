@@ -289,3 +289,25 @@ def test_tags_find_notes_and_variants_of_one_word_merge(tmp_path):
     assert "Теги вики (сколько заметок): методологии 3, qa 1" in matched
     lint = asyncio.run(WikiLintTool(service).execute({}, None)).content
     assert "Теги (сколько заметок): методологии 3" in lint and "синонимы" in lint
+
+
+def test_images_spread_through_details_keep_their_folder(tmp_path):
+    """Модель разложила картинки по разделам, но потеряла папку images/ — ссылки чинятся, а не ломаются."""
+    service = wiki(tmp_path)
+    (tmp_path / "wiki" / "images").mkdir(parents=True)
+    for name in ("aaa111.png", "bbb222.png"):
+        (tmp_path / "wiki" / "images" / name).write_bytes(b"png")
+    service.write("сетапы.md", "# Сетапы\n\n## Картинки\n\n![Сетапы](images/aaa111.png)\n\n![Сетапы](images/bbb222.png)\n")
+
+    service.save_note(NoteFields(**{**fields(title="Сетапы").__dict__,
+                                    "details": "## Сетап 1\n\n![Сетап 1](aaa111.png)\n\n## Сетап 2\n\n![Сетап 2](images/bbb222.png)"}),
+                      path="сетапы.md")
+    text = service.read("сетапы.md")
+
+    assert "![Сетап 1](images/aaa111.png)" in text and "![Сетап 2](images/bbb222.png)" in text
+    # Обе картинки уже в тексте — внизу их не повторяем.
+    assert "## Картинки" not in text
+
+    with pytest.raises(ValueError, match="Картинок нет: images/ccc333.png.*images/aaa111.png"):
+        service.save_note(NoteFields(**{**fields(title="Сетапы").__dict__, "details": "![Опечатка](images/ccc333.png)"}),
+                          path="сетапы.md")

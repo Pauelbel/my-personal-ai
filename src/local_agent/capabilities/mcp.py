@@ -226,6 +226,8 @@ class MCPTool:
         self.parameters = schema if schema.get("type") == "object" else {"type": "object", "properties": {}}
         read_only = bool(tool.annotations and tool.annotations.read_only_hint)
         self.requires_approval = not (read_only or tool.name in auto_approve)
+        # Группа доверия — сервер: «утвердить все действия браузера в сессии» снимает карточки со всех его вызовов.
+        self.trust_group = server
         self._pause = POINTER_PAUSE_SECONDS if visible and tool.name in POINTER_TOOLS else 0.0
         self._workdir = workdir
         self._session = session

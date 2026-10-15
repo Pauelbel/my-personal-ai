@@ -10,6 +10,15 @@ class LLMRegistry:
     def get(self, provider_id: str) -> LLMProvider | None:
         return self._providers.get(provider_id)
 
+    def set(self, provider_id: str, provider: LLMProvider) -> LLMProvider | None:
+        """Добавить или заменить провайдера; прежний возвращается — его нужно закрыть."""
+        previous = self._providers.get(provider_id)
+        self._providers[provider_id] = provider
+        return previous
+
+    def remove(self, provider_id: str) -> LLMProvider | None:
+        return self._providers.pop(provider_id, None)
+
     def items(self) -> list[tuple[str, str]]:
         """Пары (id, отображаемое имя) для выбора провайдера в UI."""
         return [

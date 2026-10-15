@@ -6,6 +6,7 @@ propose показывает пользователю предложение ц�
 """
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 from local_agent.agent.loader import AGENT_ID, SKILL_ID
@@ -28,8 +29,9 @@ class ProposeTool:
         "Предложить пользователю новую возможность или доработку существующей: tool — Python-скрипт "
         "(аргументы JSON-объектом в stdin, результат в stdout; только стандартная библиотека Python — ставить "
         "пакеты нельзя, а схему или граф скрипт выводит текстом Mermaid), skill — инструкция под тип задач, "
-        "agent — саб-агент с постоянной ролью. Пользователь увидит предложение целиком и утвердит, "
-        "отклонит или ответит; при ответе доработай и предложи заново"
+        "agent — саб-агент с постоянной ролью. Чтобы доработать существующее, передай его id в name: "
+        "предложение заменит его целиком, копию под новым именем не создавай. Пользователь увидит предложение "
+        "целиком и утвердит, отклонит или ответит; при ответе доработай и предложи заново"
     )
     parameters = {
         "type": "object",
@@ -43,8 +45,10 @@ class ProposeTool:
             "parameters": {"type": "object", "description": "Только tool: JSON Schema аргументов (type: object)"},
             "requires_approval": {"type": "boolean", "description": "Только tool: true, если меняет файлы или систему"},
             "network": {"type": "boolean", "description": "Только tool: нужен ли доступ в интернет"},
-            "tools": {"type": "array", "items": {"type": "string"}, "description": "Только agent: id инструментов"},
-            "skills": {"type": "array", "items": {"type": "string"}, "description": "Только agent: id скиллов"},
+            "tools": {"type": "array", "items": {"type": "string"},
+                      "description": "Только agent: id инструментов; при доработке без поля остаются прежние"},
+            "skills": {"type": "array", "items": {"type": "string"},
+                       "description": "Только agent: id скиллов; при доработке без поля остаются прежние"},
         },
         "required": ["kind", "name", "title", "description", "reason", "content"],
         "additionalProperties": False,
@@ -103,7 +107,15 @@ class ProposeTool:
                 "network": bool(arguments.get("network", False)),
             }
         if kind == "agent":
-            proposal |= {"tools": _strings(arguments.get("tools")), "skills": _strings(arguments.get("skills"))}
+            current = self._capabilities.agents.get(item_id)
+            proposal |= {
+                "tools": _strings(arguments["tools"]) if "tools" in arguments or current is None else list(current.tools),
+                "skills": _strings(arguments["skills"]) if "skills" in arguments or current is None
+                else list(current.skills or ()),
+            }
+        if update:
+            # Карточка показывает и текущую версию: видно, что именно меняется.
+            proposal["previous"] = self._current_text(kind, item_id)
         verb = "Изменить" if update else "Создать"
         return {
             "kind": "proposal",
@@ -136,12 +148,26 @@ class ProposeTool:
         if kind == "skill":
             skill = self._capabilities.save_skill(item_id, proposal["title"], proposal["description"], proposal["content"])
             return f"Скилл {skill.id} сохранён. Загружай его через use_skill, когда задача подходит."
-        agent = self._capabilities.save_agent(Agent(
-            id=item_id, name=proposal["title"], system_prompt=proposal["content"], llm_provider="lm_studio",
-            model="", tools=tuple(proposal["tools"]), description=proposal["description"],
-            skills=tuple(proposal["skills"]),
-        ))
-        return f"Саб-агент {agent.id} готов. Поручай ему задачи через delegate."
+        fields = dict(
+            name=proposal["title"], system_prompt=proposal["content"], description=proposal["description"],
+            tools=tuple(proposal["tools"]), skills=tuple(proposal["skills"]),
+        )
+        current = self._capabilities.agents.get(item_id)
+        # Доработка меняет роль, а связи с холста, закреплённая модель и лимит раундов остаются.
+        agent = self._capabilities.save_agent(
+            replace(current, **fields) if current else Agent(id=item_id, llm_provider="lm_studio", model="", **fields)
+        )
+        return f"Саб-агент {agent.id} {'обновлён' if current else 'готов'}. Поручай ему задачи через delegate."
+
+    def _current_text(self, kind: str, item_id: str) -> str:
+        if kind == "agent":
+            agent = self._capabilities.agents.get(item_id)
+            return agent.system_prompt if agent else ""
+        if kind == "skill":
+            skill = self._capabilities.skills.get(item_id)
+            return skill.instructions if skill else ""
+        script = self._capabilities.paths.tools / item_id / "script.py"
+        return script.read_text(encoding="utf-8") if script.is_file() else ""
 
 
 class ArchiveTool:

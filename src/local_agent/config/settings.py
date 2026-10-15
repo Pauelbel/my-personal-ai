@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     memory_auto_update_messages: int = Field(default=10, ge=0)
     # Чат вики помнит столько последних реплик пользователя вместе с ответами; всё раньше забывается.
     wiki_context_messages: int = Field(default=3, ge=1)
+    # Сколько раундов вызова инструментов модель может сделать за один ход (у агента можно задать своё в файле).
+    max_tool_rounds: int = Field(default=40, ge=1, le=200)
     log_level: str = "INFO"
     max_context_messages: int = Field(default=20, gt=0)
     default_context_tokens: int = Field(default=8192, gt=0)

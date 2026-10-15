@@ -1,94 +1,78 @@
-// Команда сессии: холст со связями «основной агент → саб-агенты» и полоса переключения над чатом.
-// Связи рисует сам основной агент, когда поручает задачи; щелчок по агенту открывает разговор с ним.
-// Карточки можно двигать, холст — тянуть и масштабировать; раскладка запоминается для каждой сессии.
-// Связь между саб-агентами (кто кого может спросить посреди задачи) тянется от точки на краю карточки
-// к другой карточке и удаляется щелчком по линии; хранится в файлах агентов.
+// Справочник «Команда»: кто в команде и кто к кому может обращаться. Основной в центре, саб-агенты вокруг;
+// линии — направленные связи: основной поручает любому, саб-агенты по умолчанию обращаются ко всем
+// (взаимная связь — линия со стрелками с двух сторон), ограниченный в своём файле — только к выбранным.
+// Щелчок по карточке открывает настройки агента; карточки можно двигать, холст — тянуть и масштабировать,
+// раскладка запоминается.
 import { el } from "./chat.js";
 
-const STATUS = { idle: "свободен", queued: "в очереди", running: "работает", waiting: "ждёт вашего решения", done: "выполнил задачу", failed: "ошибка" };
+const STATUS = { idle: "свободен", queued: "в очереди", running: "работает", waiting: "ждёт вашего решения" };
 const ACTIVE = new Set(["running", "queued", "waiting"]);
 const SVG = "http://www.w3.org/2000/svg";
 const CARD_WIDTH = 240;
 const CARD_HEIGHT = 86;
-const COLUMN_GAP = 140;
-const ROW_GAP = 18;
 const GRID = 20;
 const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 1.6;
 const ZOOM_STEP = 0.1;
+const LAYOUT_KEY = "team-layout:reference";
 // Наружная нормаль каждой стороны: в эту сторону провод выходит из карточки.
 const SIDES = { top: { x: 0, y: -1 }, right: { x: 1, y: 0 }, bottom: { x: 0, y: 1 }, left: { x: -1, y: 0 } };
 
 const view = { x: 40, y: 40, zoom: 1 };
-// Что сейчас нарисовано: перерисовка по опросу не трогает холст, пока данные те же или карточку тянут.
-let drawn = { owner: null, signature: "" };
-let layout = {};
+// Что сейчас нарисовано: перерисовка не трогает холст, пока данные те же или карточку тянут.
+let signature = "";
+let layout = loadLayout();
 let team = null;
-let shownCurrent = null;
 let dragging = false;
 let parts = null;
 
-// onOpen(node) открывает разговор с агентом узла.
-export function renderAgentBar(root, team, currentId, onOpen) {
-  const agents = team?.nodes.filter((node) => node.id !== "main") ?? [];
-  root.hidden = !agents.length;
-  if (!agents.length) return;
-  root.replaceChildren(...team.nodes.map((node) => {
-    const chip = el("button", "agent-chip");
-    chip.type = "button";
-    chip.setAttribute("aria-current", String(node.session_id === currentId));
-    chip.title = node.task ? `${STATUS[node.status] || node.status}: ${node.task}` : STATUS[node.status] || "";
-    chip.append(el("span", `status-dot ${node.status}`), node.id === "main" ? "Основной" : node.name);
-    chip.addEventListener("click", () => onOpen(node));
-    return chip;
-  }));
-}
-
-// actions: onOpen(node) — разговор с агентом, onLink(from, to) и onUnlink(from, to) — связи между саб-агентами.
-export function renderTeam(root, data, currentId, actions) {
+// data — { nodes, edges } из /api/agents/team, у узлов ещё status; actions.onOpen(node) — настройки агента.
+export function renderTeam(root, data, actions) {
   if (!data) return;
   parts ??= buildCanvas(root);
   parts.actions = actions;
-  const signature = JSON.stringify([data, currentId]);
-  if (dragging || (drawn.owner === data.owner_id && drawn.signature === signature)) return;
-  if (drawn.owner !== data.owner_id) {
-    layout = loadLayout(data.owner_id);
-    Object.assign(view, { x: 40, y: 40, zoom: 1 });
-    applyView();
-  }
-  drawn = { owner: data.owner_id, signature };
+  const next = JSON.stringify(data);
+  if (dragging || next === signature) return;
+  signature = next;
   team = data;
-  shownCurrent = currentId;
   placeNew(data.nodes);
-  parts.cards.replaceChildren(...data.nodes.map((node) => card(node, currentId)));
+  parts.cards.replaceChildren(...data.nodes.map(card));
   drawEdges();
 }
 
-// Новые агенты встают в столбик справа от основного, под уже стоящими; сдвинутые остаются, где их оставили.
+// Основной — сверху, саб-агенты — дугой под ним: так линии между любыми двумя агентами не прячутся за карточками.
+// Сдвинутые карточки остаются, где их оставили.
 function placeNew(nodes) {
   const [main, ...agents] = nodes;
-  layout[main.id] ??= { x: 0, y: Math.max(0, (agents.length * (CARD_HEIGHT + ROW_GAP) - CARD_HEIGHT) / 2) };
-  const column = layout[main.id].x + CARD_WIDTH + COLUMN_GAP;
-  let next = Math.max(0, ...agents.filter((node) => layout[node.id]).map((node) => layout[node.id].y + CARD_HEIGHT + ROW_GAP));
-  for (const node of agents) {
-    if (layout[node.id]) continue;
-    layout[node.id] = { x: column, y: next };
-    next += CARD_HEIGHT + ROW_GAP;
-  }
+  const width = Math.max(300, agents.length * 140);
+  const depth = 220;
+  layout[main.id] ??= { x: width, y: 0 };
+  const top = { x: layout[main.id].x + CARD_WIDTH / 2, y: layout[main.id].y + CARD_HEIGHT / 2 };
+  agents.forEach((node, index) => {
+    if (layout[node.id]) return;
+    const angle = Math.PI - (Math.PI * (index + 1)) / (agents.length + 1);
+    layout[node.id] = {
+      x: Math.round(top.x + width * Math.cos(angle) - CARD_WIDTH / 2),
+      y: Math.round(top.y + depth * Math.sin(angle) + CARD_HEIGHT / 2),
+    };
+  });
 }
 
-function card(node, currentId) {
+function card(node) {
   const position = layout[node.id];
-  const item = el("div", `team-node${node.session_id && node.session_id === currentId ? " current" : ""}${node.archived ? " archived" : ""}`);
+  const item = el("div", `team-node${node.builtin ? " main" : ""}`);
   item.dataset.nodeId = node.id;
   item.style.left = `${position.x}px`;
   item.style.top = `${position.y}px`;
   item.tabIndex = 0;
   item.setAttribute("role", "button");
   const head = el("span", "node-head");
-  head.append(el("span", `status-dot ${node.status}`), node.name);
-  item.append(head, el("span", "node-state", STATUS[node.status] || node.status), el("span", "node-task", node.task || node.description || ""));
-  item.title = `${node.id === "main" ? "Открыть основной разговор" : `Открыть разговор с ${node.name}`} · карточку можно перетащить`;
+  head.append(el("span", `status-dot ${node.status ?? "idle"}`), node.name);
+  const reach = node.builtin ? "поручает задачи любому агенту"
+    : node.restricted ? `обращается только к: ${targetsOf(node.id).map(nameOf).join(", ") || "никому"}`
+    : "обращается ко всем агентам";
+  item.append(head, el("span", "node-state", `${STATUS[node.status] ?? "свободен"} · ${reach}`), el("span", "node-task", node.description || ""));
+  item.title = `${node.builtin ? "Дополнительные инструкции основного агента" : `Настройки агента «${node.name}»`} · карточку можно перетащить`;
   const open = () => parts.actions.onOpen(node);
   item.addEventListener("click", () => {
     if (!item.dataset.dragged) open();
@@ -100,16 +84,14 @@ function card(node, currentId) {
     }
   });
   makeDraggable(item, node.id);
-  // Связывать можно только саб-агентов: основной и так может поручить задачу любому.
-  if (node.id !== "main" && !node.archived) {
-    for (const side of Object.keys(SIDES)) item.append(port(node.id, side));
-  }
   return item;
 }
 
+const targetsOf = (id) => (team?.edges ?? []).filter((edge) => edge.from === id).map((edge) => edge.to);
+
 function makeDraggable(item, id) {
   item.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || event.target.closest(".node-port")) return;
+    if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     item.setPointerCapture(event.pointerId);
@@ -141,87 +123,40 @@ function makeDraggable(item, id) {
   });
 }
 
+// Пара агентов — одна линия: стрелка у того, к кому можно обратиться; взаимная связь — стрелки с двух сторон.
+// Линии основного агента — акцентные: он руководитель и поручает задачи любому.
 function drawEdges() {
   parts.edges.replaceChildren(defs());
+  const pairs = new Map();
   for (const edge of team?.edges ?? []) {
-    const source = rect(edge.from);
-    const target = rect(edge.to);
+    const key = [edge.from, edge.to].sort().join("\u0000");
+    const pair = pairs.get(key) ?? { a: edge.from, b: edge.to, forward: false, back: false };
+    if (edge.from === pair.a) pair.forward = true;
+    else pair.back = true;
+    pairs.set(key, pair);
+  }
+  for (const pair of pairs.values()) {
+    const source = rect(pair.a);
+    const target = rect(pair.b);
     if (!source || !target) continue;
     const { start, startSide, end, endSide } = route(source, target);
-    const path = bezier(start, startSide, end, endSide);
-    const status = team.nodes.find((node) => node.id === edge.to)?.status;
-    const group = svg("g", { class: `edge-group${edge.link ? " link" : ""}${ACTIVE.has(status) ? " active" : ""}` });
-    group.append(
-      svg("path", { d: path, class: "edge", "marker-end": "url(#team-arrow)" }),
-      svg("circle", { cx: start.x, cy: start.y, r: 2.5, class: "edge-dot" }),
-    );
-    if (edge.tasks) {
-      const label = svg("text", { class: "edge-label", x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 - 8, "text-anchor": "middle" });
-      label.textContent = `задач: ${edge.tasks}`;
-      group.append(label);
-    }
-    if (edge.link) {
-      // Широкая прозрачная линия поверх: по связи легко попасть мышью.
-      const hit = svg("path", { d: path, class: "edge-hit" });
-      const tip = svg("title", {});
-      tip.textContent = `${nameOf(edge.from)} может спросить ${nameOf(edge.to)} · щелчок — убрать связь`;
-      hit.append(tip);
-      hit.addEventListener("click", () => {
-        if (window.confirm(`Убрать связь: ${nameOf(edge.from)} больше не сможет спрашивать ${nameOf(edge.to)}?`)) parts.actions.onUnlink(edge.from, edge.to);
-      });
-      group.append(hit);
-    }
+    const lead = pair.a === "main" || pair.b === "main";
+    const busy = [pair.a, pair.b].some((id) => ACTIVE.has(team.nodes.find((node) => node.id === id)?.status));
+    const group = svg("g", { class: `edge-group${lead ? " lead" : ""}${pair.forward && pair.back ? " mutual" : ""}${busy ? " active" : ""}` });
+    const line = svg("path", { d: bezier(start, startSide, end, endSide), class: "edge" });
+    if (pair.forward) line.setAttribute("marker-end", "url(#team-arrow)");
+    if (pair.back) line.setAttribute("marker-start", "url(#team-arrow)");
+    const tip = svg("title", {});
+    tip.textContent = lead ? `${nameOf("main")} поручает задачи агенту ${nameOf(pair.a === "main" ? pair.b : pair.a)}`
+      : pair.forward && pair.back ? `${nameOf(pair.a)} и ${nameOf(pair.b)} могут обращаться друг к другу`
+      : pair.forward ? `${nameOf(pair.a)} может обращаться к ${nameOf(pair.b)}` : `${nameOf(pair.b)} может обращаться к ${nameOf(pair.a)}`;
+    line.append(tip);
+    group.append(line);
     parts.edges.append(group);
   }
 }
 
 const nameOf = (id) => team?.nodes.find((node) => node.id === id)?.name ?? id;
-
-// Точка на краю карточки: от неё тянут связь к другому саб-агенту.
-function port(id, side) {
-  const handle = el("button", `node-port port-${side}`);
-  handle.type = "button";
-  handle.title = "Потяните к другому саб-агенту: этот сможет его спрашивать";
-  handle.setAttribute("aria-label", "Связать с другим саб-агентом");
-  handle.addEventListener("click", (event) => event.stopPropagation());
-  handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    handle.setPointerCapture(event.pointerId);
-    dragging = true;
-    const line = svg("path", { class: "edge draft", "marker-end": "url(#team-arrow)" });
-    parts.edges.append(line);
-    const from = sidePoint(rect(id), side);
-    let target = null;
-    const move = (moved) => {
-      const bounds = parts.root.getBoundingClientRect();
-      const point = { x: (moved.clientX - bounds.left - view.x) / view.zoom, y: (moved.clientY - bounds.top - view.y) / view.zoom };
-      line.setAttribute("d", `M${from.x} ${from.y}L${point.x} ${point.y}`);
-      // Отпустить можно в любом месте карточки: подсвечиваем, кому уйдёт связь.
-      const over = document.elementFromPoint(moved.clientX, moved.clientY)?.closest(".team-node");
-      const next = over && over.dataset.nodeId !== id && over.dataset.nodeId !== "main" ? over : null;
-      if (next === target) return;
-      target?.classList.remove("drop-target");
-      next?.classList.add("drop-target");
-      target = next;
-    };
-    const finish = () => {
-      handle.removeEventListener("pointermove", move);
-      target?.classList.remove("drop-target");
-      line.remove();
-      dragging = false;
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", () => {
-      const chosen = target?.dataset.nodeId;
-      finish();
-      if (chosen) parts.actions.onLink(id, chosen);
-    }, { once: true });
-    handle.addEventListener("pointercancel", finish, { once: true });
-  });
-  return handle;
-}
 
 function defs() {
   const node = svg("defs", {});
@@ -279,8 +214,8 @@ function buildCanvas(root) {
   const arrange = control("Упорядочить", "Вернуть карточки на места по умолчанию", () => {
     layout = {};
     saveLayout();
-    drawn.signature = "";
-    if (team) renderTeam(root, team, shownCurrent, parts.actions);
+    signature = "";
+    if (team) renderTeam(root, team, parts.actions);
   });
   controls.append(zoomOut, zoomReset, zoomIn, arrange);
   root.replaceChildren(stage, controls);
@@ -348,9 +283,9 @@ function applyView() {
   parts.zoomReset.textContent = `${Math.round(view.zoom * 100)}%`;
 }
 
-function loadLayout(owner) {
+function loadLayout() {
   try {
-    return JSON.parse(localStorage.getItem(`team-layout:${owner}`)) ?? {};
+    return JSON.parse(localStorage.getItem(LAYOUT_KEY)) ?? {};
   } catch {
     return {};
   }
@@ -358,7 +293,7 @@ function loadLayout(owner) {
 
 function saveLayout() {
   try {
-    localStorage.setItem(`team-layout:${drawn.owner}`, JSON.stringify(layout));
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
   } catch {
     // Без хранилища раскладка живёт до перезагрузки страницы.
   }

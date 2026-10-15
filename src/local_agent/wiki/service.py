@@ -18,6 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import unquote
 
 from local_agent.tools.docs import MarkdownIndex
 from local_agent.wiki import notes
@@ -284,6 +285,7 @@ class WikiService:
                 image = f"{notes.IMAGES_DIR}/{name}"
                 pictures.setdefault(image, title)
                 copies.append((source, self.root / image))
+            details = self._fix_images(target, details, pictures)
             # Картинка уже стоит в «Подробностях» — второй раз в конце её не повторяем.
             inline = {image for _, image in notes.images_of(target, details)}
             images = [(label, notes.relative_link(target, image)) for image, label in pictures.items() if image not in inline]
@@ -337,6 +339,36 @@ class WikiService:
         return "; ".join(parts) + "."
 
     # ---------- внутреннее ----------
+
+    def _fix_images(self, target: str, details: str, pictures: dict[str, str]) -> str:
+        """Расставляя картинки по тексту, модель теряет папку images/ или ошибается в имени.
+        Ссылку на известную картинку по имени файла чиним сами, неизвестную возвращаем с верными путями."""
+        folder = posixpath.dirname(target)
+        known = dict.fromkeys(pictures)
+        if (self.root / notes.IMAGES_DIR).is_dir():
+            known |= dict.fromkeys(f"{notes.IMAGES_DIR}/{file.name}" for file in (self.root / notes.IMAGES_DIR).iterdir())
+        by_name = {posixpath.basename(image): image for image in known}
+        missing: list[str] = []
+
+        def fix(match: re.Match) -> str:
+            label, link = match.groups()
+            clean = unquote(link)
+            if re.match(r"^[a-z][a-z0-9+.-]*:", clean) or clean.startswith("/"):
+                return match.group(0)
+            resolved = posixpath.normpath(posixpath.join(folder, clean))
+            if resolved in known:
+                return match.group(0)
+            image = by_name.get(posixpath.basename(resolved))
+            if image is None:
+                missing.append(link)
+                return match.group(0)
+            return f"![{label}]({notes.relative_link(target, image)})"
+
+        fixed = notes.IMAGE.sub(fix, details)
+        if missing:
+            links = ", ".join(notes.relative_link(target, image) for image in pictures) or "у заметки картинок нет"
+            raise ValueError(f"Картинок нет: {', '.join(missing)}. Ссылки на картинки этой заметки: {links}")
+        return fixed
 
     def _files(self) -> list[tuple[str, Path]]:
         result = []

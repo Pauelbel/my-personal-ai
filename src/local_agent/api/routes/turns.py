@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from local_agent.agent.runtime import (
     AgentRuntime,
@@ -49,6 +49,10 @@ class Decision(BaseModel):
     text: str = ""
     # Для карточки со списком: номера пунктов, которые пользователь отметил.
     selected: list[int] | None = None
+    # Утвердить и дальше не спрашивать про эту группу инструментов (например, браузер) в этой сессии.
+    trust: bool = False
+    # Карточка «Кто сделает»: id выбранного агента или main.
+    choice: str | None = Field(default=None, max_length=64)
 
 
 def get_agent_runtime(request: Request) -> AgentRuntime:

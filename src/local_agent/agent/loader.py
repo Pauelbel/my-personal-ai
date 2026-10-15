@@ -13,7 +13,7 @@ AGENT_KEYS = {"name", "description", "provider", "model", "tools", "skills", "ma
 SKILL_KEYS = {"name", "description"}
 SKILL_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 AGENT_ID = SKILL_ID
-MAX_TOOL_ROUNDS_LIMIT = 50
+MAX_TOOL_ROUNDS_LIMIT = 200
 ARCHIVED_SKILL_ID = re.compile(r"(?P<id>[a-z0-9][a-z0-9_-]*)\.[0-9a-f]{32}\.md")
 
 logger = logging.getLogger(__name__)

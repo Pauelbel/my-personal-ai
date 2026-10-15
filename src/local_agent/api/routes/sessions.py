@@ -76,8 +76,9 @@ def list_sessions(
     service: Annotated[SessionService, Depends(get_session_service)],
     include_hidden: bool = False,
 ) -> list[Session]:
-    # Служебная сессия вики живёт на вкладке «Вики» и в списке разговоров не нужна.
-    return [session for session in service.list() if session.kind == "chat" and (include_hidden or not session.hidden)]
+    # Служебная сессия вики живёт на вкладке «Вики» и в списке разговоров не нужна;
+    # личные чаты с агентами скрыты и приходят вместе с остальными скрытыми.
+    return [session for session in service.list() if session.kind != "wiki" and (include_hidden or not session.hidden)]
 
 
 @router.get("/{session_id}", response_model=Session)
@@ -121,6 +122,42 @@ def rename_session(
     if session is None:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
     return session
+
+
+@router.post("/{session_id}/clear", response_model=Session)
+def clear_session(
+    session_id: str,
+    request: Request,
+    service: Annotated[SessionService, Depends(get_session_service)],
+) -> Session:
+    """«Очистить»: разговор начинается заново. Пока агент работает или ждёт решения, очищать нельзя."""
+    if service.get(session_id) is None:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+    if request.app.state.turn_hub.running(session_id) is not None or request.app.state.delegation.busy(session_id):
+        raise HTTPException(status_code=409, detail="Сначала дождитесь ответа или остановите его")
+    return service.clear(session_id)
+
+
+@router.post("/{session_id}/discard", status_code=status.HTTP_204_NO_CONTENT)
+def discard_session(
+    session_id: str,
+    request: Request,
+    service: Annotated[SessionService, Depends(get_session_service)],
+) -> None:
+    """Убрать пустую сессию, из которой ушли. Решает сервер, а не интерфейс: сессию, где есть хоть одно
+    сообщение, агент или идущий ход, он не удалит, даже если интерфейс по ошибке счёл её пустой."""
+    state = request.app.state
+    session = service.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+    busy = state.turn_hub.running(session_id) is not None or state.agent_runtime.is_busy(session_id)
+    has_agents = any(item.parent_id == session_id for item in service.list())
+    if (
+        session.kind != "chat" or session.parent_id or session.pending or busy or has_agents
+        or state.conversation_service.count(session_id)
+    ):
+        raise HTTPException(status_code=409, detail="Сессия не пуста")
+    service.delete(session_id)
 
 
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)

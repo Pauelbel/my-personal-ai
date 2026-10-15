@@ -1,7 +1,9 @@
-// Файлы проекта: дерево (папки подгружаются по щелчку), просмотр с подсветкой и номерами строк или markdown,
-// переход к строке, правка, перенос и удаление. Пути из чата открываются здесь же (openPath).
+// Файлы проекта — панель справа от чата: дерево (папки подгружаются по щелчку), просмотр с подсветкой и номерами
+// строк или markdown, переход к строке, правка, перенос и удаление. Пути из чата открываются здесь же (openPath),
+// а файл, который только что поменял агент, открывается сам с подсвеченными изменениями (revealChange).
 import { api } from "./api.js";
 import { el, renderMarkdown } from "./chat.js";
+import { lineDiff } from "./diff.js";
 import { highlightInto } from "./highlight.js";
 import { guide, rowAction, treeRow } from "./tree.js";
 
@@ -10,8 +12,9 @@ const $ = (selector) => document.querySelector(selector);
 const view = {
   projectId: null, children: new Map(), open: new Set(), loading: new Set(), message: "",
   path: null, file: null, editing: false,
-  // source — Markdown исходником, а не отрисованным; line — подсвеченная строка исходника.
-  source: false, line: null,
+  // source — Markdown исходником, а не отрисованным; line — подсвеченная строка исходника;
+  // changed — номера строк, которые только что поменял агент.
+  source: false, line: null, changed: [],
 };
 let toast = () => {};
 // Открытый файл каждого проекта: после перезагрузки страницы он открывается снова.
@@ -264,7 +267,7 @@ export async function openPath(path, line = null, quiet = false) {
 async function openFile(path) {
   if (path === view.path || !confirmDiscard()) return;
   const id = view.projectId;
-  Object.assign(view, { path, file: null, editing: false, source: false, line: null });
+  Object.assign(view, { path, file: null, editing: false, source: false, line: null, changed: [] });
   syncActions();
   showPath();
   $("#files-body").replaceChildren(note("Загрузка…"));
@@ -326,6 +329,78 @@ function renderBody() {
   body.replaceChildren(content);
   if (view.file.truncated) body.prepend(note("Файл большой: показано только начало, править его нельзя."));
   body.scrollTop = 0;
+  markChanged();
+}
+
+// Агент записал или поправил файл: он открывается здесь, изменённые строки подсвечены, видна первая из них.
+// Что поменялось, считаем по тексту, который был открыт до правки; иначе — по новому фрагменту из вызова edit_file.
+// Несохранённую ручную правку не трогаем.
+export async function revealChange(path, newText = null) {
+  if (!view.projectId || isDirty()) return;
+  const id = view.projectId;
+  const before = view.path === path && view.file && !view.file.truncated ? view.file.content : null;
+  if (view.path !== path) {
+    await openPath(path, null, true);
+    if (view.path !== path || id !== view.projectId) return;
+  } else {
+    try {
+      const file = await api.file(id, path);
+      if (id !== view.projectId || path !== view.path) return;
+      view.file = file;
+    } catch {
+      return;
+    }
+  }
+  if (!view.file) return;
+  view.changed = changedLines(before, view.file.content, newText);
+  view.editing = false;
+  syncActions();
+  renderBody();
+}
+
+function changedLines(before, after, newText) {
+  if (before !== null) {
+    const ops = lineDiff(before, after);
+    return ops ? ops.filter((op) => op.kind === "+").map((op) => op.after) : [];
+  }
+  const at = newText ? after.indexOf(newText) : -1;
+  if (at < 0) return [];
+  const first = after.slice(0, at).split("\n").length;
+  return Array.from({ length: newText.split("\n").length }, (_, index) => first + index);
+}
+
+// Подсветка строк, которые поменял агент: в коде — полосы на этих строках, в отрисованном Markdown — блоки,
+// в которые они попадают. Прокручиваем к первой изменённой.
+function markChanged() {
+  const body = $("#files-body");
+  const lines = new Set(view.changed);
+  if (!lines.size) return;
+  let first = null;
+  const wrap = body.querySelector(".code-lines");
+  if (wrap) {
+    const gutter = wrap.querySelector(".code-gutter");
+    const style = getComputedStyle(gutter);
+    const height = Number.parseFloat(style.lineHeight);
+    const top = gutter.offsetTop + Number.parseFloat(style.paddingTop);
+    for (const line of [...lines].sort((a, b) => a - b)) {
+      const band = el("div", "code-changed");
+      band.style.top = `${top + (line - 1) * height}px`;
+      band.style.height = `${height}px`;
+      wrap.append(band);
+      first ??= band;
+    }
+  } else {
+    const blocks = [...body.querySelectorAll(".files-markdown [data-line]")];
+    blocks.forEach((block, index) => {
+      const start = Number(block.dataset.line);
+      const end = index + 1 < blocks.length ? Number(blocks[index + 1].dataset.line) - 1 : Infinity;
+      if ([...lines].some((line) => line >= start && line <= end)) {
+        block.classList.add("line-changed");
+        first ??= block;
+      }
+    });
+  }
+  if (first) body.scrollTop = Math.max(0, first.getBoundingClientRect().top - body.getBoundingClientRect().top - body.clientHeight / 3);
 }
 
 const isMarkdown = () => /\.(md|markdown)$/i.test(view.path ?? "");
@@ -416,6 +491,7 @@ const confirmDiscard = () => !isDirty() || window.confirm("Есть несохр
 function setEditing(value) {
   if (!view.file || value === view.editing || !confirmDiscard()) return;
   view.editing = value;
+  view.changed = [];
   syncActions();
   renderBody();
 }

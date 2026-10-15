@@ -205,3 +205,81 @@ def test_attention_lists_pending_cards(tmp_path):
 
     [card] = attention["cards"]
     assert card["session_id"] == session["id"] and card["pending"]["call"]["name"] == "write_file"
+
+
+def test_tool_round_limit_ends_the_turn_with_an_answer_not_an_error(tmp_path):
+    # Модель без конца зовёт инструменты: на лимите ход заканчивается ответом, работу можно продолжить.
+    provider = ScriptedProvider(*[call("list_files", path=".") for _ in range(5)])
+    configured = settings(tmp_path).model_copy(update={"max_tool_rounds": 2})
+    with TestClient(create_app(configured, llm_provider=provider)) as client:
+        session = post_session(client, {"model": "test"}).json()
+        events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Обойди всё"}))
+
+    assert events[-1]["type"] == "done"
+    assert "лимита в 2 шагов" in events[-1]["message"]["content"] and "продолжай" in events[-1]["message"]["content"]
+    # Третий запрос — последний: инструменты в нём уже не предлагались.
+    assert len(provider.requests) == 3 and not provider.requests[-1]["tools"]
+
+
+def test_promised_step_without_tool_call_is_continued_in_the_same_turn(tmp_path):
+    workspace = workspace_with_note(tmp_path)
+    provider = ScriptedProvider(
+        call("list_files", path="."), "Шаг 2.\n\nПерехожу к чтению заметки.", call("read_file", path="note.txt"),
+        "Заметка: встреча в пятницу.",
+    )
+    with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
+        session = project_session(client, workspace)
+        url = f"/api/sessions/{session['id']}"
+        events = events_of(client.post(url + "/turns/stream", json={"content": "Что в заметке?"}))
+        history = client.get(url + "/messages").json()
+
+    # Обещание осталось в чате, а модель в том же ходе получила просьбу сделать шаг и сделала его.
+    assert events[-1]["type"] == "done" and events[-1]["message"]["content"] == "Заметка: встреча в пятницу."
+    assert provider.requests[2]["messages"][-1].role == "user" and "не вызвал инструмент" in provider.requests[2]["messages"][-1].content
+    assert [message["content"] for message in history if message["role"] == "assistant" and not message.get("tool_calls")] == [
+        "Шаг 2.\n\nПерехожу к чтению заметки.", "Заметка: встреча в пятницу.",
+    ]
+    # Подсказка модели — не реплика пользователя: в историю она не попадает.
+    assert [message["content"] for message in history if message["role"] == "user"] == ["Что в заметке?"]
+
+
+def test_promises_action_tells_a_promise_from_a_summary_or_question():
+    from local_agent.graph.agent_graph import promises_action
+
+    for text in (
+        "Заполняю данные.", "Проверяю сортировку Name (A to Z).", "Теперь открою корзину", "**Шаг 5**\n\nДалее:",
+        "Для начала я перейду на сайт и выполню основные проверки.", "Итак, проверю корзину.",
+    ):
+        assert promises_action(text), text
+    for text in (
+        "Сценарии пройдены успешно.", "Жду ваших указаний.", "Могу продолжить с оплаты.", "Перейти к оплате?",
+        "Отчёт сохранён в test_results.md.", "", "Я сообщу, когда будет готово.",
+    ):
+        assert not promises_action(text), text
+
+
+def test_answer_in_english_is_rewritten_in_russian_before_it_reaches_the_chat(tmp_path):
+    english = "I have finished checking the cart page. All products are displayed correctly and the totals match."
+    provider = ScriptedProvider(english, "Проверил корзину: все товары на месте, суммы сходятся.")
+    with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
+        session = post_session(client, {"model": "test"}).json()
+        url = f"/api/sessions/{session['id']}"
+        events = events_of(client.post(url + "/turns/stream", json={"content": "Проверь корзину"}))
+        history = client.get(url + "/messages").json()
+
+    assert events[-1]["type"] == "done" and events[-1]["message"]["content"].startswith("Проверил корзину")
+    assert any(event["type"] == "retry" for event in events)
+    assert "по-русски" in provider.requests[1]["messages"][-1].content
+    # Английский вариант в историю не попал.
+    assert [message["content"] for message in history if message["role"] == "assistant"] == [
+        "Проверил корзину: все товары на месте, суммы сходятся.",
+    ]
+
+
+def test_foreign_answer_is_kept_when_the_user_asked_for_it():
+    from local_agent.graph.agent_graph import foreign_allowed, is_foreign
+
+    assert not is_foreign("Готово: тест-кейсы в `test_cases.md`, сценарии Login, Cart и Checkout на https://www.saucedemo.com/.")
+    assert foreign_allowed([{"role": "user", "content": "Напиши README на английском"}])
+    assert foreign_allowed([{"role": "user", "content": "Please summarize the article about cart checkout flows for me."}])
+    assert not foreign_allowed([{"role": "user", "content": "Проверь корзину"}])

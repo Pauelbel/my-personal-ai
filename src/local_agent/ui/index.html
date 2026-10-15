@@ -32,12 +32,12 @@
       <nav class="tabs" aria-label="Разделы">
         <button type="button" data-view="chat" aria-pressed="true">Чат</button>
         <button type="button" data-view="team" aria-pressed="false">Команда</button>
-        <button type="button" data-view="files" aria-pressed="false">Файлы</button>
         <button type="button" data-view="wiki" aria-pressed="false">Вики</button>
         <button type="button" data-view="capabilities" aria-pressed="false">Возможности</button>
         <button type="button" data-view="memory" aria-pressed="false">Память</button>
       </nav>
       <div class="topbar-right">
+        <button class="ghost settings-open" id="settings-open" type="button" title="Провайдеры моделей: Ollama, LM Studio, OpenAI-совместимый API с ключом">⚙ Модели</button>
         <button class="ghost icon" id="theme-toggle" type="button" title="Светлая или тёмная тема">☾</button>
       </div>
     </header>
@@ -45,17 +45,35 @@
     <div class="layout">
       <aside class="sidebar" id="sidebar" aria-label="Проекты и сессии">
         <div class="sidebar-head">
-          <h3>Проекты</h3>
-          <button class="ghost small" id="new-project" type="button" title="Новый проект: папка, в которой работает агент">＋ проект</button>
+          <h3>Агенты</h3>
+          <button class="ghost icon" id="new-agent" type="button" title="Новый саб-агент: постоянная роль, которой можно поручать задачи" aria-label="Новый агент">＋</button>
         </div>
-        <button class="new-session" id="new-session" type="button">＋ Новая сессия</button>
-        <div class="tree" id="session-list"></div>
+        <div class="nav-tree" id="agent-list"></div>
+        <div class="sidebar-head next">
+          <h3>Проекты</h3>
+          <button class="ghost icon" id="new-project" type="button" title="Новый проект: папка, в которой работает агент" aria-label="Новый проект">＋</button>
+        </div>
+        <div class="nav-tree" id="session-list"></div>
       </aside>
+      <div class="resizer" id="sidebar-resizer" aria-label="Ширина панели проектов"></div>
 
-      <main class="view" id="view-chat">
-        <nav class="agent-bar" id="agent-bar" aria-label="Агенты этой сессии" hidden></nav>
+      <main class="view workspace" id="view-chat">
+        <section class="chat-pane" aria-label="Чат">
+        <div class="chat-bar" id="chat-bar">
+          <nav class="agent-circles" id="agent-circles" aria-label="Агенты сессии"></nav>
+          <span class="agent-current" id="agent-current"></span>
+          <button class="ghost small files-toggle" id="files-open" type="button" title="Показать файлы проекта рядом с чатом">Файлы ‹</button>
+        </div>
+        <div class="chat-activity" id="chat-activity" aria-live="polite" hidden></div>
+        <div class="chat-head" id="chat-head" hidden>
+          <span class="chat-head-title" id="chat-head-title"></span>
+          <button class="ghost small" id="chat-clear" type="button" title="Разговор начнётся заново, агент останется">Очистить</button>
+          <button class="ghost small" id="chat-remove" type="button" hidden title="Агент пропадёт из сессии вместе с этим разговором">Убрать из сессии</button>
+        </div>
         <div class="messages" id="messages" aria-live="polite"></div>
         <div class="chat-bottom">
+          <section class="chat-cards" id="cards" aria-label="Ждут вашего решения" hidden></section>
+          <button class="cards-elsewhere" id="cards-elsewhere" type="button" hidden></button>
           <section class="dock" id="dock" aria-label="Задачи саб-агентов" hidden>
             <button class="dock-head" id="dock-toggle" type="button" aria-expanded="true" aria-controls="tasks">
               <span class="dock-title"><span class="dock-caret" aria-hidden="true">▾</span> саб-агенты <span id="dock-count"></span></span>
@@ -71,6 +89,7 @@
               <div class="frame-head">
                 <span class="frame-left">
                   <select id="model-select" aria-label="Модель" title="Модель этой сессии"></select>
+                  <button class="providers-open" id="providers-open" type="button" title="Провайдеры моделей: Ollama, LM Studio, OpenAI-совместимый API с ключом">⚙</button>
                   <button class="mode" id="mode-badge" type="button" title="Права агента в папке проекта — изменить в настройках проекта"></button>
                 </span>
                 <span class="usage" id="usage"></span>
@@ -89,29 +108,34 @@
             </div>
           </form>
         </div>
+        </section>
+        <div class="resizer" id="files-resizer" aria-label="Ширина чата"></div>
+        <section class="files-panel" id="files-panel" aria-label="Файлы проекта">
+          <div class="files-panel-head">
+            <span class="hint files-root" id="files-root"></span>
+            <button class="ghost icon" id="files-close" type="button" title="Скрыть файлы">»</button>
+          </div>
+          <div class="split files" id="files-split">
+            <div class="files-tree" id="files-tree" aria-label="Файлы проекта"></div>
+            <div class="resizer" id="files-tree-resizer" aria-label="Ширина дерева файлов"></div>
+            <div class="editor files-pane">
+              <div class="editor-actions">
+                <span class="files-path" id="files-path"></span>
+                <span class="files-actions"><span class="hint" id="files-status"></span>
+                  <button type="button" id="files-source" hidden>‹› Исходник</button>
+                  <button type="button" id="files-edit" hidden>✎ Править</button>
+                  <button class="primary" type="button" id="files-save" hidden>Сохранить</button></span>
+              </div>
+              <div class="files-body" id="files-body"><p class="hint files-note">Выберите файл слева.</p></div>
+            </div>
+          </div>
+        </section>
       </main>
 
       <main class="view page" id="view-team" hidden>
         <div class="page-head"><h2>Команда</h2></div>
-        <p class="hint">Основной агент и его саб-агенты: стрелки — кому он поручал задачи в этой сессии. Щелчок по карточке открывает разговор, карточки можно перетаскивать. Потяните от точки на краю карточки саб-агента к другому — он сможет спрашивать его посреди задачи; щелчок по связи убирает её.</p>
+        <p class="hint">Кто в команде и кто к кому может обращаться. Основной агент — руководитель: говорит с вами и поручает задачи любому агенту. Саб-агенты по умолчанию могут обращаться друг к другу — поручить часть задачи или спросить; их переписка видна в основном чате строками «◆ Агент → Агент». Щелчок по карточке открывает настройки агента, там же можно ограничить, к кому он обращается. Карточки можно двигать.</p>
         <div class="team" id="team"></div>
-      </main>
-
-      <main class="view page" id="view-files" hidden>
-        <div class="page-head"><h2>Файлы</h2><span class="hint" id="files-root"></span></div>
-        <div class="split files">
-          <div class="files-tree" id="files-tree" aria-label="Файлы проекта"></div>
-          <div class="editor files-pane">
-            <div class="editor-actions">
-              <span class="files-path" id="files-path"></span>
-              <span class="files-actions"><span class="hint" id="files-status"></span>
-                <button type="button" id="files-source" hidden>‹› Исходник</button>
-                <button type="button" id="files-edit" hidden>✎ Править</button>
-                <button class="primary" type="button" id="files-save" hidden>Сохранить</button></span>
-            </div>
-            <div class="files-body" id="files-body"><p class="hint files-note">Выберите файл слева.</p></div>
-          </div>
-        </div>
       </main>
 
       <main class="view wiki-view" id="view-wiki" hidden>
@@ -193,10 +217,6 @@
         </div>
       </main>
 
-      <aside class="side" id="side" aria-label="Требует внимания" hidden>
-        <h3>Требует внимания <span class="count" id="cards-count"></span></h3>
-        <div id="cards"></div>
-      </aside>
     </div>
 
     <dialog id="project-dialog">
@@ -210,6 +230,10 @@
             <option value="read">Только чтение: менять файлы агент не может</option>
           </select>
         </label>
+        <div id="project-routes-block" hidden>
+          <p class="hint">Кто делает задачи — ваш выбор в карточках «Кто сделает»</p>
+          <ul class="routes" id="project-routes"></ul>
+        </div>
         <div class="folders">
           <div class="folders-head"><button type="button" id="folder-up">↑</button><span id="folder-current"></span></div>
           <ul id="folder-list"></ul>
@@ -219,6 +243,86 @@
           <button type="button" id="project-delete" hidden>Удалить проект</button>
           <span></span>
           <button type="button" id="project-cancel">Отмена</button>
+          <button class="primary" type="submit">Сохранить</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="providers-dialog" class="wide">
+      <div class="providers">
+        <h3>Модели</h3>
+        <p class="hint">Модели всех доступных провайдеров — в списке над полем ввода. Выключенный сервер (например, Ollama не дома) просто не показывается.</p>
+        <ul class="provider-list" id="provider-list"></ul>
+        <button type="button" id="provider-add">＋ Добавить провайдера</button>
+        <form id="provider-form" hidden>
+          <h4 id="provider-form-title">Новый провайдер</h4>
+          <label>Тип
+            <select id="provider-kind"></select>
+          </label>
+          <label>Название<input id="provider-name" required maxlength="60" placeholder="Работа" /></label>
+          <label>Адрес API<input id="provider-url" required placeholder="https://…/v1" /></label>
+          <label>API-ключ<input id="provider-key" type="password" autocomplete="off" maxlength="500" /></label>
+          <div class="provider-probe">
+            <button type="button" id="provider-check">Проверить подключение</button>
+            <span class="hint" id="provider-status"></span>
+          </div>
+          <div class="provider-models" id="provider-models" hidden></div>
+          <p class="error" id="provider-error"></p>
+          <div class="dialog-actions">
+            <span></span>
+            <button type="button" id="provider-cancel">Отмена</button>
+            <button class="primary" type="submit">Сохранить</button>
+          </div>
+        </form>
+        <label class="provider-default">Модель по умолчанию — для новых проектов и личных чатов
+          <select id="provider-default"></select>
+        </label>
+        <div class="dialog-actions">
+          <span class="hint" id="providers-note"></span>
+          <button type="button" id="providers-close">Готово</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="agent-dialog">
+      <form method="dialog" id="agent-form">
+        <h3 id="agent-dialog-title">Агент</h3>
+        <label id="agent-id-label">ID<input id="agent-id" maxlength="64" pattern="[a-z0-9][a-z0-9_\-]*" placeholder="qa-tester — латиница, цифры, - и _" /></label>
+        <label>Имя<input id="agent-name" required maxlength="80" placeholder="Тестировщик" /></label>
+        <label>Описание — по нему основной агент выбирает, кому поручить<input id="agent-description" maxlength="200" /></label>
+        <label>Системный промпт<textarea id="agent-prompt" required rows="7"></textarea></label>
+        <fieldset class="checks">
+          <legend>Инструменты</legend>
+          <div id="agent-tools"></div>
+        </fieldset>
+        <fieldset class="checks">
+          <legend>Может обращаться к агентам</legend>
+          <label class="check"><input type="checkbox" id="agent-all-agents" />ко всем агентам команды, и к новым тоже</label>
+          <div id="agent-agents"></div>
+        </fieldset>
+        <fieldset class="checks">
+          <legend>Скиллы</legend>
+          <label class="check"><input type="checkbox" id="agent-all-skills" />все скиллы, и новые тоже</label>
+          <div id="agent-skills"></div>
+        </fieldset>
+        <p class="error" id="agent-error"></p>
+        <div class="dialog-actions">
+          <span></span>
+          <button type="button" id="agent-cancel">Отмена</button>
+          <button class="primary" type="submit">Сохранить</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="main-dialog">
+      <form method="dialog" id="main-form">
+        <h3>Основной агент</h3>
+        <p class="hint">Встроенный промпт не меняется: на нём держатся карточки, создание агентов и вики. Здесь — ваши правила поверх него, они действуют во всех сессиях со следующего ответа.</p>
+        <label>Дополнительные инструкции<textarea id="main-instructions" rows="8" maxlength="4000" placeholder="Например: отвечай короче; тест-кейсы всегда поручай тестировщику."></textarea></label>
+        <p class="error" id="main-error"></p>
+        <div class="dialog-actions">
+          <span></span>
+          <button type="button" id="main-cancel">Отмена</button>
           <button class="primary" type="submit">Сохранить</button>
         </div>
       </form>

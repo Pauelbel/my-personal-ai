@@ -12,10 +12,11 @@ log, delta, reasoning, tool_calls, tool_result, user_message, done.
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypedDict
 
@@ -41,6 +42,27 @@ MAX_CALLS_PER_ROUND = 4
 LOG_ARGUMENTS_CHARS = 160
 INTERRUPTED_SUFFIX = "\n\n_(ответ прерван)_"
 DECISIONS = {"approve", "reject", "reply"}
+# Сколько раз за ход модель просят сделать обещанное вызовом инструмента: дальше её ответ — итог хода.
+MAX_NUDGES = 3
+NUDGE = (
+    "Ты написал, что делаешь следующий шаг, но не вызвал инструмент — так ход закончится и работа встанет. "
+    "Сделай этот шаг сейчас вызовом инструмента. Если задача уже выполнена целиком — напиши итог; "
+    "если без ответа пользователя дальше нельзя — задай вопрос."
+)
+RUSSIAN_NUDGE = (
+    "Ты ответил не по-русски. Все агенты пишут только по-русски. Перепиши свой последний ответ по-русски целиком, "
+    "ничего не меняя по смыслу и не вызывая инструментов; код, команды, названия и цитаты оставь как есть."
+)
+NEXT_STEP_WORDS = {"сейчас", "теперь", "далее", "дальше", "следующий", "следующим", "затем", "потом", "приступаю"}
+# Вводные слова перед обещанием: «Для начала я перейду на сайт», «Итак, проверю корзину».
+LEAD_WORDS = {"для", "начала", "сначала", "итак", "хорошо", "отлично", "ок", "я", "и", "а", "так", "что", "ж", "теперь", "сейчас"}
+# Первое лицо, но не действие: ждёт пользователя, предлагает или подводит итог.
+NOT_ACTIONS = {
+    "жду", "могу", "предлагаю", "рекомендую", "надеюсь", "прошу", "благодарю", "хочу", "думаю", "считаю",
+    "вижу", "советую", "напомню", "готову", "остаюсь", "уточню", "подытожу", "резюмирую",
+    # Ждёт саб-агента: «Я сообщу, когда будет готово», «Вернусь с результатом».
+    "сообщу", "доложу", "отвечу", "вернусь", "дождусь", "подожду", "оповещу", "уведомлю",
+}
 # Чей ход сейчас выполняет инструмент: сессия, провайдер и модель. Нужно инструментам, которые сами зовут модель.
 # Место реестра возможностей в системном промпте, который хранится в состоянии хода.
 CATALOG_MARKER = "\u2063CAPABILITIES\u2063"
@@ -67,6 +89,8 @@ class TurnState(TypedDict, total=False):
     # Сводка для подвала ответа: время модели и инструментов без ожидания решений и токены всех раундов.
     spent: float
     output_tokens: int
+    # Сколько раз за ход модель подтолкнули сделать обещанное действие вызовом инструмента.
+    nudges: int
 
 
 @dataclass
@@ -87,14 +111,17 @@ def build_agent_graph(deps: GraphDeps, checkpointer=None):
     graph.add_node("approve", _approve(deps))
     graph.add_node("run_tools", _run_tools(deps))
     graph.add_edge(START, "call_model")
-    graph.add_conditional_edges("call_model", _route, ["approve", END])
+    graph.add_conditional_edges("call_model", _route, ["approve", "call_model", END])
     graph.add_edge("approve", "run_tools")
     graph.add_edge("run_tools", "call_model")
     return graph.compile(checkpointer=checkpointer)
 
 
 def _route(state: TurnState) -> str:
-    return END if state.get("answer") else "approve"
+    if state.get("answer"):
+        return END
+    # Последней стоит подсказка «сделай обещанное»: снова к модели, вызывать нечего.
+    return "call_model" if state["messages"][-1]["role"] == "user" else "approve"
 
 
 def _session(deps: GraphDeps, state: TurnState) -> Session:
@@ -172,9 +199,13 @@ def _call_model(deps: GraphDeps):
         totals = {"spent": state.get("spent", 0.0) + elapsed, "output_tokens": state.get("output_tokens", 0) + written}
         # Не «partial»: в нём могут быть рассуждения, пришедшие текстом, а result.content уже очищен от них.
         text = result.content or ""
+        if result.tool_calls and rounds >= max_rounds:
+            # Лимит раундов: инструменты в последнем запросе уже не предлагались, а модель всё равно их зовёт.
+            # Ход не обрывается ошибкой — заканчивается ответом, и работу можно продолжить следующим сообщением.
+            note = (f"Дошёл до лимита в {max_rounds} шагов с инструментами за один ход и остановился. "
+                    "Напишите «продолжай» — продолжу с этого места.")
+            result = replace(result, content=f"{text.strip()}\n\n{note}" if text.strip() else note, tool_calls=())
         if result.tool_calls:
-            if rounds >= max_rounds:
-                raise AgentRuntimeError("Модель превысила лимит раундов вызова инструментов")
             saved = await asyncio.to_thread(
                 deps.conversation.add_assistant_message, state["session_id"], text, result.tool_calls,
             )
@@ -186,6 +217,32 @@ def _call_model(deps: GraphDeps):
             return {"messages": [*state["messages"], assistant], "decisions": {}, "answer": None, **totals}
         if not result.content:
             raise AgentRuntimeError("Модель не вернула ответ")
+        nudges = state.get("nudges", 0)
+        if nudges < MAX_NUDGES and is_foreign(result.content) and not foreign_allowed(state["messages"]):
+            # Ответ ушёл в английский (обычно после английских страниц): в чат его не сохраняем,
+            # модель переписывает его по-русски — напечатанное сотрёт «retry».
+            write(log("Ответ не на русском — прошу переписать"))
+            write({"type": "retry"})
+            return {
+                "messages": [
+                    *state["messages"], {"role": "assistant", "content": result.content},
+                    {"role": "user", "content": RUSSIAN_NUDGE},
+                ],
+                "decisions": {}, "answer": None, "nudges": nudges + 1, **totals,
+            }
+        if rounds and offered and nudges < MAX_NUDGES and promises_action(result.content):
+            # Маленькая модель пишет «Перехожу в корзину.» и молчит: текст без вызова закончил бы ход,
+            # и пользователю пришлось бы писать «продолжай». Текст остаётся в чате, модель просим продолжить.
+            saved = await asyncio.to_thread(deps.conversation.add_assistant_message, state["session_id"], result.content)
+            write({"type": "tool_calls", "message": saved})
+            write(log("Модель пообещала действие без вызова инструмента — прошу продолжить"))
+            return {
+                "messages": [
+                    *state["messages"], {"role": "assistant", "content": result.content},
+                    {"role": "user", "content": NUDGE},
+                ],
+                "decisions": {}, "answer": None, "nudges": nudges + 1, **totals,
+            }
         generated_for = time.perf_counter() - (first_token_at or requested)
         speed = written / generated_for if written and generated_for > 0.05 else None
         count = result.input_tokens if isinstance(result.input_tokens, int) and result.input_tokens >= 0 else None
@@ -215,10 +272,15 @@ def _approve(deps: GraphDeps):
         session = _session(deps, state)
         box = deps.toolbox(session)
         decisions: dict[str, dict] = {}
+        trusted = set(session.trusted)
         for call in state["messages"][-1]["tool_calls"][:MAX_CALLS_PER_ROUND]:
             tool = box.get(call["name"])
             arguments = parse_arguments(call["arguments"])
             if tool is None or arguments is None or not tool.requires_approval:
+                continue
+            group = getattr(tool, "trust_group", None)
+            if group and group in trusted:
+                # Пользователь уже разрешил этой сессии все вызовы группы — карточка не нужна.
                 continue
             if problem := prepare_arguments(tool, arguments):
                 # Неполный вызов пользователю не показываем: модель сначала исправит его сама.
@@ -226,13 +288,18 @@ def _approve(deps: GraphDeps):
                 continue
             describe = getattr(tool, "approval_payload", None)
             payload = describe(arguments) if describe is not None else {"kind": "tool_call"}
-            decision = interrupt({
+            decision = normalize_decision(interrupt({
                 **payload,
                 "call": call,
                 "tool_name": tool.name,
                 "session_id": state["session_id"],
-            })
-            decisions[call["id"]] = normalize_decision(decision)
+                # Карточка предложит «утвердить все такие действия в сессии».
+                **({"trust_group": group} if group else {}),
+            }))
+            if decision.pop("trust", False) and group:
+                deps.sessions.trust(state["session_id"], group)
+                trusted.add(group)
+            decisions[call["id"]] = decision
         return {"decisions": decisions}
 
     return approve
@@ -295,6 +362,9 @@ async def _execute(box: Toolbox, call: dict, decision: dict, workspace: Path | N
     action = decision["action"]
     if action == "invalid":
         return ToolResult(f"Вызов не показан пользователю: {decision['text']}. Исправь и вызови снова.", is_error=True)
+    if getattr(tool, "takes_reply", False):
+        # Вопрос пользователю: его ответ — результат инструмента, а «отклонить» — значит «решай сам».
+        return tool.reply(decision, parse_arguments(call.get("arguments", "")) or {})
     if action == "reject":
         return ToolResult("Пользователь отклонил этот вызов", is_error=True)
     if action == "reply":
@@ -359,6 +429,49 @@ def describe_parameters(schema: dict) -> str:
     return "; ".join(parts) or "нет"
 
 
+def promises_action(text: str) -> bool:
+    """Ответ кончается обещанием действия («Заполняю данные.», «Теперь проверю корзину»), а не итогом или вопросом."""
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    if not lines:
+        return False
+    last = lines[-1].lstrip("#*->•0123456789.) ").rstrip("*_ ")
+    if not last or last.endswith("?"):
+        return False
+    if last.endswith(":"):
+        return True
+    words = re.findall(r"[а-яё]+", last.casefold())
+    if not words:
+        return False
+    if words[0] in NEXT_STEP_WORDS - LEAD_WORDS:
+        return True
+    lead = next((index for index, word in enumerate(words) if word not in LEAD_WORDS), len(words))
+    if lead == len(words) or len(words) > 16:
+        return False
+    if lead and words[0] in NEXT_STEP_WORDS:
+        return True
+    verb = words[lead]
+    # «Проверяю», «Перехожу», «Перейду», «Выполню»: глагол первого лица — сейчас или сразу следом, но не «жду» и «могу».
+    return verb.endswith(("ю", "у")) and len(verb) >= 4 and verb not in NOT_ACTIONS
+
+
+def is_foreign(text: str, minimum: int = 60) -> bool:
+    """Ответ в основном на латинице: код, ссылки и `идентификаторы` не считаются — это не язык ответа.
+    minimum — сколько латинских букв нужно, чтобы судить: в короткой реплике это «OK» или название."""
+    prose = re.sub(r"```.*?(```|$)|`[^`]*`|https?://\S+|\S+\.[a-z]{1,5}\b", " ", text, flags=re.S)
+    latin = len(re.findall(r"[A-Za-z]", prose))
+    cyrillic = len(re.findall(r"[А-Яа-яЁё]", prose))
+    return latin >= minimum and cyrillic < latin * 0.25
+
+
+def foreign_allowed(messages: list[dict]) -> bool:
+    """Пользователь сам пишет не по-русски или просил другой язык — тогда ответ на нём законен."""
+    asked = [item.get("content") or "" for item in messages if item["role"] == "user"]
+    asked = [text for text in asked if text not in (NUDGE, RUSSIAN_NUDGE)]
+    if any(re.search(r"английск|по-англ|in english|на другом языке|по-немец|по-француз|translate", text, re.I) for text in asked):
+        return True
+    return bool(asked) and is_foreign(asked[-1], minimum=20)
+
+
 def normalize_decision(value: object) -> dict:
     """Решение из UI: approve, reject или reply с текстом; всё непонятное считается отказом."""
     if isinstance(value, bool):
@@ -371,6 +484,12 @@ def normalize_decision(value: object) -> dict:
         # Карточка со списком (правки вики после lint): номера пунктов, которые пользователь отметил.
         if value["action"] == "approve" and isinstance(value.get("selected"), list):
             decision["selected"] = [item for item in value["selected"] if isinstance(item, int) and not isinstance(item, bool)]
+        # Выбор в карточке-вопросе («Кто сделает»: id агента или main) — вместе с подписью кнопки.
+        if value["action"] == "reply" and isinstance(value.get("choice"), str):
+            decision["choice"] = value["choice"]
+        # «Утвердить все такие действия в сессии»: это вызов и дальше вся его группа без карточек.
+        if value["action"] == "approve" and value.get("trust") is True:
+            decision["trust"] = True
         return decision
     return {"action": "reject", "text": ""}
 

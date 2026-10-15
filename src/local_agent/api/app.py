@@ -10,13 +10,15 @@ from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from local_agent.agent.loader import load_agents, load_skills, warn_unknown_references
-from local_agent.agent.main_agent import MAIN_AGENT_ID
+from local_agent.agent.main_agent import MAIN_AGENT_ID, MainInstructions
 from local_agent.agent.models import Agent
 from local_agent.agent.registry import AgentRegistry, SkillRegistry
 from local_agent.agent.runtime import AgentRuntime, RuntimeLimits
 from local_agent.agent.summary import ConversationSummarizer
+from local_agent.agent.team import reachable
 from local_agent.agent.turn_hub import TurnHub
 from local_agent.api.middleware import LocalOriginMiddleware, RequestLoggingMiddleware
+from local_agent.api.routes.agents import router as agents_router
 from local_agent.api.routes.attachments import router as attachments_router
 from local_agent.api.routes.attention import router as attention_router
 from local_agent.api.routes.capabilities import router as capabilities_router
@@ -28,6 +30,9 @@ from local_agent.api.routes.memory import router as memory_router
 from local_agent.api.routes.messages import router as messages_router
 from local_agent.api.routes.models import router as models_router
 from local_agent.api.routes.projects import router as projects_router
+from local_agent.api.routes.providers import apply_default
+from local_agent.api.routes.providers import build as build_stored_provider
+from local_agent.api.routes.providers import router as providers_router
 from local_agent.api.routes.sessions import router as sessions_router
 from local_agent.api.routes.team import links_router
 from local_agent.api.routes.team import router as team_router
@@ -37,6 +42,8 @@ from local_agent.capabilities.delegation import AskAgentTool, DelegateTool, Dele
 from local_agent.capabilities.extras import extra_factories
 from local_agent.capabilities.mcp import MCPManager
 from local_agent.capabilities.proposals import ArchiveTool, ProposeTool
+from local_agent.capabilities.requests import AskUserTool, RequestToolsTool
+from local_agent.capabilities.routing import ChooseRouteTool, HandoffTool
 from local_agent.capabilities.service import CapabilityPaths, CapabilityService
 from local_agent.capabilities.toolbox import Toolbox
 from local_agent.config.logging import configure_logging
@@ -45,6 +52,7 @@ from local_agent.events import EventBus
 from local_agent.llm.base import LLMProvider
 from local_agent.llm.openai_compatible import OpenAICompatibleProvider
 from local_agent.llm.registry import LLMRegistry
+from local_agent.llm.store import ProviderStore
 from local_agent.memory.attachments import AttachmentStore
 from local_agent.memory.conversation import ConversationService
 from local_agent.memory.markdown import MarkdownMemoryStore
@@ -149,6 +157,13 @@ def create_app(
             )
             state.llm_registry = build_providers(active_settings, llm_provider)
             stack.push_async_callback(state.llm_registry.close)
+            # Провайдеры, добавленные в настройках интерфейса, — поверх заданных в .env.
+            state.provider_store = ProviderStore(active_settings.data_dir / "providers.json")
+            state.default_provider = "lm_studio"
+            stored = state.provider_store.load()
+            for entry in stored.providers:
+                state.llm_registry.set(entry.id, build_stored_provider(entry, active_settings.llm_timeout_seconds))
+            apply_default(state, stored.default_provider, stored.default_model)
             state.memory_service = MemoryService(
                 memory_store,
                 state.conversation_service,
@@ -196,6 +211,7 @@ def create_app(
                     response_reserve_tokens=active_settings.response_reserve_tokens,
                     memory_auto_update_messages=active_settings.memory_auto_update_messages,
                     wiki_context_messages=active_settings.wiki_context_messages,
+                    max_tool_rounds=active_settings.max_tool_rounds,
                 ),
                 checkpointer=checkpointer,
             )
@@ -206,6 +222,7 @@ def create_app(
                 state.agent_runtime, state.session_service, state.conversation_service, state.agent_registry,
                 max_parallel=active_settings.max_parallel_tasks,
                 provider=active_settings.subagent_provider, model=active_settings.subagent_model,
+                turns=state.turn_hub,
             )
             stack.push_async_callback(state.delegation.close)
 
@@ -223,9 +240,15 @@ def create_app(
                     tools: list[Tool] = [WikiSearchTool(state.wiki_service)]
                     if "wiki_read" not in agent.tools:
                         tools.append(WikiReadTool(state.wiki_service))
-                    # Связи на холсте: кого этот саб-агент может спросить посреди задачи.
-                    if targets := tuple(item for item in agent.agents if state.agent_registry.get(item)):
+                    # Команда: саб-агент может обратиться к любому агенту (или к тем, кем ограничен в файле).
+                    # В личном чате вне проектов обращаться некуда: разговоры агентов живут в сессиях проекта.
+                    if session.project_id and (targets := reachable(agent, state.agent_registry)):
                         tools.append(AskAgentTool(state.delegation, state.agent_registry, session, targets))
+                    if session.project_id:
+                        # Не получается или не хватает данных — спросить пользователя; не хватает инструмента — попросить.
+                        tools += [AskUserTool(agent.name), RequestToolsTool(state.capabilities, state.tool_registry, agent)]
+                    # Задачу не по профилю саб-агент не делает сам, а передаёт основному агенту.
+                    tools.append(HandoffTool(state.delegation, session))
                     return tools
                 tools = [
                     RememberTool(state.memory_service, session.id),
@@ -240,12 +263,19 @@ def create_app(
                     WikiProposeEditsTool(state.wiki_service),
                     _CatalogTool(ArchiveTool(state.capabilities)),
                 ]
-                if state.agent_registry.all():
-                    tools.append(DelegateTool(state.delegation, state.agent_registry, session))
+                # Поручение идёт в разговор агента внутри сессии проекта: в общем чате вне проектов поручать некуда.
+                if state.agent_registry.all() and session.project_id:
+                    tools += [
+                        DelegateTool(state.delegation, state.agent_registry, session),
+                        # Кто сделает — сам или саб-агент — решает пользователь, выбор запоминается в проекте.
+                        ChooseRouteTool(state.project_service, state.agent_registry, session),
+                    ]
                 return tools
 
             state.agent_runtime.core_tools.append(core_tools)
             state.agent_runtime.archive_lines = state.capabilities.archive_lines
+            state.main_instructions = MainInstructions(active_settings.data_dir / "main-instructions.md")
+            state.agent_runtime.main_instructions = state.main_instructions.read
             state.agent_runtime.attachment_path = state.attachments.path
             warn_unknown_references(
                 state.agent_registry.all(),
@@ -277,7 +307,7 @@ def create_app(
     for router in (
         health_router, sessions_router, projects_router, folders_router, files_router, messages_router, attachments_router,
         memory_router, models_router, turns_router, capabilities_router, attention_router, wiki_router, team_router,
-        events_router, links_router,
+        events_router, links_router, agents_router, providers_router,
     ):
         app.include_router(router, prefix="/api")
 

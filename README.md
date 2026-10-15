@@ -106,7 +106,7 @@ flowchart LR
 ```bash
 cp .env.example .env        # проверьте LLM_BASE_URL и DEFAULT_MODEL
 uv sync
-uv run uvicorn local_agent.main:app --host 127.0.0.1
+uv run local-agent           # уровень логов задаёт LOG_LEVEL в .env
 ```
 
 Откройте [127.0.0.1:8000](http://127.0.0.1:8000/). Аутентификации нет: запускайте только на `127.0.0.1`.

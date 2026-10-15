@@ -5,13 +5,13 @@ const STEP = 16;
 const KEEP_RIGHT = 240;
 
 // variables — CSS-переменные ширины; если их несколько (список и граф вики), pick() выбирает текущую.
-export function makeResizable(handle, { grid, variables, pick: variable = () => variables[0], min = 180 }) {
+export function makeResizable(handle, { grid, variables, pick: variable = () => variables[0], min = 180, max = Infinity }) {
   handle.setAttribute("role", "separator");
   handle.setAttribute("aria-orientation", "vertical");
   handle.tabIndex = 0;
   handle.title = "Потяните, чтобы изменить ширину; двойной щелчок — как было";
   const key = (name = variable()) => `width${name}`;
-  const clamp = (width) => Math.round(Math.min(Math.max(width, min), Math.max(grid.clientWidth - KEEP_RIGHT, min)));
+  const clamp = (width) => Math.round(Math.min(Math.max(width, min), max, Math.max(grid.clientWidth - KEEP_RIGHT, min)));
   const apply = (width) => {
     grid.style.setProperty(variable(), `${width}px`);
     remember(key(), String(width));

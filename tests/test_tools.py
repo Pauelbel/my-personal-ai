@@ -10,6 +10,24 @@ from local_agent.config.settings import Settings
 from local_agent.tools.filesystem import EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool
 
 
+def test_file_tools_drop_markdown_wrapping_from_path(tmp_path):
+    """Модель копирует путь из текста «(`test_results.md`)» вместе с кавычкой и скобкой — файл ложится как надо."""
+    root = tmp_path / "workspace"
+    (root / "docs (old)").mkdir(parents=True)
+
+    async def exercise():
+        tool = WriteFileTool(tmp_path / "memory")
+        assert not (await tool.execute({"path": "test_results.md`)", "content": "Итоги"}, root)).is_error
+        assert not (await tool.execute({"path": "(`docs (old)/README.md`),", "content": "Описание"}, root)).is_error
+        assert (await tool.execute({"path": "a`b.md", "content": "x"}, root)).is_error
+        read = await ReadFileTool().execute({"path": "`test_results.md`"}, root)
+        assert read.content == "Итоги"
+
+    asyncio.run(exercise())
+    assert sorted(path.name for path in root.rglob("*.md")) == ["README.md", "test_results.md"]
+    assert (root / "docs (old)" / "README.md").read_text(encoding="utf-8") == "Описание"
+
+
 def test_file_tools_stay_inside_workspace(tmp_path):
     root = tmp_path / "workspace"
     root.mkdir()

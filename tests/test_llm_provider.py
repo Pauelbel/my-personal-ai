@@ -221,3 +221,16 @@ def test_thinking_leaked_as_text_is_cut_from_answer() -> None:
     # Одни рассуждения без ответа и вызовов — как пустой ответ: граф повторит запрос.
     with pytest.raises(LLMEmptyResponse):
         asyncio.run(result(Leaking("План действий<channel|>  ")))
+
+
+def test_repetition_guard_catches_monotone_token_loop_but_not_tables():
+    from local_agent.llm.base import RepetitionGuard
+
+    # gemma4 иногда без конца пишет служебные токены канала в рассуждения: разных «слов» там одно.
+    stuck = RepetitionGuard()
+    assert any(stuck.looped("\n<|channel>thought") for _ in range(2000))
+
+    # Таблица: строка-разделитель одна, строки данных разные — это не цикл.
+    table = RepetitionGuard()
+    rows = ["| Поле | Значение |", "|" + "-" * 300 + "|"] + [f"| поле {index} | значение {index * 7} |" for index in range(400)]
+    assert not any(table.looped(row + "\n") for row in rows)

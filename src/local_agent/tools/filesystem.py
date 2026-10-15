@@ -23,9 +23,30 @@ def _workspace_root(workspace: Path) -> Path:
     return root
 
 
+# Обёртка из Markdown, которую модель тащит в путь из текста задачи: «(`test_results.md`)» → «test_results.md`)».
+WRAPPERS = "`'\"«»“”"
+
+
+def _clean(path: str) -> str:
+    """Срезает кавычки и непарные скобки по краям пути: файл «README.md`)» модели никогда не нужен."""
+    previous = None
+    while path != previous:
+        previous = path
+        path = path.strip().strip(WRAPPERS).rstrip(",;:")
+        # Скобка за кавычкой — обёртка «(`путь`)», лишняя скобка — хвост фразы; «docs (old)» не трогаем.
+        if path.endswith(")") and (path[-2:-1] in tuple(WRAPPERS) or path.count(")") > path.count("(")):
+            path = path[:-1]
+        if path.startswith("(") and (path[1:2] in tuple(WRAPPERS) or path.count("(") > path.count(")")):
+            path = path[1:]
+    return path
+
+
 def _relative(relative_path: object) -> Path:
-    if not isinstance(relative_path, str) or not relative_path.strip():
+    if not isinstance(relative_path, str) or not _clean(relative_path):
         raise ValueError("Укажите относительный путь")
+    relative_path = _clean(relative_path)
+    if "`" in relative_path:
+        raise ValueError("В пути не должно быть обратных кавычек")
     requested = Path(relative_path)
     # «C:/…» на Linux — обычный относительный путь, но модель так просит абсолютный путь Windows.
     if requested.is_absolute() or requested.drive or re.match(r"^[A-Za-z]:", relative_path):

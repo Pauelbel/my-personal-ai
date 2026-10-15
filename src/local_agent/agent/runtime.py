@@ -8,7 +8,7 @@
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
@@ -28,11 +28,13 @@ from local_agent.agent.errors import (
     SessionBusyError,
     SessionNotFoundError,
 )
-from local_agent.agent.main_agent import MAIN_AGENT_ID, main_agent
+from local_agent.agent.loader import MAX_TOOL_ROUNDS_LIMIT
+from local_agent.agent.main_agent import HANDOFF_RULE, LANGUAGE_REMINDER, LANGUAGE_RULE, MAIN_AGENT_ID, main_agent
 from local_agent.agent.models import Agent
 from local_agent.agent.project_instructions import load_project_instructions
 from local_agent.agent.registry import AgentRegistry, SkillRegistry
 from local_agent.agent.summary import ConversationSummarizer
+from local_agent.agent.team import team_prompt
 from local_agent.capabilities.toolbox import DEFAULT_ACTIVE_TOOLS, ActivateTool, Toolbox
 from local_agent.graph.agent_graph import CATALOG_MARKER, GraphDeps, build_agent_graph, from_chat, log
 from local_agent.llm.base import context_length
@@ -50,7 +52,6 @@ from local_agent.wiki.agent import wiki_agent
 logger = logging.getLogger(__name__)
 
 # activate занимает раунд, поэтому основному агенту лимит выше, чем раньше.
-MAX_TOOL_ROUNDS = 10
 
 __all__ = [
     "AgentRuntime", "AgentRuntimeError", "NothingPendingError", "RuntimeLimits",
@@ -66,6 +67,8 @@ class RuntimeLimits:
     memory_auto_update_messages: int
     # Сколько последних реплик пользователя (с ответами на них) помнит чат вики; всё раньше забывается.
     wiki_context_messages: int = 3
+    # Раундов вызова инструментов за ход, если у агента не задано своё.
+    max_tool_rounds: int = 40
 
 
 # Базовые инструменты, которые добавляют другие части приложения: память, вики, предложения, делегирование.
@@ -103,6 +106,8 @@ class AgentRuntime:
         self._background: dict[str, asyncio.Task] = {}
         self.core_tools: list[CoreTools] = []
         self.finished_hooks: list[FinishedHook] = []
+        # Дополнительные инструкции основного агента: читаются на каждом ходе, правка действует сразу.
+        self.main_instructions: Callable[[], str] = lambda: ""
         # Архив возможностей для реестра основного агента; задаёт приложение.
         self.archive_lines: Callable[[], list[str]] | None = None
         # Файл картинки из реплики по её имени (data/attachments); задаёт приложение.
@@ -114,15 +119,21 @@ class AgentRuntime:
     # ---------- агенты и инструменты ----------
 
     def agent_for(self, session: Session) -> Agent:
-        """Основная сессия всегда за основным агентом; дочерняя — за саб-агентом, которому поручили задачу."""
+        """Основная сессия и общий чат — за основным агентом; дочерняя и личный чат — за своим саб-агентом."""
         if session.kind == "wiki":
             return wiki_agent(session.provider)
-        if not session.parent_id:
-            return main_agent(session.provider)
+        if (not session.parent_id and session.kind != "agent") or (session.kind == "agent" and session.agent_id == MAIN_AGENT_ID):
+            return main_agent(session.provider, self.main_instructions())
         agent = self._agents.get(session.agent_id)
         if agent is None:
             raise AgentRuntimeError(f"Саб-агент «{session.agent_id}» не найден: возможно, он в архиве")
-        return agent
+        prompt = f"{agent.system_prompt}\n\n{LANGUAGE_RULE}\n{HANDOFF_RULE}"
+        # В сессии проекта саб-агент знает команду: кто руководит и к кому обратиться.
+        if session.project_id:
+            prompt += f"\n\n{team_prompt(agent, self._agents)}"
+        # Последние строки промпта маленькая модель помнит лучше всего: язык — ещё раз в самом конце.
+        prompt += f"\n\n{LANGUAGE_REMINDER}"
+        return replace(agent, system_prompt=prompt)
 
     def toolbox(self, session: Session) -> Toolbox:
         agent = self.agent_for(session)
@@ -189,8 +200,10 @@ class AgentRuntime:
             agents = self._agents.all()
             # Инструменты рядом с ролью: по ним видно, по силам ли агенту задача (браузер, файлы, поиск).
             parts.append(
-                "Саб-агенты — помощники с постоянной ролью, задачу поручают через delegate. Поручай, только если "
-                "задачу можно сделать его инструментами; иначе делай сам или предложи дать агенту нужное:\n"
+                "Саб-агенты — помощники с постоянной ролью, задачу поручают через delegate. Задачу по профилю агента "
+                "поручай ему, а не делай сам. Передавай её такой, какой её поставил пользователь (просят автотест — "
+                "поручи написать автотест, а не что-то другое). Если для неё агенту не хватает инструментов, не делай "
+                "его работу молча: скажи пользователю, чего не хватает, и предложи дать (propose с id агента):\n"
                 + "\n".join(
                     f"- {item.id} — {summary_line(item.description or item.name)} "
                     f"(инструменты: {', '.join(item.tools) if item.tools else 'нет'})"
@@ -198,6 +211,18 @@ class AgentRuntime:
                 )
                 if agents else "Саб-агентов пока нет."
             )
+            known = {item.id: item.name for item in agents}
+            routes = [
+                f"- {kind} → {'ты сам' if who == MAIN_AGENT_ID else f'{who} ({known[who]})'}"
+                for kind, who in (project.routes.items() if project is not None else ())
+                if who == MAIN_AGENT_ID or who in known
+            ]
+            if routes:
+                parts.append(
+                    "Маршруты проекта — пользователь выбрал, кто делает такие задачи; следуй им без вопроса. Тип сверяй "
+                    "по смыслу («UI-автотесты» и «автотесты» — один маршрут); не уверен — спроси через choose_route:\n"
+                    + "\n".join(routes)
+                )
         if not sub_agent and self.archive_lines is not None and (archived := self.archive_lines()):
             parts.append("В архиве (вернуть можно через archive с action restore, с утверждением пользователя):\n" + "\n".join(archived))
         return "\n\n".join(parts)
@@ -295,7 +320,7 @@ class AgentRuntime:
                 self._conversation.add_user_message, session.id, content, sender, attachments,
             )
         wiki = session.kind == "wiki"
-        if sender is None and not session.parent_id and not wiki:
+        if sender is None and not session.parent_id and session.kind == "chat":
             self._sessions.name_from_first_message(session.id, content or "Картинка", self._conversation.count(session.id))
         yield {"type": "user_message", "message": user_message}
 
@@ -311,7 +336,7 @@ class AgentRuntime:
             history = last_user_turns(history, self._limits.wiki_context_messages)
         # Саб-агент работает на основного агента, а не на пользователя, а вики — не про пользователя:
         # личная память в эти сессии не попадает.
-        memory_context = "" if session.parent_id or wiki else await asyncio.to_thread(self._memory.prompt_context, content)
+        memory_context = await asyncio.to_thread(self._memory.prompt_context, content) if _with_user(session) else ""
         summary = "" if wiki else session.summary
         project_context = await asyncio.to_thread(
             load_project_instructions, session.workspace, max_bytes=budget // 4,
@@ -344,7 +369,7 @@ class AgentRuntime:
         self._sessions.set_pending(session.id, thread, None)
         state = {
             "session_id": session.id, "request_id": request_id, "provider_id": provider_id, "model": model,
-            "window": window, "rounds": 0, "max_rounds": agent.max_tool_rounds or MAX_TOOL_ROUNDS,
+            "window": window, "rounds": 0, "max_rounds": agent.max_tool_rounds or self._limits.max_tool_rounds,
             "messages": [from_chat(message) for message in context.messages],
             "decisions": {}, "answer": None,
             "included": context.included_count, "history_count": self._conversation.count(session.id),
@@ -354,7 +379,8 @@ class AgentRuntime:
 
     async def _drive(self, session: Session, thread: str, payload: object) -> AsyncIterator[dict]:
         """Прогоняет граф до ответа или до interrupt и переводит его события в события UI."""
-        config = {"configurable": {"thread_id": thread}, "recursion_limit": 3 * MAX_TOOL_ROUNDS + 50}
+        # Узлов графа на раунд — три (модель, подтверждения, инструменты): запас под самый большой лимит раундов.
+        config = {"configurable": {"thread_id": thread}, "recursion_limit": 3 * MAX_TOOL_ROUNDS_LIMIT + 50}
         interrupted = None
         answer: Message | None = None
         try:
@@ -405,11 +431,11 @@ class AgentRuntime:
 
     def _after_turn(self, session: Session, model: str, included_count: int) -> None:
         # Чат вики забывает старое намеренно: резюме выпавших сообщений ему не нужно.
-        if session.kind == "chat" and self._conversation.count(session.id) > included_count:
+        if session.kind in {"chat", "agent"} and self._conversation.count(session.id) > included_count:
             self._spawn(f"summary:{session.id}", self._summarizer.update(session.id, included_count, model))
         threshold = self._limits.memory_auto_update_messages
         # Память — о пользователе: из переписки саб-агентов и служебной проверки вики её не пополняем.
-        if not session.parent_id and session.kind == "chat" and threshold and self._memory.pending_user_messages(session.id) >= threshold:
+        if _with_user(session) and threshold and self._memory.pending_user_messages(session.id) >= threshold:
             self._spawn(f"memory:{session.id}", self._update_memory(session.id))
 
     async def _update_memory(self, session_id: str) -> None:
@@ -446,3 +472,11 @@ def last_user_turns(history: list[Message], count: int) -> list[Message]:
     """Хвост истории с последних count реплик пользователя: всё, что раньше, модель не видит."""
     starts = [index for index, message in enumerate(history) if message.role == "user"]
     return history[starts[-count]:] if len(starts) > count else history
+
+
+def _with_user(session: Session) -> bool:
+    """Разговор пользователя с основным агентом — сессия проекта или общий чат: только в них нужна и пополняется
+    личная память. Саб-агенты работают на основного агента, а вики — не про пользователя."""
+    if session.parent_id:
+        return False
+    return session.kind == "chat" or (session.kind == "agent" and session.agent_id == MAIN_AGENT_ID)

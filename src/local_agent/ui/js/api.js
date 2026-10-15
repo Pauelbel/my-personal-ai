@@ -53,12 +53,14 @@ async function stream(path, body, signal, onEvent) {
 }
 
 export const api = {
-  // С дочерними сессиями саб-агентов: их разговоры открываются с холста и из полосы агентов.
+  // Со скрытыми сессиями: разговоры агентов в сессиях и личные чаты с ними открываются из сайдбара и с холста.
   sessions: () => request("/sessions?include_hidden=true"),
   session: (id) => request(`/sessions/${id}`),
   createSession: (projectId) => request("/sessions", json("POST", projectId ? { project_id: projectId } : {})),
   renameSession: (id, title) => request(`/sessions/${id}/title`, json("PUT", { title })),
   deleteSession: (id) => request(`/sessions/${id}`, { method: "DELETE" }),
+  // Пустую сессию убирает сервер и только если в ней правда ничего нет; иначе отвечает 409.
+  discardSession: (id) => request(`/sessions/${id}/discard`, { method: "POST" }),
   configure: (id, provider, model) => request(`/sessions/${id}/config`, json("PUT", { provider, model })),
   messages: (id) => request(`/sessions/${id}/messages`),
   send: (id, content, signal, onEvent, retry = false, attachments = []) =>
@@ -69,6 +71,20 @@ export const api = {
   link: (agentId, target) => request(`/agents/${encodeURIComponent(agentId)}/links/${encodeURIComponent(target)}`, { method: "PUT" }),
   unlink: (agentId, target) => request(`/agents/${encodeURIComponent(agentId)}/links/${encodeURIComponent(target)}`, { method: "DELETE" }),
   teamChat: (id, agentId) => request(`/sessions/${id}/team/${encodeURIComponent(agentId)}/chat`, { method: "POST" }),
+  // Убрать агента из сессии: его разговор в ней удаляется.
+  removeAgent: (id, agentId) => request(`/sessions/${id}/team/${encodeURIComponent(agentId)}`, { method: "DELETE" }),
+  clearSession: (id) => request(`/sessions/${id}/clear`, { method: "POST" }),
+
+  agents: () => request("/agents"),
+  // Справочник команды: все агенты и кто к кому может обращаться.
+  agentsTeam: () => request("/agents/team"),
+  // Переписка саб-агентов между собой в сессии — строки ленты команды в основном чате.
+  teamLog: (id) => request(`/sessions/${id}/team/log`),
+  saveMainInstructions: (text) => request("/agents/main/instructions", json("PUT", { text })),
+  createAgent: (fields) => request("/agents", json("POST", fields)),
+  updateAgent: (id, fields) => request(`/agents/${encodeURIComponent(id)}`, json("PUT", fields)),
+  // Личный чат с агентом вне проектов; модель — выбранная под полем ввода.
+  agentChat: (id, provider, model) => request(`/agents/${encodeURIComponent(id)}/chat`, json("POST", { provider, model })),
   resume: (id, decision, signal, onEvent) => stream(`/sessions/${id}/resume`, decision, signal, onEvent),
   // Ход идёт на сервере независимо от вкладки: к нему можно подключиться заново и остановить его.
   turn: (id) => request(`/sessions/${id}/turn`),
@@ -85,10 +101,17 @@ export const api = {
   saveFile: (projectId, path, content) => request(`/projects/${projectId}/files/content?${q({ path })}`, json("PUT", { content })),
   moveFile: (projectId, path, newPath) => request(`/projects/${projectId}/files/move?${q({ path })}`, json("POST", { new_path: newPath })),
   deleteFile: (projectId, path) => request(`/projects/${projectId}/files?${q({ path })}`, { method: "DELETE" }),
+  forgetRoute: (id, kind) => request(`/projects/${id}/routes?${q({ kind })}`, { method: "DELETE" }),
   deleteProject: (id) => request(`/projects/${id}`, { method: "DELETE" }),
   folders: (path) => request(`/folders${path ? `?${q({ path })}` : ""}`),
 
   providers: () => request("/providers"),
+  providerConfig: () => request("/providers/config"),
+  probeProvider: (fields) => request("/providers/probe", json("POST", fields)),
+  createProvider: (fields) => request("/providers", json("POST", fields)),
+  updateProvider: (id, fields) => request(`/providers/${id}`, json("PUT", fields)),
+  deleteProvider: (id) => request(`/providers/${id}`, { method: "DELETE" }),
+  setDefaultModel: (provider, model) => request("/providers/default", json("PUT", { provider, model })),
   models: (provider) => request(`/models?${q({ provider })}`),
 
   attention: (sessionId) => request(`/attention${sessionId ? `?${q({ session_id: sessionId })}` : ""}`),

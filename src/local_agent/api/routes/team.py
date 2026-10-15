@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter, HTTPException, Request
 
+from local_agent.agent.errors import SessionBusyError
+from local_agent.capabilities.delegation import DELEGATOR
 from local_agent.sessions.models import Session
 
 router = APIRouter(prefix="/sessions/{session_id}/team", tags=["team"])
@@ -40,11 +42,11 @@ def team(session_id: str, request: Request) -> dict:
     registered = {agent.id: agent for agent in state.agent_registry.all()}
     nodes = [{
         "id": "main", "name": "Основной агент", "description": "Говорит с вами и раздаёт задачи",
-        "session_id": owner.id, "status": _status(request, owner), "task": None, "tasks": 0, "archived": False,
+        "session_id": owner.id, "status": _status(request, owner), "task": None, "tasks": 0, "archived": False, "member": True,
     }]
     edges: dict[tuple[str, str], dict] = {}
     for agent_id in dict.fromkeys([*registered, *(child.agent_id for child in family)]):
-        own = sorted((child for child in family if child.agent_id == agent_id), key=lambda item: item.updated_at)
+        own = sorted((child for child in family if child.agent_id == agent_id and child.kind == "chat"), key=lambda item: item.updated_at)
         # Разговор с агентом открывается в его сессии у основной; вопросы от других агентов — только для статуса.
         direct = [child for child in own if child.parent_id == owner.id]
         latest = own[-1] if own else None
@@ -56,8 +58,12 @@ def team(session_id: str, request: Request) -> dict:
             "session_id": (direct[-1] if direct else latest).id if latest else None,
             "status": _status(request, latest) if latest else "idle",
             "task": (latest.task or {}).get("title") if latest else None,
+            # Кто поручил последнюю задачу: основной агент или другой саб-агент.
+            "from": (latest.task or {}).get("from_name") if latest else None,
             "tasks": sum(1 for child in own if child.task),
             "archived": agent is None,
+            # Участник сессии: у агента есть разговор прямо в ней, а не только ответы на вопросы других агентов.
+            "member": bool(direct),
         })
         for child in own:
             if not child.task:
@@ -82,6 +88,39 @@ def root_of(session: Session, by_id: dict[str, Session]) -> str:
     return session.parent_id or session.id
 
 
+@router.get("/log")
+def log(session_id: str, request: Request) -> list[dict]:
+    """Лента команды для основного чата: кто из саб-агентов кому что поручил или спросил и что ответил.
+    Поручения основного агента и их итоги и так видны в основном чате, здесь — переписка агентов между собой."""
+    state = request.app.state
+    owner = _owner(request, session_id)
+    names = {agent.id: agent.name for agent in state.agent_registry.all()}
+    events = []
+    for dialog in state.session_service.list():
+        if dialog.parent_id != owner.id or dialog.kind != "chat":
+            continue
+        agent = names.get(dialog.agent_id, (dialog.task or {}).get("agent_name", dialog.agent_id))
+        asker = None
+        for message in state.conversation_service.list(dialog.id):
+            if message.role == "user":
+                # Пишет другой агент (не основной и не пользователь) — это обращение агента к агенту.
+                asker = message.sender if message.sender and message.sender != DELEGATOR else None
+                if asker:
+                    events.append(_event(message, asker, agent, "ask", dialog.id))
+            elif asker and message.role == "assistant" and not message.tool_calls and message.content.strip():
+                events.append(_event(message, agent, asker, "answer", dialog.id))
+                asker = None
+    return sorted(events, key=lambda item: item["at"])
+
+
+
+def _event(message, sender: str, recipient: str, kind: str, dialog_id: str) -> dict:
+    return {
+        "at": message.created_at.isoformat(), "from": sender, "to": recipient, "kind": kind,
+        "text": message.content, "session_id": dialog_id,
+    }
+
+
 @router.post("/{agent_id}/chat", response_model=Session)
 def open_chat(session_id: str, agent_id: str, request: Request) -> Session:
     """Открыть разговор с саб-агентом: его последнюю сессию у этой основной или новую."""
@@ -90,6 +129,16 @@ def open_chat(session_id: str, agent_id: str, request: Request) -> Session:
         return request.app.state.delegation.chat(owner, agent_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/{agent_id}", status_code=204)
+def remove(session_id: str, agent_id: str, request: Request) -> None:
+    """Убрать агента из сессии: его разговор в ней удаляется."""
+    owner = _owner(request, session_id)
+    try:
+        request.app.state.delegation.remove(owner, agent_id)
+    except SessionBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 links_router = APIRouter(prefix="/agents/{agent_id}/links", tags=["team"])

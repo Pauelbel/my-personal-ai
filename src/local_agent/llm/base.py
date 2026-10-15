@@ -47,6 +47,9 @@ class RepetitionGuard:
 
     WINDOW = 200
     REPEATS = 5
+    # Однообразный хвост (меньше четырёх разных слов) — цикл, только если повторился много раз: так модель
+    # застревает на служебных токенах вроде «<|channel>thought», а не пишет одну линию из чёрточек в таблице.
+    MONOTONE_REPEATS = 20
     CHECK_EVERY = 400
     KEEP = 16_000
 
@@ -62,7 +65,8 @@ class RepetitionGuard:
         self._unchecked = 0
         tail = self._text[-self.WINDOW:]
         # Пробелы и переводы строк — шум: зацикленный текст повторяется с точностью до них.
-        return len(set(tail.split())) > 3 and self._text.count(tail) >= self.REPEATS
+        repeats = self.REPEATS if len(set(tail.split())) > 3 else self.MONOTONE_REPEATS
+        return self._text.count(tail) >= repeats
 
 
 async def stream_chat(

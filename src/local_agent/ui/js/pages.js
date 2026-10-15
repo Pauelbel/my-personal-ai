@@ -1,5 +1,6 @@
 // Страницы вне чата: вики, возможности агента, долговременная память.
 // Списки — деревья в стиле терминала (tree.js), возможности разложены по вкладкам.
+import { openAgentForm } from "./agents.js";
 import { api } from "./api.js";
 import { el, renderMarkdown } from "./chat.js";
 import { createGraph } from "./graph.js";
@@ -132,17 +133,23 @@ function tagChip(tag, toast, count = 0) {
   return chip;
 }
 
-// Недавние: открытые здесь заметки, затем недавно изменённые (сервер отдаёт их первыми).
+// Недавние: заметки по последнему касанию — открыли здесь или изменили (вы или агент), что позже.
+// Только что созданная заметка поэтому сразу наверху, а не за открытыми раньше.
 function recentPages() {
-  let opened = [];
+  const opened = openedAt();
+  const touched = (page) => Math.max(opened[page.path] ?? 0, Date.parse(page.updated_at) || 0);
+  return [...wikiPages].sort((a, b) => touched(b) - touched(a)).slice(0, RECENT_SHOWN);
+}
+
+// Когда заметки открывали здесь: { путь: время }. Старая запись — просто список путей, без времени.
+function openedAt() {
   try {
-    opened = JSON.parse(recall("wiki-recent")) ?? [];
+    const stored = JSON.parse(recall("wiki-opened"));
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) return stored;
   } catch {
     // Испорченная запись — просто без открытых.
   }
-  const byPath = new Map(wikiPages.map((page) => [page.path, page]));
-  const paths = [...(Array.isArray(opened) ? opened : []), ...byPath.keys()];
-  return [...new Set(paths)].filter((path) => byPath.has(path)).slice(0, RECENT_SHOWN).map((path) => byPath.get(path));
+  return {};
 }
 
 // Без поиска — «Недавние» и заметки по темам (главный тег — самый частый в вики из тегов заметки);
@@ -228,8 +235,8 @@ async function openWiki(path, toast, refreshList = true) {
     wikiCurrent = path;
     remember("wiki-page", path);
     if (path !== INDEX_PAGE) {
-      const opened = recentPages().map((item) => item.path).filter((item) => item !== path);
-      remember("wiki-recent", JSON.stringify([path, ...opened].slice(0, RECENT_SHOWN)));
+      const opened = Object.entries({ ...openedAt(), [path]: Date.now() }).sort((a, b) => b[1] - a[1]);
+      remember("wiki-opened", JSON.stringify(Object.fromEntries(opened.slice(0, RECENT_SHOWN))));
     }
     const reader = $("#wiki-page");
     reader.replaceChildren(el("p", "hint", `data/wiki/${path}`));
@@ -340,6 +347,7 @@ function renderCapabilities(toast) {
     agents: () => groups([["data/agents", data.agents]], (agent, lines, last) => capRow(agent.name, agent.description, [
       agent.tools.length ? agent.tools.join(", ") : "без инструментов",
     ], [
+      link("править", () => editAgent(agent.id, reload, toast)),
       link("промпт", () => showSource("agent", agent.id, toast)),
       link("в архив", () => archive("agent", agent.id, reload, toast)),
     ], lines, last), "Саб-агентов пока нет — агент предложит их для повторяющихся направлений."),
@@ -391,9 +399,11 @@ function capRow(name, description, badges, actions, lines, last) {
   });
 }
 
+// Кнопка действия, видная всегда; «в архив» при наведении красная — убирает возможность.
 function link(text, handler) {
   const button = rowAction(text, text, handler);
   button.classList.add("shown");
+  button.classList.toggle("danger", text === "в архив");
   return button;
 }
 
@@ -411,6 +421,16 @@ async function archive(kind, id, reload, toast) {
   try {
     await api.archive(kind, id);
     await reload();
+  } catch (error) {
+    toast(error);
+  }
+}
+
+// Форме нужен агент целиком (промпт и скиллы), а в обзоре возможностей — только строка списка.
+async function editAgent(id, reload, toast) {
+  try {
+    const agent = (await api.agents()).find((item) => item.id === id);
+    if (agent) await openAgentForm(agent, reload);
   } catch (error) {
     toast(error);
   }

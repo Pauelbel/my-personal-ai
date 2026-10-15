@@ -7,40 +7,177 @@ import { appendMarkdown } from "./markdown.js";
 const FLUSH_MS = 80;
 const STEP_ICON = { done: "✓", failed: "✕", pending: "◌" };
 // Длинный отчёт саб-агента в основном чате свёрнут; развёрнутые остаются такими после перерисовки.
-const REPORT_FOLD_CHARS = 700;
-const REPORT_FOLD_LINES = 12;
+const REPORT_FOLD_CHARS = 300;
+const REPORT_FOLD_LINES = 5;
 const unfolded = new Set();
 const folded = new Set();
 
-export function renderMessages(container, messages) {
+// greeting — заголовок и строка пустого разговора; по умолчанию здоровается основной агент.
+// Разговор идёт ходами: реплика пользователя (или отчёт саб-агента), под ней свёрнутый «ход работы» — инструменты
+// и промежуточные реплики модели, — видимые строки событий (кому поручено, кто что выбрал) и итоговый ответ.
+export function renderMessages(container, messages, greeting = ["Привет! Я Meepo.", "Расскажите, как вас зовут и чем займёмся."]) {
   container.replaceChildren();
   if (!messages.length) {
     const empty = el("div", "empty");
     const mascot = el("img");
     mascot.src = "/ui/assets/meepo-mascot.png";
     mascot.alt = "";
-    empty.append(mascot, el("strong", "", "Привет! Я Meepo."), "Расскажите, как вас зовут и чем займёмся.");
+    empty.append(mascot, el("strong", "", greeting[0]), greeting[1]);
     container.append(empty);
     return;
   }
   const results = new Map(messages.filter((item) => item.role === "tool").map((item) => [item.tool_call_id, item]));
-  // Вызовы инструментов подряд, даже из разных раундов, собираются в одну рамку.
-  let box = null;
-  const add = (node) => {
-    box = null;
-    container.append(node);
-  };
+  const all = turns(messages, results);
+  all.forEach((turn, index) => renderTurn(container, turn, results, index === all.length - 1));
+}
+
+// Имена агентов для строк «Поручено …»: в вызове инструмента — только id.
+let agentNames = new Map();
+export function setAgentNames(agents) {
+  agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
+}
+
+// Служебные вызовы основного агента — не в рамку инструментов, а строками событий.
+const EVENT_TOOLS = new Set(["delegate", "choose_route"]);
+const openedWork = new Map();
+
+// Ход начинается репликой пользователя или отчётом саб-агента. Ответ на карточку — часть того же хода:
+// ход стоял на вызове инструмента, и ответ сохраняется вместе с результатом вызова. Реплика после оборванного
+// хода (у вызова нет результата или он сильно раньше реплики) начинает новый ход.
+const REPLY_GAP_MS = 2000;
+
+function turns(messages, results) {
+  const list = [];
+  let turn = null;
+  let calls = [];
   for (const message of messages) {
     if (message.role === "tool") continue;
-    if (message.role === "user") {
-      add(message.sender ? reportNode(message) : userNode(message));
+    const reply = message.role === "user" && !message.sender && calls.some((call) => {
+      const result = results.get(call.id);
+      return result && Math.abs(Date.parse(result.created_at) - Date.parse(message.created_at)) <= REPLY_GAP_MS;
+    });
+    if (message.role === "user" && !reply) {
+      list.push(turn = { head: message, items: [] });
+      calls = [];
       continue;
     }
-    if (message.content?.trim()) add(assistantNode(message));
-    if (!message.tool_calls?.length) continue;
-    if (!box) container.append((box = new ToolBox()).node);
-    box.add(message, results);
+    if (!turn) list.push(turn = { head: null, items: [] });
+    turn.items.push(message);
+    if (message.role === "assistant") calls = message.tool_calls ?? [];
   }
+  return list;
+}
+
+function renderTurn(container, turn, results, last) {
+  if (turn.head) container.append(turn.head.sender ? reportNode(turn.head) : userNode(turn.head));
+  // Итог хода — последняя реплика модели без вызовов; если после неё снова вызовы, ход ещё идёт.
+  let final = null;
+  for (const item of [...turn.items].reverse()) {
+    if (item.role === "team") continue;
+    if (item.role === "assistant" && !item.tool_calls?.length && item.content?.trim()) final = item;
+    break;
+  }
+  const work = [];
+  const events = [];
+  const answered = new Set();
+  for (const [index, item] of turn.items.entries()) {
+    if (item === final) continue;
+    if (item.role === "team") {
+      events.push(teamNode(item));
+      continue;
+    }
+    if (item.role === "user") {
+      // Ответ на карточку: выбор исполнителя уже показан строкой «Кто сделает», остальные — своей строкой.
+      if (!answered.has(item)) events.push(replyLine(item));
+      continue;
+    }
+    if (item.content?.trim()) work.push({ note: item });
+    const calls = (item.tool_calls ?? []).filter((call) => !EVENT_TOOLS.has(call.name));
+    if (calls.length) work.push({ calls, message: item });
+    for (const call of item.tool_calls ?? []) {
+      if (call.name === "delegate" && results.has(call.id)) events.push(delegateLine(call, results.get(call.id)));
+      if (call.name === "choose_route" && results.has(call.id)) {
+        const reply = turn.items.slice(index + 1).find((next) => next.role === "user");
+        if (reply) answered.add(reply);
+        events.push(routeLine(call, reply));
+      }
+    }
+  }
+  if (work.length) container.append(workNode(work, results, !final && last));
+  container.append(...events);
+  if (final) container.append(assistantNode(final, last));
+}
+
+// «Ход работы» одной строкой: сколько шагов и сколько заняли. Идущий ход раскрыт, закончившийся свёрнут;
+// раскрытое пользователем остаётся раскрытым после перерисовки.
+function workNode(work, results, running) {
+  const key = (work[0].note ?? work[0].message).id;
+  const node = el("details", "work");
+  node.open = openedWork.get(key) ?? running;
+  node.addEventListener("toggle", () => openedWork.set(key, node.open));
+  const steps = work.reduce((sum, part) => sum + (part.calls?.length ?? 0), 0);
+  const times = work.flatMap((part) => [
+    Date.parse((part.note ?? part.message).created_at),
+    ...(part.calls ?? []).map((call) => results.get(call.id)).filter(Boolean).map((result) => Date.parse(result.created_at)),
+  ]).filter(Number.isFinite);
+  const span = times.length > 1 ? (Math.max(...times) - Math.min(...times)) / 1000 : null;
+  const head = el("summary", "work-head");
+  head.append(
+    el("span", "work-title", `◇ ход работы${steps ? ` · ${plural(steps, "шаг", "шага", "шагов")}` : ""}`),
+    el("span", "work-meta", [span != null && span >= 1 && duration(round(span)), running && "идёт"].filter(Boolean).join(" · ")),
+    el("span", "work-caret", "▾"),
+  );
+  const body = el("div", "work-body");
+  let box = null;
+  for (const part of work) {
+    if (part.note) {
+      box = null;
+      const note = el("div", "work-note text");
+      renderMarkdown(note, part.note.content);
+      body.append(note);
+      continue;
+    }
+    if (!box) body.append((box = new ToolBox()).node);
+    box.add(part.message, results, part.calls);
+  }
+  node.append(head, body);
+  return node;
+}
+
+// «→ Поручено Тестировщику: задача» — кому и что ушло; щелчок по строке показывает задачу целиком.
+function delegateLine(call, result) {
+  const args = parse(call.arguments);
+  const name = agentNames.get(args.agent) ?? args.agent ?? "агенту";
+  const task = String(args.task ?? "").replace(/\s+/g, " ").trim();
+  const line = el("div", `event-line${result.is_error ? " failed" : ""}`);
+  line.append(
+    el("span", "event-route", result.is_error ? `✕ Не удалось поручить: ${name}` : `→ Поручено: ${name}`),
+    el("span", "event-text", result.is_error ? result.content : task),
+  );
+  line.title = task;
+  return line;
+}
+
+function replyLine(message) {
+  const line = el("div", "event-line");
+  line.append(el("span", "event-route", "↳ Ваш ответ"), el("span", "event-text", message.content));
+  line.title = message.content;
+  return line;
+}
+
+// Выбор в карточке «Кто сделает»: что выбрал пользователь и что это запомнено для такого типа задач.
+function routeLine(call, reply) {
+  const args = parse(call.arguments);
+  const text = reply?.content ?? "";
+  const who = text.startsWith("Поручить: ") ? text.slice("Поручить: ".length)
+    : text === "Сделай сам" ? "Основной сам" : text ? `«${text}»` : "решает Основной";
+  const line = el("div", "event-line");
+  const remembered = (text.startsWith("Поручить: ") || text === "Сделай сам") && args.kind;
+  line.append(
+    el("span", "event-route", `◆ Кто сделает: ${who}`),
+    el("span", "event-text", remembered ? `ваш выбор, запомнен для «${String(args.kind).trim().toLowerCase()}»` : "ваш ответ"),
+  );
+  return line;
 }
 
 // Рамка вызовов инструментов: в заголовке на кромке — сколько вызовов, сколько заняли и за сколько запросов к модели.
@@ -67,14 +204,14 @@ class ToolBox {
     });
   }
 
-  add(message, results) {
+  add(message, results, calls = message.tool_calls) {
     // Шаги одного сообщения идут друг за другом: время шага — от конца предыдущего до его результата.
     let previous = Date.parse(message.created_at);
     this.first ??= previous;
     this.key ??= message.id;
     this.node.open = !folded.has(this.key);
     this.requests += 1;
-    for (const call of message.tool_calls) {
+    for (const call of calls) {
       const result = results.get(call.id);
       const finished = result && Date.parse(result.created_at);
       const seconds = finished && previous ? Math.max(finished - previous, 0) / 1000 : null;
@@ -289,20 +426,53 @@ function imagesNode(names) {
   return box;
 }
 
-function assistantNode(message) {
+// Подвал (время, токены, «Копировать») виден у последнего ответа, у остальных — при наведении.
+function assistantNode(message, last = true) {
   const node = el("article", "msg assistant");
   const body = el("div", "text");
   renderMarkdown(body, message.content);
-  node.append(body, footNode(message));
+  node.append(body, footNode(message, [], !last));
   return node;
 }
 
+// Строка ленты команды: саб-агент обратился к другому или ответил ему. Свёрнута до одной строки;
+// раскрытая — весь текст и ссылка на разговор того агента, где это было.
+const openedTeamLines = new Set();
+
+function teamNode(item) {
+  const key = `${item.session_id}:${item.at}`;
+  const node = el("details", `team-line ${item.kind}`);
+  node.open = openedTeamLines.has(key);
+  node.addEventListener("toggle", () => {
+    if (node.open) openedTeamLines.add(key);
+    else openedTeamLines.delete(key);
+  });
+  const summary = el("summary");
+  const preview = item.text.replace(/\s+/g, " ").trim();
+  summary.append(
+    el("span", "team-route", `◆ ${item.from} → ${item.to}${item.kind === "answer" ? " (ответ)" : ""}`),
+    el("span", "team-preview", preview.length > 140 ? `${preview.slice(0, 139)}…` : preview),
+  );
+  const body = el("div", "text");
+  renderMarkdown(body, item.text);
+  const open = el("button", "msg-action team-open", "Открыть разговор");
+  open.type = "button";
+  open.dataset.session = item.session_id;
+  node.append(summary, body, open);
+  return node;
+}
+
+// Отчёт саб-агента: заголовок рамки — кто и какая задача, текст — сам результат, длинный свёрнут.
+const REPORT_PREFIX = /^Результат задачи «([^\n]*)» от саб-агента [^\n]*:\n+/;
+
 function reportNode(message) {
   const node = el("article", "msg report");
+  const match = message.content.match(REPORT_PREFIX);
+  const text = match ? message.content.slice(match[0].length) : message.content;
   const body = el("div", "text");
-  renderMarkdown(body, message.content);
+  renderMarkdown(body, text);
   const extra = [];
-  if (message.content.length > REPORT_FOLD_CHARS || message.content.split("\n").length > REPORT_FOLD_LINES) {
+  if (text.length > REPORT_FOLD_CHARS || text.split("\n").length > REPORT_FOLD_LINES) {
     const fold = el("button", "msg-action fold");
     fold.type = "button";
     const sync = () => {
@@ -317,13 +487,18 @@ function reportNode(message) {
     sync();
     extra.push(fold);
   }
-  node.append(el("div", "from", `от ${message.sender}`), body, footNode(message, extra));
+  // Отчёт агента — в рамке, как вызовы инструментов: имя и задача на верхней кромке.
+  const head = el("div", "report-head");
+  const label = el("span", "", `◆ ${message.sender}${match ? ` · ${match[1]}` : ""}`);
+  if (match) label.title = match[1];
+  head.append(label);
+  node.append(head, body, footNode(message, extra));
   return node;
 }
 
 // Подвал ответа: сводка хода, если она сохранена, и копирование всего ответа в Markdown.
-function footNode(message, extra = []) {
-  const foot = el("div", `msg-foot${message.stats || extra.length ? "" : " bare"}`);
+function footNode(message, extra = [], quiet = false) {
+  const foot = el("div", `msg-foot${(message.stats || extra.length) && !quiet ? "" : " bare"}`);
   foot.append(...extra);
   if (message.stats) {
     const stats = el("span", "stats", statsText(message.stats));
