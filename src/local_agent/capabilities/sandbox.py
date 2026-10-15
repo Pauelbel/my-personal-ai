@@ -7,13 +7,14 @@
   рабочая папка смонтирована на запись только инструментам с подтверждением,
   сеть закрыта, если инструмент не заявил, что она ему нужна.
 Без bubblewrap остаются таймаут, лимиты и чистое окружение — об этом пишется в лог.
+На Windows нет ни bubblewrap, ни лимитов процесса (модуля resource): остаются таймаут, обрезанный вывод
+и чистое окружение.
 """
 
 import asyncio
 import json
 import logging
 import os
-import resource
 import shutil
 import sys
 import tempfile
@@ -21,6 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from local_agent.tools.base import ToolResult
+
+try:
+    import resource
+except ImportError:  # Windows: лимиты процесса задать нечем
+    resource = None
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +59,13 @@ async def run_script(script: Path, arguments: dict, workspace: Path | None, poli
             command = [*_bwrap_arguments(bwrap, script, cwd, Path(scratch), python, policy), *command]
         else:
             logger.warning("bubblewrap не найден: скрипт %s запускается без изоляции файловой системы и сети", script)
-        env = {
-            "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": scratch, "TMPDIR": scratch,
-            "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1",
-        }
+        env = _environment(scratch)
+        # preexec_fn и новая сессия процесса есть только в POSIX.
+        posix = {"preexec_fn": lambda: _limits(policy.timeout), "start_new_session": True} if resource else {}
         process = await asyncio.create_subprocess_exec(
             *command, cwd=cwd, env=env,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            preexec_fn=lambda: _limits(policy.timeout), start_new_session=True,
+            **posix,
         )
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -101,6 +106,18 @@ def _bwrap_arguments(bwrap: str, script: Path, cwd: Path, scratch: Path, python:
         if str(resolv).startswith("/run/") and resolv.exists():
             arguments += ["--ro-bind", str(resolv), str(resolv)]
     return [*arguments, "--chdir", str(cwd), "--"]
+
+
+def _environment(scratch: str) -> dict[str, str]:
+    """Чистое окружение без переменных пользователя (токенов, ключей)."""
+    common = {"PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"}
+    if os.name == "nt":
+        # Без SYSTEMROOT Python на Windows не стартует (нет криптопровайдера и сокетов).
+        system = {name: os.environ[name] for name in ("SYSTEMROOT", "WINDIR", "PATHEXT", "COMSPEC") if name in os.environ}
+        return {**system, "PATH": os.environ.get("PATH", ""), "TEMP": scratch, "TMP": scratch,
+                "USERPROFILE": scratch, **common}
+    return {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": scratch, "TMPDIR": scratch,
+            "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", **common}
 
 
 def _limits(timeout: int) -> None:
