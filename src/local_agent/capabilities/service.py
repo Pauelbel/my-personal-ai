@@ -5,6 +5,8 @@
 """
 
 
+import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -15,8 +17,15 @@ from local_agent.agent.models import Agent
 from local_agent.agent.registry import AgentRegistry, SkillRegistry
 from local_agent.capabilities import scripts
 from local_agent.capabilities.extras import ExtrasStore
+from local_agent.capabilities.pyenv import PythonEnv, requirement_name
+from local_agent.capabilities.secrets import PUBLIC_SUFFIXES, SecretStore
 from local_agent.tools.base import Tool, summary_line
 from local_agent.tools.registry import ToolRegistry
+
+# Готовые инструменты-скрипты (коннекторы): при первом запуске кладутся в data/tools, дальше они ваши —
+# их можно править, архивировать и удалять; удалённый не возвращается.
+BUNDLED_TOOLS = Path(__file__).resolve().parent.parent / "extras" / "tools"
+SEEDED_FILE = ".bundled"
 
 KINDS = ("tool", "skill", "agent")
 # Запись архива для готового дополнения, которое ещё не включали.
@@ -33,7 +42,8 @@ class CapabilityPaths:
 class CapabilityService:
     def __init__(
         self, tools: ToolRegistry, skills: SkillRegistry, agents: AgentRegistry, paths: CapabilityPaths,
-        extras: dict[str, tuple[str, Callable[[], Tool]]] | None = None,
+        extras: dict[str, tuple[str, Callable[[], Tool]]] | None = None, env: PythonEnv | None = None,
+        secrets: SecretStore | None = None,
     ) -> None:
         self.tools = tools
         self.skills = skills
@@ -42,13 +52,33 @@ class CapabilityService:
         # Готовые дополнения: id → (описание, фабрика); включённые помнит extras.json.
         self.extras = extras or {}
         self._extras_store = ExtrasStore(paths.tools / "extras.json")
+        # Общее окружение песочницы: в нём пакеты, которые пользователь разрешил поставить скриптам.
+        self.env = env
+        self.secrets = secrets
 
     def load(self) -> None:
         """Инструменты, созданные агентом, подхватываются с диска при старте."""
+        self._seed_bundled()
         for tool in scripts.load_script_tools(self.paths.tools):
-            self.tools.replace(tool)
+            self.tools.replace(self._bind(tool))
         for tool_id in self._extras_store.enabled() & set(self.extras):
             self.tools.replace(self.extras[tool_id][1]())
+
+    def _seed_bundled(self) -> None:
+        """Кладёт готовый инструмент в data/tools один раз: список уже положенных — в data/tools/.bundled."""
+        root = self.paths.tools
+        root.mkdir(parents=True, exist_ok=True)
+        marker = root / SEEDED_FILE
+        seeded = set(marker.read_text(encoding="utf-8").split()) if marker.exists() else set()
+        added = []
+        for folder in sorted(path for path in BUNDLED_TOOLS.iterdir() if path.is_dir()) if BUNDLED_TOOLS.is_dir() else []:
+            if folder.name in seeded:
+                continue
+            if not (root / folder.name).exists():
+                shutil.copytree(folder, root / folder.name, ignore=shutil.ignore_patterns("__pycache__"))
+            added.append(folder.name)
+        if added:
+            marker.write_text("\n".join(sorted(seeded | set(added))) + "\n", encoding="utf-8")
 
     # ---------- проверки ----------
 
@@ -73,8 +103,13 @@ class CapabilityService:
         return tool_id in self.extras
 
     def save_tool(self, tool_id: str, **fields) -> scripts.ScriptTool:
-        tool = scripts.write_script_tool(self.paths.tools, tool_id, **fields)
+        tool = self._bind(scripts.write_script_tool(self.paths.tools, tool_id, **fields))
         self.tools.replace(tool)
+        return tool
+
+    def _bind(self, tool: scripts.ScriptTool) -> scripts.ScriptTool:
+        tool.env = self.env
+        tool.secret_store = self.secrets
         return tool
 
     def save_skill(self, skill_id: str, name: str, description: str, instructions: str):
@@ -135,7 +170,7 @@ class CapabilityService:
             self.tools.replace(self.extras[tool_id][1]())
             return tool_id
         if kind == "tool":
-            tool = scripts.restore_script_tool(self.paths.tools, archive_id)
+            tool = self._bind(scripts.restore_script_tool(self.paths.tools, archive_id))
             self.tools.replace(tool)
             return tool.id
         if kind == "skill":
@@ -146,16 +181,82 @@ class CapabilityService:
         self.agents.replace(agent)
         return agent.id
 
+    def save_source(self, kind: str, item_id: str, files: dict[str, str]) -> None:
+        """Правка из окна просмотра: файлы сначала проверяются копией, на диск попадают, только если они рабочие."""
+        if kind == "tool":
+            self._save_tool_source(item_id, files)
+            return
+        if kind not in {"skill", "agent"} or not self.exists(kind, item_id):
+            raise FileNotFoundError("Возможность не найдена или встроена в приложение")
+        root = self.paths.skills if kind == "skill" else self.paths.agents
+        name = f"{item_id}.md"
+        if set(files) != {name}:
+            raise ValueError(f"Ожидается один файл {name}")
+        target = root / name
+        with tempfile.TemporaryDirectory(dir=root, prefix=".edit-") as scratch:
+            draft = Path(scratch) / name
+            draft.write_text(files[name], encoding="utf-8", newline="\n")
+            try:
+                if kind == "skill":
+                    parsed = loader._parse_skill(draft, item_id)
+                else:
+                    parsed = loader._parse_agent(draft)
+                    loader._check_agent(
+                        parsed, {tool.id for tool in self.tools.all()}, {skill.id for skill in self.skills.all()},
+                    )
+            except ValueError as exc:
+                raise ValueError(str(exc).replace(str(draft), str(target))) from None
+            draft.replace(target)
+        (self.skills if kind == "skill" else self.agents).replace(parsed)
+
+    def _save_tool_source(self, tool_id: str, files: dict[str, str]) -> None:
+        if not self.is_script_tool(tool_id):
+            raise FileNotFoundError("Править можно только инструмент, созданный агентом")
+        allowed = {"tool.md", "parameters.json", "script.py"}
+        if not files or not set(files) <= allowed:
+            raise ValueError(f"Файлы инструмента: {', '.join(sorted(allowed))}")
+        if "script.py" in files:
+            try:
+                compile(files["script.py"], "script.py", "exec")
+            except SyntaxError as exc:
+                raise ValueError(f"script.py, строка {exc.lineno}: {exc.msg}") from None
+        folder = self.paths.tools / tool_id
+        with tempfile.TemporaryDirectory(dir=self.paths.tools, prefix=".edit-") as scratch:
+            draft = Path(scratch) / tool_id
+            shutil.copytree(folder, draft)
+            for name, text in files.items():
+                (draft / name).write_text(text, encoding="utf-8", newline="\n")
+            try:
+                scripts.read_script_tool(draft, tool_id)
+            except (OSError, ValueError) as exc:
+                raise ValueError(str(exc).replace(str(draft), str(folder))) from None
+            for name in files:
+                (draft / name).replace(folder / name)
+        self.tools.replace(self._bind(scripts.read_script_tool(folder, tool_id)))
+
+    def purge(self, kind: str, archive_id: str) -> None:
+        """Окончательно удаляет запись архива: вернуть её будет нельзя."""
+        if kind == "tool" and archive_id.startswith(EXTRA_PREFIX):
+            raise ValueError("Дополнение встроено в приложение: его можно только оставить выключенным")
+        if not any(entry == archive_id for entry, _, _ in self._archive(kind)):
+            raise FileNotFoundError("Записи архива нет")
+        root = {"tool": self.paths.tools, "skill": self.paths.skills, "agent": self.paths.agents}[kind]
+        path = root / ".deleted" / archive_id
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
     # ---------- обзор для UI ----------
 
     def overview(self) -> dict:
         tools = [
             {
                 "id": tool.id, "name": tool.name, "description": summary_line(tool.description, 200),
-                "origin": "agent" if isinstance(tool, scripts.ScriptTool)
-                else "mcp" if getattr(tool, "server", None) else "extra" if self.is_extra(tool.id) else "builtin",
+                "origin": self._origin(tool),
                 "requires_approval": tool.requires_approval,
                 "path": str(tool.folder) if isinstance(tool, scripts.ScriptTool) else None,
+                **(self._connector(tool) if self._origin(tool) == "connector" else {}),
             }
             for tool in self.tools.all()
         ]
@@ -173,7 +274,55 @@ class CapabilityService:
             {"kind": kind, "archive_id": archive_id, "id": item_id, "name": name}
             for kind in KINDS for archive_id, item_id, name in self._archive(kind)
         ]
-        return {"tools": tools, "skills": skills, "agents": agents, "archive": archive}
+        packages = self.env.packages() if self.env else {}
+        users = {
+            name: [tool.id for tool in self.tools.all() if isinstance(tool, scripts.ScriptTool)
+                   and name in {requirement_name(spec) for spec in tool.requires}]
+            for name in packages
+        }
+        python = {
+            "path": str(self.env.path) if self.env else None,
+            "packages": [{"name": name, "version": version, "tools": users[name]} for name, version in packages.items()],
+        }
+        return {
+            "tools": tools, "skills": skills, "agents": agents, "archive": archive, "python": python,
+            "secrets": self.secret_overview(),
+        }
+
+    def _origin(self, tool: Tool) -> str:
+        if isinstance(tool, scripts.ScriptTool):
+            # Скрипт, которому нужны доступы (адрес, логин, токен), — коннектор: его настраивают формой.
+            return "connector" if tool.secrets else "agent"
+        return "mcp" if getattr(tool, "server", None) else "extra" if self.is_extra(tool.id) else "builtin"
+
+    def _connector(self, tool: scripts.ScriptTool) -> dict:
+        """Поля формы «настроить»: какие доступы нужны и заданы ли. Адрес и логин не тайна — их значения видны."""
+        stored = self.secrets.pick([name.removesuffix("?") for name in tool.secrets]) if self.secrets else {}
+        fields = []
+        for raw in tool.secrets:
+            name = raw.removesuffix("?")
+            field = {"name": name, "optional": raw.endswith("?"), "set": name in stored}
+            if name.endswith(PUBLIC_SUFFIXES + ("_VERIFY_SSL",)) and name in stored:
+                field["value"] = stored[name]
+            fields.append(field)
+        required = [field for field in fields if not field["optional"]]
+        return {
+            "fields": fields, "configured": all(field["set"] for field in required),
+            # Полное описание: в списке — первая фраза, в форме настройки — что коннектор умеет целиком.
+            "full_description": tool.description,
+            "about": tool.reason,
+            # Кнопка «Проверить подключение» — если скрипт понимает action check.
+            "checkable": 'action == "check"' in tool.script.read_text(encoding="utf-8"),
+        }
+
+    def secret_overview(self) -> list[dict]:
+        """Имена секретов без значений: какие заданы и каким инструментам нужны (в том числе ещё не заданные)."""
+        stored = set(self.secrets.names()) if self.secrets else set()
+        users: dict[str, list[str]] = {name: [] for name in stored}
+        for tool in self.tools.all():
+            for name in getattr(tool, "secrets", ()):
+                users.setdefault(name.removesuffix("?"), []).append(tool.id)
+        return [{"name": name, "set": name in stored, "tools": users[name]} for name in sorted(users)]
 
     def archive_lines(self) -> list[str]:
         """Архив одной строкой на элемент: агент может предложить вернуть нужное."""

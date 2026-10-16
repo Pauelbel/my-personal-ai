@@ -176,8 +176,12 @@ class SessionService:
             callback(session_id)
         return self._effective(self._repository.patch(session_id, {
             "summary": "", "summary_until_message_id": None, "pending_thread": None, "pending": None, "task": None,
+            "plan": [], "plan_request": None,
             "context_tokens": None, "context_window": None, "tokens_per_second": None, "updated_at": datetime.now(UTC),
         }))
+
+    def set_plan(self, session_id: str, plan: list[dict], request_id: str | None) -> None:
+        self._repository.patch(session_id, {"plan": plan, "plan_request": request_id})
 
     def set_usage(self, session_id: str, usage: dict[str, object]) -> None:
         self._repository.set_usage(session_id, usage)

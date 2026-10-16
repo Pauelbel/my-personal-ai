@@ -12,6 +12,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from local_agent.agent.loader import load_agents, load_skills, warn_unknown_references
 from local_agent.agent.main_agent import MAIN_AGENT_ID, MainInstructions
 from local_agent.agent.models import Agent
+from local_agent.agent.plan import PlanTool
 from local_agent.agent.registry import AgentRegistry, SkillRegistry
 from local_agent.agent.runtime import AgentRuntime, RuntimeLimits
 from local_agent.agent.summary import ConversationSummarizer
@@ -40,10 +41,13 @@ from local_agent.api.routes.turns import router as turns_router
 from local_agent.api.routes.wiki import router as wiki_router
 from local_agent.capabilities.delegation import AskAgentTool, DelegateTool, DelegationManager
 from local_agent.capabilities.extras import extra_factories
+from local_agent.capabilities.lessons import LearnTool
 from local_agent.capabilities.mcp import MCPManager
-from local_agent.capabilities.proposals import ArchiveTool, ProposeTool
+from local_agent.capabilities.proposals import ArchiveTool, InstallPackagesTool, ProposeTool
+from local_agent.capabilities.pyenv import PythonEnv
 from local_agent.capabilities.requests import AskUserTool, RequestToolsTool
 from local_agent.capabilities.routing import ChooseRouteTool, HandoffTool
+from local_agent.capabilities.secrets import SecretStore
 from local_agent.capabilities.service import CapabilityPaths, CapabilityService
 from local_agent.capabilities.toolbox import Toolbox
 from local_agent.config.logging import configure_logging
@@ -185,6 +189,7 @@ def create_app(
             )
             state.wiki_service.initialize()
 
+            state.secrets = SecretStore(data("secrets_path", "secrets.json"))
             state.tool_registry = ToolRegistry([
                 ListFilesTool(), ReadFileTool(), SearchFilesTool(),
                 WriteFileTool(active_settings.memory_path), EditFileTool(active_settings.memory_path),
@@ -197,6 +202,7 @@ def create_app(
                 state.tool_registry, state.skill_registry, state.agent_registry,
                 CapabilityPaths(data("tools_path", "tools"), active_settings.skills_path, active_settings.agents_path),
                 extras=extra_factories(state.llm_registry),
+                env=PythonEnv(data("sandbox_env_path", "sandbox-env")), secrets=state.secrets,
             )
             state.capabilities.load()
 
@@ -256,9 +262,14 @@ def create_app(
                         tools += [AskUserTool(agent.name), RequestToolsTool(state.capabilities, state.tool_registry, agent)]
                     # Задачу не по профилю саб-агент не делает сам, а передаёт основному агенту.
                     tools.append(HandoffTool(state.delegation, session))
+                    tools.append(PlanTool(state.session_service, session.id))
+                    # «Запомни, делай так впредь» — агент дописывает правило в свой промпт после подтверждения.
+                    if state.agent_registry.get(agent.id) is not None:
+                        tools.append(LearnTool(state.capabilities, agent))
                     return tools
                 tools = [
                     RememberTool(state.memory_service, session.id),
+                    PlanTool(state.session_service, session.id),
                     ProposeTool(state.capabilities),
                     _CatalogTool(MemorySearchTool(state.memory_service)),
                     _CatalogTool(WikiSearchTool(state.wiki_service)),
@@ -269,6 +280,7 @@ def create_app(
                     _CatalogTool(WikiLintTool(state.wiki_service)),
                     WikiProposeEditsTool(state.wiki_service),
                     _CatalogTool(ArchiveTool(state.capabilities)),
+                    _CatalogTool(InstallPackagesTool(state.capabilities)),
                 ]
                 # Поручение идёт в разговор агента внутри сессии проекта: в общем чате вне проектов поручать некуда.
                 if state.agent_registry.all() and session.project_id:
@@ -281,6 +293,7 @@ def create_app(
 
             state.agent_runtime.core_tools.append(core_tools)
             state.agent_runtime.archive_lines = state.capabilities.archive_lines
+            state.agent_runtime.secret_names = state.secrets.names
             state.main_instructions = MainInstructions(active_settings.data_dir / "main-instructions.md")
             state.agent_runtime.main_instructions = state.main_instructions.read
             state.agent_runtime.attachment_path = state.attachments.path

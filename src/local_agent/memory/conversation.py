@@ -10,6 +10,9 @@ from local_agent.llm.models import ToolCall
 from local_agent.memory.base import ConversationStore
 from local_agent.memory.models import Message, MessageStats, StoredToolCall
 
+# Рассуждения длинной модели бывают огромными: в истории для показа хватит начала.
+MAX_REASONING_CHARS = 20_000
+
 
 class ConversationService:
     def __init__(
@@ -27,6 +30,7 @@ class ConversationService:
 
     def add_assistant_message(
         self, session_id: str, content: str, tool_calls: tuple[ToolCall, ...] = (), stats: MessageStats | None = None,
+        reasoning: str = "",
     ) -> Message:
         return self._add(
             session_id,
@@ -37,6 +41,7 @@ class ConversationService:
                 for call in tool_calls
             ],
             stats=stats,
+            reasoning=reasoning.strip()[:MAX_REASONING_CHARS] or None,
         )
 
     def add_tool_message(

@@ -12,7 +12,9 @@ from pathlib import Path
 from local_agent.agent.loader import AGENT_ID, SKILL_ID
 from local_agent.agent.main_agent import MAIN_AGENT_ID
 from local_agent.agent.models import Agent
-from local_agent.capabilities.scripts import TOOL_ID
+from local_agent.capabilities.pyenv import check_requirements
+from local_agent.capabilities.scripts import TOOL_ID, WHERE
+from local_agent.capabilities.secrets import check_secret_names
 from local_agent.capabilities.service import KINDS, CapabilityService
 from local_agent.tools.base import ToolResult
 
@@ -27,8 +29,9 @@ class ProposeTool:
     requires_approval = True
     description = (
         "Предложить пользователю новую возможность или доработку существующей: tool — Python-скрипт "
-        "(аргументы JSON-объектом в stdin, результат в stdout; только стандартная библиотека Python — ставить "
-        "пакеты нельзя, а схему или граф скрипт выводит текстом Mermaid), skill — инструкция под тип задач, "
+        "(аргументы JSON-объектом в stdin, результат в stdout; стандартная библиотека Python, а сторонние пакеты — "
+        "только перечисленные в requires: их ставит install_packages с согласия пользователя; схему или граф скрипт "
+        "выводит текстом Mermaid; токены и адреса — только из os.environ по именам из secrets, в код их не пиши), skill — инструкция под тип задач, "
         "agent — саб-агент с постоянной ролью. Чтобы доработать существующее, передай его id в name: "
         "предложение заменит его целиком, копию под новым именем не создавай. Пользователь увидит предложение "
         "целиком и утвердит, отклонит или ответит; при ответе доработай и предложи заново"
@@ -45,6 +48,10 @@ class ProposeTool:
             "parameters": {"type": "object", "description": "Только tool: JSON Schema аргументов (type: object)"},
             "requires_approval": {"type": "boolean", "description": "Только tool: true, если меняет файлы или систему"},
             "network": {"type": "boolean", "description": "Только tool: нужен ли доступ в интернет"},
+            "requires": {"type": "array", "items": {"type": "string"},
+                         "description": "Только tool: пакеты PyPI, которые импортирует скрипт, например [\"pypdf\"]"},
+            "secrets": {"type": "array", "items": {"type": "string"},
+                        "description": "Только tool: имена секретов (JIRA_TOKEN…), скрипт читает их из os.environ"},
             "tools": {"type": "array", "items": {"type": "string"},
                       "description": "Только agent: id инструментов; при доработке без поля остаются прежние"},
             "skills": {"type": "array", "items": {"type": "string"},
@@ -78,6 +85,10 @@ class ProposeTool:
                 compile(arguments["content"], "script.py", "exec")
             except SyntaxError as exc:
                 return f"ошибка синтаксиса в коде, строка {exc.lineno}: {exc.msg}"
+            if arguments.get("requires") and (problem := check_requirements(arguments["requires"])):
+                return f"requires: {problem}"
+            if arguments.get("secrets") and (problem := check_secret_names(arguments["secrets"])):
+                return f"secrets: {problem}"
             schema = arguments.get("parameters") or EMPTY_SCHEMA
             if not isinstance(schema, dict) or schema.get("type") != "object":
                 return "parameters — JSON Schema с type: object"
@@ -105,7 +116,15 @@ class ProposeTool:
                 "parameters": arguments.get("parameters") or EMPTY_SCHEMA,
                 "requires_approval": bool(arguments.get("requires_approval", True)),
                 "network": bool(arguments.get("network", False)),
+                "requires": _strings(arguments.get("requires")),
+                "secrets": _strings(arguments.get("secrets")),
             }
+            if self._capabilities.secrets and proposal["secrets"]:
+                stored = set(self._capabilities.secrets.names())
+                proposal["missing_secrets"] = [name for name in proposal["secrets"] if name not in stored]
+            if self._capabilities.env and proposal["requires"]:
+                # Карточка сразу говорит, каких пакетов ещё нет: их поставят отдельным подтверждением.
+                proposal["missing"] = self._capabilities.env.missing(proposal["requires"])
         if kind == "agent":
             current = self._capabilities.agents.get(item_id)
             proposal |= {
@@ -143,8 +162,13 @@ class ProposeTool:
                 item_id, name=proposal["title"], description=proposal["description"], reason=proposal["reason"],
                 parameters=proposal["parameters"], code=proposal["content"],
                 requires_approval=proposal["requires_approval"], network=proposal["network"],
+                requires=proposal["requires"], secrets=proposal["secrets"],
             )
-            return (f"Инструмент {tool.id} создан ({tool.folder}). Он уже в реестре: подключи через activate "
+            missing = self._capabilities.env.missing(list(tool.requires)) if self._capabilities.env else []
+            install = f" Сначала попроси установить пакеты: install_packages {missing}." if missing else ""
+            if absent := proposal.get("missing_secrets"):
+                install += f" Попроси пользователя заполнить доступы ({', '.join(absent)}): {WHERE.replace('настроить', f'{tool.id} → настроить')}."
+            return (f"Инструмент {tool.id} создан ({tool.folder}).{install} Он уже в реестре: подключи через activate "
                     "и проверь на деле.")
         if kind == "skill":
             skill = self._capabilities.save_skill(item_id, proposal["title"], proposal["description"], proposal["content"])
@@ -255,3 +279,43 @@ def _repair(arguments: dict[str, object]) -> None:
 def _strings(value: object) -> list[str]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()] if isinstance(value, list) else []
 
+
+
+class InstallPackagesTool:
+    """Ставит пакеты PyPI в общее окружение песочницы, где их видят скрипты инструментов. Каждый раз — с подтверждением."""
+
+    id = "install_packages"
+    name = "Установка Python-пакетов"
+    requires_approval = True
+    description = (
+        "Установить пакеты PyPI (например pypdf для PDF, openpyxl для xlsx) в общее окружение песочницы, "
+        "чтобы скрипты инструментов могли их импортировать. Пользователь подтверждает каждую установку. "
+        "XML, JSON, CSV и zip разбирает стандартная библиотека — для них пакеты не нужны"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "packages": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                         "description": "Имена пакетов PyPI, можно с версией: pypdf, lxml>=5"},
+            "reason": {"type": "string", "description": "Зачем: какому инструменту или задаче нужны"},
+        },
+        "required": ["packages", "reason"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self, capabilities: CapabilityService) -> None:
+        self._capabilities = capabilities
+
+    def validate(self, arguments: dict[str, object]) -> str | None:
+        if self._capabilities.env is None:
+            return "окружение песочницы не настроено"
+        return check_requirements(arguments.get("packages"))
+
+    def approval_payload(self, arguments: dict[str, object]) -> dict:
+        packages = _strings(arguments.get("packages"))
+        return {"kind": "tool_call", "title": f"Установить в песочницу: {', '.join(packages)}"}
+
+    async def execute(self, arguments: dict[str, object], workspace: Path | None) -> ToolResult:
+        if problem := self.validate(arguments):
+            return ToolResult(problem, is_error=True)
+        return await self._capabilities.env.install(_strings(arguments["packages"]))

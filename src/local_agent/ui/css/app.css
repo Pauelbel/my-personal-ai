@@ -206,6 +206,8 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
    Фон под подписью на кромке — --frame-bg: тот же, что у контейнера рамки. */
 .messages { flex: 1; overflow: auto; padding: 20px var(--gutter) 8px; font: 14px/1.6 var(--mono); }
 .messages code, .messages pre { font-size: 13px; }
+/* Сообщения за пределами экрана не раскладываются и не рисуются: длинная лента не тормозит ввод. */
+.messages > * { content-visibility: auto; contain-intrinsic-size: auto 120px; }
 .msg { margin: 0 0 18px; }
 .msg.user { display: flex; justify-content: flex-end; }
 .msg.user .bubble {
@@ -335,11 +337,25 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 @media (hover: none) { .copy { opacity: 1; } }
 
 /* Печатающийся ответ */
-.streaming .status { display: flex; gap: 8px; align-items: center; margin: 6px 0 2px; font: 12px var(--mono); color: var(--muted); }
-.streaming .status::before { content: "◆"; color: var(--agent); animation: pulse 1s infinite alternate; }
-.trace { font-size: 12px; color: var(--muted); margin-top: 6px; }
-.trace summary { cursor: pointer; font-family: var(--mono); }
-.trace pre { white-space: pre-wrap; max-height: 200px; overflow: auto; margin: 4px 0; padding: 6px 10px; border-left: 2px solid var(--line); font-size: 12px; }
+/* Идущий ход — одна строка с колесом; раскрытая показывает рассуждения и лог вживую. */
+.live { margin: 0 0 8px; font: 12px var(--mono); color: var(--muted); }
+.live-head { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; list-style: none; }
+.live-head::-webkit-details-marker { display: none; }
+.live-head:hover { color: var(--fg); }
+.live:not([open]) .work-caret { transform: rotate(-90deg); }
+.spinner {
+  width: 11px; height: 11px; border-radius: 50%; flex: none;
+  border: 2px solid color-mix(in srgb, var(--agent) 25%, transparent); border-top-color: var(--agent);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+.live pre, .work-thought {
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; margin: 6px 0;
+  padding: 6px 10px; border-left: 2px solid var(--line); font: 12px/1.5 var(--mono); color: var(--muted);
+}
+.live-log { opacity: .8; }
+.live-log:empty { display: none; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: 2px; margin-top: 12vh; color: var(--muted); text-align: center; }
 .empty img { width: 112px; height: 112px; margin-bottom: 10px; filter: drop-shadow(0 8px 18px var(--shadow)); }
 .empty strong { font-size: 22px; color: var(--fg); }
@@ -410,6 +426,7 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23888'/%3E%3C/svg%3E");
 }
 #model-select:hover { background-color: var(--surface-2); }
+#model-select:disabled { opacity: .5; cursor: default; }
 .mode { border: 0; background: transparent; padding: 0 4px; font: 600 12px var(--mono); color: var(--danger); white-space: nowrap; text-transform: uppercase; letter-spacing: .03em; }
 .mode::before { content: "· "; color: var(--muted); font-weight: 400; }
 .mode:hover:not(:disabled) { background: transparent; filter: brightness(1.2); }
@@ -574,6 +591,16 @@ button.trow-main:hover:not(:disabled) { background: transparent; }
 .subtabs button:hover:not(:disabled) { background: transparent; color: var(--fg); }
 .subtabs button[aria-pressed="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
 .subtabs .count { font: 11px var(--mono); color: var(--muted); }
+/* Форма «настроить» коннектора: что он даёт, поля доступа с подсказками, проверка подключения. */
+.connector-dialog { width: min(640px, calc(100vw - 32px)); }
+.connector-about p { margin: 0 0 6px; }
+.connector-name { font: 11px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.connector label.check { flex-wrap: wrap; }
+.connector label.check .connector-name { flex-basis: 100%; }
+.connector-set { color: var(--ok); font-weight: 600; }
+.connector-status { flex: 1; font-size: 12px; overflow-wrap: anywhere; }
+.connector-status.ok { color: var(--ok); }
+.connector-status.failed { color: var(--danger); }
 .list.tree-list { padding-right: 6px; overflow: auto; }
 
 /* Вики: слева чат вики со своим полем ввода, справа заметки */
@@ -711,8 +738,24 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 .folders-head { display: flex; gap: 8px; align-items: center; padding: 4px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .folders ul { list-style: none; margin: 0; padding: 4px; }
 .folders li button { width: 100%; text-align: left; border-color: transparent; background: transparent; padding: 2px 6px; }
-#source-dialog { width: min(900px, calc(100vw - 32px)); }
-#source-files pre { max-height: 50vh; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; }
+/* Окно файлов возможности целиком на экране: прокручиваются только сами файлы, и только по вертикали. */
+#source-dialog { width: min(1200px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; overflow: hidden; }
+#source-dialog .source { max-height: calc(100vh - 34px); padding: 16px; box-sizing: border-box; }
+#source-path { margin: 0; font: 12px var(--mono); overflow-wrap: anywhere; }
+#source-files { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 6px; }
+#source-files h4 { margin: 6px 0 0; font: 600 12px var(--mono); color: var(--muted); }
+/* Поля не сжимаются под высоту окна: каждое — во весь свой текст, прокручивается список файлов. */
+#source-files > * { flex: none; }
+.source-editor {
+  width: 100%; box-sizing: border-box; min-height: 120px; resize: vertical; overflow: hidden;
+  white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(--mono);
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px;
+}
+#source-status { overflow-wrap: anywhere; }
+/* Просмотр: поле ровно по тексту и чуть мельче — длинный промпт помещается целиком без прокрутки. */
+.source-editor:read-only { color: var(--muted); min-height: 0; resize: none; font-size: 12px; line-height: 1.45; padding: 8px 10px; }
+/* Основной агент в списке агентов — выделен: он руководитель, остальные ниже. */
+.main-agent .trow-label { font-weight: 600; color: var(--accent); }
 .toast {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 30; max-width: min(560px, calc(100vw - 32px));
   background: var(--danger); color: var(--accent-fg); padding: 8px 14px; border-radius: var(--radius); box-shadow: 0 8px 24px var(--shadow);
@@ -747,7 +790,6 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 .team-node:hover { border-color: var(--accent); }
 .team-node.dragging { cursor: grabbing; z-index: 1; box-shadow: 0 10px 28px var(--shadow); }
 .team-node.current { outline: 2px solid var(--accent); outline-offset: 2px; }
-.team-node.archived { opacity: .55; }
 .team-node .node-head { display: flex; align-items: center; gap: 6px; font-weight: 600; }
 .team-node .node-state { font: 12px var(--mono); color: var(--muted); }
 .team-node .node-task { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

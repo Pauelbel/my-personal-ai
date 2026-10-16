@@ -1,5 +1,8 @@
 // Разделители панелей: потяните — меняется ширина колонки слева от разделителя, двойной щелчок — ширина по умолчанию.
 // Ширина хранится в CSS-переменной на контейнере сетки и запоминается в браузере; стрелки двигают разделитель с клавиатуры.
+
+import { forget, recall, remember } from "./util.js";
+
 const STEP = 16;
 // Колонке справа всегда оставляем место, чтобы её нельзя было сжать в ноль.
 const KEEP_RIGHT = 240;
@@ -54,14 +57,3 @@ export function makeResizable(handle, { grid, variables, pick: variable = () => 
   }
 }
 
-function remember(key, value) {
-  try { localStorage.setItem(key, value); } catch { /* без хранилища просто не запомним */ }
-}
-
-function forget(key) {
-  try { localStorage.removeItem(key); } catch { /* нечего забывать */ }
-}
-
-function recall(key) {
-  try { return localStorage.getItem(key); } catch { return null; }
-}

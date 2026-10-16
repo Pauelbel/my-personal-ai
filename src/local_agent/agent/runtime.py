@@ -110,6 +110,8 @@ class AgentRuntime:
         self.main_instructions: Callable[[], str] = lambda: ""
         # Архив возможностей для реестра основного агента; задаёт приложение.
         self.archive_lines: Callable[[], list[str]] | None = None
+        # Имена секретов (без значений): основной агент указывает их в secrets, когда предлагает инструмент.
+        self.secret_names: Callable[[], list[str]] | None = None
         # Файл картинки из реплики по её имени (data/attachments); задаёт приложение.
         self.attachment_path: Callable[[str], Path | None] = lambda name: None
         self._graph = build_agent_graph(
@@ -223,6 +225,11 @@ class AgentRuntime:
                     "по смыслу («UI-автотесты» и «автотесты» — один маршрут); не уверен — спроси через choose_route:\n"
                     + "\n".join(routes)
                 )
+        if not sub_agent and self.secret_names is not None and (names := self.secret_names()):
+            parts.append(
+                "Доступы, которые пользователь уже задал (значения скрыты; скрипт инструмента получает их из os.environ, если перечислить "
+                f"в secrets при propose): {', '.join(names)}"
+            )
         if not sub_agent and self.archive_lines is not None and (archived := self.archive_lines()):
             parts.append("В архиве (вернуть можно через archive с action restore, с утверждением пользователя):\n" + "\n".join(archived))
         return "\n\n".join(parts)
@@ -369,7 +376,7 @@ class AgentRuntime:
         self._sessions.set_pending(session.id, thread, None)
         state = {
             "session_id": session.id, "request_id": request_id, "provider_id": provider_id, "model": model,
-            "window": window, "rounds": 0, "max_rounds": agent.max_tool_rounds or self._limits.max_tool_rounds,
+            "window": window, "budget": budget, "rounds": 0, "max_rounds": agent.max_tool_rounds or self._limits.max_tool_rounds,
             "messages": [from_chat(message) for message in context.messages],
             "decisions": {}, "answer": None,
             "included": context.included_count, "history_count": self._conversation.count(session.id),

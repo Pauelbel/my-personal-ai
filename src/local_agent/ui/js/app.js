@@ -1,5 +1,6 @@
 // Точка входа интерфейса: агенты, проекты и сессии, чат со стримингом, карточки решений, задачи саб-агентов, разделы.
 import { initial, tone } from "./marks.js";
+import { fitInput, plural, recall, remember } from "./util.js";
 import { api } from "./api.js";
 import { imageInput } from "./attach.js";
 import { StreamingMessage, el, parse, renderMessages, scrollDown, setAgentNames } from "./chat.js";
@@ -80,14 +81,6 @@ function toast(error) {
 
 const current = () => state.sessions.find((session) => session.id === state.current) || null;
 const projectOf = (session) => state.projects.find((project) => project.id === session?.project_id) ?? null;
-
-function remember(key, value) {
-  try { localStorage.setItem(key, value); } catch { /* без хранилища просто не запомним */ }
-}
-
-function recall(key) {
-  try { return localStorage.getItem(key); } catch { return null; }
-}
 
 function recallJson(key, fallback) {
   try { return JSON.parse(recall(key)) ?? fallback; } catch { return fallback; }
@@ -305,7 +298,8 @@ function projectNode(item) {
     title: `${item.workspace}\nДвойной щелчок — переименовать`,
     // Только число сессий у свёрнутого проекта: место — под название, папка видна в подсказке.
     note: !item.open && item.sessions.length ? String(item.sessions.length) : "",
-    onClick: () => toggleProject(item.id),
+    // В проекте без сессий сворачивать нечего: щелчок открывает чат с основным агентом и файлы проекта.
+    onClick: () => (item.sessions.length ? toggleProject(item.id) : void openEmptyProject(item.id)),
     extra: [
       rowAction("＋", "Новая сессия в проекте", () => newSession(item.id)),
       rowAction("⚙", "Настройки проекта", () => openProject(state.projects.find((project) => project.id === item.id))),
@@ -573,6 +567,11 @@ function renameProject(row, id) {
   });
 }
 
+async function openEmptyProject(id) {
+  if (state.collapsed.delete(id)) remember("collapsed-projects", JSON.stringify([...state.collapsed]));
+  await newSession(id);
+}
+
 function toggleProject(id) {
   if (state.collapsed.has(id)) state.collapsed.delete(id);
   else state.collapsed.add(id);
@@ -719,20 +718,24 @@ async function deleteProject() {
 
 async function loadModels() {
   const select = $("#model-select");
+  select.replaceChildren(new Option("Загрузка моделей…", ""));
+  select.disabled = true;
+  state.defaultModel = undefined;
   const options = [];
   try {
-    for (const provider of await api.providers()) {
-      try {
-        const list = await api.models(provider.id);
-        state.defaultModel ??= list.default_model || list.models[0];
-        for (const model of list.models) options.push([`${provider.id}${SEP}${model}`, model, provider.name]);
-      } catch {
-        // Сервер модели выключен: остальные провайдеры всё равно доступны.
-      }
+    const providers = await api.providers();
+    const results = await Promise.allSettled(providers.map((p) => api.models(p.id)));
+    for (let i = 0; i < providers.length; i++) {
+      const result = results[i];
+      if (result.status === "rejected") continue;
+      const list = result.value;
+      state.defaultModel ??= list.default_model || list.models[0];
+      for (const model of list.models) options.push([`${providers[i].id}${SEP}${model}`, model, providers[i].name]);
     }
   } catch (error) {
     toast(error);
   }
+  select.disabled = false;
   select.replaceChildren(...options.map(([value, model, provider]) => {
     const option = new Option(model, value);
     option.title = provider;
@@ -1114,12 +1117,6 @@ function renderAttention() {
   }
 }
 
-function plural(count, one, few, many) {
-  const tens = count % 100;
-  const units = count % 10;
-  if (tens >= 11 && tens <= 14) return many;
-  return units === 1 ? one : units >= 2 && units <= 4 ? few : many;
-}
 
 // Текущий текст файла в проекте сессии карточки; null — файла нет или он прочитан не целиком.
 async function readCardFile(card, path) {
@@ -1339,9 +1336,7 @@ function cleanPath(path) {
 }
 
 function autosize() {
-  const input = $("#input");
-  input.style.height = "auto";
-  input.style.height = `${Math.min(input.scrollHeight, window.innerHeight * 0.4)}px`;
+  fitInput($("#input"));
 }
 
 // ---------- запуск ----------

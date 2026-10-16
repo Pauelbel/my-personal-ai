@@ -120,7 +120,13 @@ export const api = {
   capabilitySource: (kind, id) => request(`/capabilities/${kind}/${encodeURIComponent(id)}`),
   archive: (kind, id) => request(`/capabilities/${kind}/${encodeURIComponent(id)}/archive`, { method: "POST" }),
   restore: (kind, archiveId) => request(`/capabilities/${kind}/restore/${encodeURIComponent(archiveId)}`, { method: "POST" }),
+  saveSource: (kind, id, files) => request(`/capabilities/${kind}/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ files }) }),
+  purge: (kind, archiveId) => request(`/capabilities/${kind}/archive/${encodeURIComponent(archiveId)}`, { method: "DELETE" }),
   reloadCapabilities: () => request("/capabilities/reload", { method: "POST" }),
+  setSecret: (name, value) => request(`/capabilities/secrets/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify({ value }) }),
+  deleteSecret: (name) => request(`/capabilities/secrets/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  checkConnector: (id) => request(`/capabilities/connectors/${encodeURIComponent(id)}/check`, { method: "POST" }),
+  uninstallPackage: (name) => request(`/capabilities/packages/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
   wiki: () => request("/wiki"),
   wikiSearch: (query) => request(`/wiki/search?${q({ q: query })}`),

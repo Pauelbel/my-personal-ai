@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 
 from local_agent.llm.base import LLMEmptyResponse, LLMProviderError, LLMProviderUnavailable
+from local_agent.llm.markup import ThinkingRouter, clean_reasoning, recover_tool_calls
 from local_agent.llm.models import ChatMessage, ChatResult, ReasoningDelta, ToolCall
 
 CONTEXT_CACHE_SECONDS = 60
@@ -66,6 +67,8 @@ class OpenAICompatibleProvider:
                 )
                 for item in message.get("tool_calls") or []
             )
+            if not calls and tools:
+                calls, content = _recover(tools, content or "", message.get("reasoning_content") or message.get("reasoning") or "")
             return self._result(content, calls, data.get("usage") or {})
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMProviderError(f"{self.name} вернул некорректный ответ модели") from exc
@@ -79,6 +82,9 @@ class OpenAICompatibleProvider:
         payload["stream_options"] = {"include_usage": True}
         payload.update(options or {})
         parts: list[str] = []
+        thoughts: list[str] = []
+        # Рассуждения, которые сервер не отделил и прислал в ответе (метки Gemma, <think>), уходят в рассуждения.
+        router = ThinkingRouter()
         calls: dict[int, dict[str, str]] = {}
         usage: dict = {}
         try:
@@ -99,10 +105,12 @@ class OpenAICompatibleProvider:
                         # LM Studio отдаёт рассуждения в reasoning_content, Ollama и OpenRouter — в reasoning.
                         reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                         if isinstance(reasoning, str) and reasoning:
-                            yield ReasoningDelta(reasoning)
+                            thoughts.append(reasoning)
+                            if shown := clean_reasoning(reasoning):
+                                yield ReasoningDelta(shown)
                         if text := delta.get("content"):
-                            parts.append(text)
-                            yield text
+                            for item in self._route(router.feed(text), parts, thoughts):
+                                yield item
                         for item in delta.get("tool_calls") or []:
                             slot = calls.setdefault(item.get("index", 0), {"id": "", "name": "", "arguments": ""})
                             slot["id"] = item.get("id") or slot["id"]
@@ -117,14 +125,19 @@ class OpenAICompatibleProvider:
             ) from exc
         except (ValueError, TypeError, AttributeError) as exc:
             raise LLMProviderError(f"{self.name} вернул некорректный поток ответа") from exc
+        for item in self._route(router.flush(), parts, thoughts):
+            yield item
         tool_calls = tuple(
             ToolCall(id=slot["id"] or f"call-{index}", name=slot["name"], arguments=slot["arguments"] or "{}")
             for index, slot in sorted(calls.items())
         )
-        if not "".join(parts).strip() and not tool_calls:
+        content = "".join(parts)
+        if not tool_calls and tools:
+            tool_calls, content = _recover(tools, content, "".join(thoughts))
+        if not content.strip() and not tool_calls:
             raise LLMEmptyResponse(f"Модель на сервере «{self.name}» вернула пустой ответ")
         try:
-            yield self._result("".join(parts), tool_calls, usage)
+            yield self._result(content, tool_calls, usage)
         except ValueError as exc:
             raise LLMProviderError(f"{self.name} вернул некорректный ответ модели") from exc
 
@@ -207,6 +220,17 @@ class OpenAICompatibleProvider:
         return payload
 
     @staticmethod
+    def _route(pieces: list[tuple[bool, str]], parts: list[str], thoughts: list[str]):
+        for thinking, piece in pieces:
+            if thinking:
+                thoughts.append(piece)
+                if shown := clean_reasoning(piece):
+                    yield ReasoningDelta(shown)
+            else:
+                parts.append(piece)
+                yield piece
+
+    @staticmethod
     def _result(content: object, calls: tuple[ToolCall, ...], usage: dict) -> ChatResult:
         if (not isinstance(content, str) or not content.strip()) and not calls:
             raise ValueError("модель вернула пустой ответ")
@@ -260,3 +284,13 @@ class OpenAICompatibleProvider:
 def _data_url(path: Path) -> str:
     media = IMAGE_MEDIA.get(path.suffix.lower(), "image/png")
     return f"data:{media};base64,{base64.b64encode(path.read_bytes()).decode()}"
+
+
+def _recover(tools: list[dict[str, object]], content: str, reasoning: str) -> tuple[tuple[ToolCall, ...], str]:
+    """Сервер не вернул вызовов, а модель написала их текстом (Gemma в LM Studio — бывает, в рассуждениях)."""
+    known = {str(tool.get("function", {}).get("name")) for tool in tools if isinstance(tool, dict)}
+    calls, rest = recover_tool_calls(content, known)
+    if calls:
+        return calls, rest
+    calls, _ = recover_tool_calls(reasoning, known)
+    return calls, content

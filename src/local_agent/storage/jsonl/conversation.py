@@ -123,6 +123,8 @@ class JsonlConversationStore:
             data["stats"] = message.stats.model_dump(exclude_none=True)
         if message.attachments:
             data["attachments"] = message.attachments
+        if message.reasoning:
+            data["reasoning"] = message.reasoning
         return (json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
     @staticmethod

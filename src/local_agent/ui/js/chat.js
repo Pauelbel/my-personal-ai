@@ -3,6 +3,7 @@
 import { renderDiagrams } from "./diagrams.js";
 import { highlightCode } from "./highlight.js";
 import { appendMarkdown } from "./markdown.js";
+import { plural } from "./util.js";
 
 const FLUSH_MS = 80;
 const STEP_ICON = { done: "✓", failed: "✕", pending: "◌" };
@@ -91,6 +92,7 @@ function renderTurn(container, turn, results, last) {
       if (!answered.has(item)) events.push(replyLine(item));
       continue;
     }
+    if (item.reasoning) work.push({ thought: item });
     if (item.content?.trim()) work.push({ note: item });
     const calls = (item.tool_calls ?? []).filter((call) => !EVENT_TOOLS.has(call.name));
     if (calls.length) work.push({ calls, message: item });
@@ -103,33 +105,39 @@ function renderTurn(container, turn, results, last) {
       }
     }
   }
+  if (final?.reasoning) work.push({ thought: final });
   if (work.length) container.append(workNode(work, results, !final && last));
   container.append(...events);
   if (final) container.append(assistantNode(final, last));
 }
 
-// «Ход работы» одной строкой: сколько шагов и сколько заняли. Идущий ход раскрыт, закончившийся свёрнут;
+// «Ход работы» одной строкой: сколько шагов и сколько заняли. Свёрнут, пока его не раскроют;
 // раскрытое пользователем остаётся раскрытым после перерисовки.
 function workNode(work, results, running) {
-  const key = (work[0].note ?? work[0].message).id;
+  const key = (work[0].thought ?? work[0].note ?? work[0].message).id;
   const node = el("details", "work");
-  node.open = openedWork.get(key) ?? running;
+  node.open = openedWork.get(key) ?? false;
   node.addEventListener("toggle", () => openedWork.set(key, node.open));
   const steps = work.reduce((sum, part) => sum + (part.calls?.length ?? 0), 0);
   const times = work.flatMap((part) => [
-    Date.parse((part.note ?? part.message).created_at),
+    Date.parse((part.thought ?? part.note ?? part.message).created_at),
     ...(part.calls ?? []).map((call) => results.get(call.id)).filter(Boolean).map((result) => Date.parse(result.created_at)),
   ]).filter(Number.isFinite);
   const span = times.length > 1 ? (Math.max(...times) - Math.min(...times)) / 1000 : null;
   const head = el("summary", "work-head");
   head.append(
-    el("span", "work-title", `◇ ход работы${steps ? ` · ${plural(steps, "шаг", "шага", "шагов")}` : ""}`),
+    el("span", "work-title", steps ? `◇ ход работы · ${steps} ${plural(steps, "шаг", "шага", "шагов")}` : "◇ рассуждения"),
     el("span", "work-meta", [span != null && span >= 1 && duration(round(span)), running && "идёт"].filter(Boolean).join(" · ")),
     el("span", "work-caret", "▾"),
   );
   const body = el("div", "work-body");
   let box = null;
   for (const part of work) {
+    if (part.thought) {
+      box = null;
+      body.append(el("pre", "work-thought", part.thought.reasoning));
+      continue;
+    }
     if (part.note) {
       box = null;
       const note = el("div", "work-note text");
@@ -225,22 +233,28 @@ class ToolBox {
     this.title.textContent = `◇ инструменты · ${this.calls} `;
     this.title.append(el("span", "tools-caret", "▾"));
     const span = this.first && this.last ? (this.last - this.first) / 1000 : null;
-    this.meta.textContent = [span != null && duration(round(span)), plural(this.requests, "запрос", "запроса", "запросов")]
+    this.meta.textContent = [span != null && duration(round(span)), `${this.requests} ${plural(this.requests, "запрос", "запроса", "запросов")}`]
       .filter(Boolean).join(" · ");
   }
 }
+
+// Раскрыл пользователь строку хода — следующие ходы тоже показываются раскрытыми.
+let liveOpen = false;
 
 export class StreamingMessage {
   constructor(container) {
     this.container = container;
     this.node = el("article", "msg assistant streaming");
     this.textNode = el("div", "text");
-    this.status = el("div", "status");
-    this.trace = el("details", "trace");
-    this.trace.append(el("summary", "", "Ход"));
-    this.traceText = el("pre");
-    this.trace.append(this.traceText);
-    this.reasoning = null;
+    // Одна строка «◌ Думает · 12 с ▸»: развернуть — рассуждения и лог хода вживую; свёрнутой остаётся, пока не раскроют.
+    this.live = el("details", "live");
+    this.live.open = liveOpen;
+    this.live.addEventListener("toggle", () => { liveOpen = this.live.open; });
+    this.status = el("summary", "live-head");
+    this.reasoningText = el("pre", "live-reasoning");
+    this.reasoningText.hidden = true;
+    this.traceText = el("pre", "live-log");
+    this.live.append(this.status, this.reasoningText, this.traceText);
     this.text = "";
     this.timer = null;
     // Сколько секунд идёт ход: рядом со статусом, чтобы долгий ответ не выглядел зависшим.
@@ -248,8 +262,8 @@ export class StreamingMessage {
     this.statusText = "Модель думает";
     this.ticker = setInterval(() => this.#showStatus(), 1000);
     this.#showStatus();
-    // Статус под текстом: при автопрокрутке он остаётся на виду, даже когда ответ длинный.
-    this.node.append(this.textNode, this.status, this.trace);
+    // Статус над текстом ответа: ход работы в истории тоже стоит перед ответом.
+    this.node.append(this.live, this.textNode);
     container.append(this.node);
     scrollDown(container);
   }
@@ -261,25 +275,23 @@ export class StreamingMessage {
   }
 
   addReasoning(text) {
-    if (!this.reasoning) {
-      this.reasoning = el("details", "trace");
-      this.reasoning.append(el("summary", "", "Рассуждения"), el("pre"));
-      this.node.insertBefore(this.reasoning, this.textNode);
-      this.setStatus("Рассуждает");
-    }
-    this.reasoning.querySelector("pre").textContent += text;
+    if (this.statusText !== "Рассуждает") this.setStatus("Рассуждает");
+    this.reasoningText.hidden = false;
+    this.reasoningText.textContent += text;
+    if (this.live.open) this.reasoningText.scrollTop = this.reasoningText.scrollHeight;
   }
 
   addLog(text) {
     this.traceText.textContent += `${text}\n`;
+    if (this.live.open) this.traceText.scrollTop = this.traceText.scrollHeight;
   }
 
   // Модель позвала инструмент: напечатанное до вызова уже сохранено в истории.
   reset(status) {
     this.text = "";
     this.textNode.replaceChildren();
-    this.reasoning?.remove();
-    this.reasoning = null;
+    // Рассуждения прошлого раунда сохранены с вызовом инструмента; здесь — отбивка перед следующими.
+    if (this.reasoningText.textContent && !this.reasoningText.textContent.endsWith("\n\n")) this.reasoningText.textContent += "\n\n";
     this.setStatus(status);
   }
 
@@ -300,7 +312,11 @@ export class StreamingMessage {
 
   #showStatus() {
     const seconds = Math.floor((Date.now() - this.started) / 1000);
-    this.status.textContent = seconds ? `${this.statusText} · ${duration(seconds)}` : this.statusText;
+    this.status.replaceChildren(
+      el("span", "spinner"),
+      el("span", "live-text", seconds ? `${this.statusText} · ${duration(seconds)}` : this.statusText),
+      el("span", "work-caret", "▾"),
+    );
   }
 
   #flush() {
@@ -397,12 +413,6 @@ function round(seconds) {
   return seconds < 10 ? Math.max(Math.round(seconds * 10) / 10, 0.1) : Math.round(seconds);
 }
 
-function plural(count, one, few, many) {
-  const tens = count % 100;
-  const units = count % 10;
-  const word = tens >= 11 && tens <= 14 ? many : units === 1 ? one : units >= 2 && units <= 4 ? few : many;
-  return `${count} ${word}`;
-}
 
 function userNode(message) {
   const node = el("article", "msg user");

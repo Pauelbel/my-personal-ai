@@ -5,6 +5,7 @@ from tests.fakes import ScriptedProvider, call, events_of, post_session
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
+from local_agent.llm.models import ReasoningDelta
 
 
 def settings(tmp_path) -> Settings:
@@ -283,3 +284,99 @@ def test_foreign_answer_is_kept_when_the_user_asked_for_it():
     assert foreign_allowed([{"role": "user", "content": "Напиши README на английском"}])
     assert foreign_allowed([{"role": "user", "content": "Please summarize the article about cart checkout flows for me."}])
     assert not foreign_allowed([{"role": "user", "content": "Проверь корзину"}])
+
+
+class ThinkingProvider(ScriptedProvider):
+    """Стримит рассуждения перед каждым шагом сценария."""
+
+    async def chat_stream(self, model, messages, tools=None):
+        result = await self.chat(model, messages, tools)
+        yield ReasoningDelta(f"думаю над шагом {len(self.requests)}")
+        if result.content:
+            yield result.content
+        yield result
+
+
+def test_reasoning_is_kept_for_display_but_not_sent_back_to_model(tmp_path):
+    provider = ThinkingProvider(call("activate", names=["git"]), "Готово")
+    with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
+        session = post_session(client, {"model": "test"}).json()
+        url = f"/api/sessions/{session['id']}"
+        events = events_of(client.post(url + "/turns/stream", json={"content": "Подключи git"}))
+        history = client.get(url + "/messages").json()
+        client.post(url + "/turns/stream", json={"content": "Ещё"})
+
+    assert [event["text"] for event in events if event["type"] == "reasoning"] == ["думаю над шагом 1", "думаю над шагом 2"]
+    calls, answer = [message for message in history if message["role"] == "assistant"]
+    assert calls["reasoning"] == "думаю над шагом 1" and answer["reasoning"] == "думаю над шагом 2"
+    sent = " ".join(message.content or "" for message in provider.requests[-1]["messages"])
+    assert "думаю над шагом" not in sent
+
+
+def test_fit_turn_shortens_oldest_tool_results_first():
+    from local_agent.agent.context import fit_turn
+    from local_agent.llm.models import ChatMessage
+
+    messages = [ChatMessage("system", "s"), ChatMessage("user", "u")]
+    messages += [ChatMessage("tool", str(index) * 4000, tool_call_id=str(index)) for index in range(4)]
+    same, compacted = fit_turn(messages, budget=100_000)
+    assert same is messages and compacted == 0
+    fitted, compacted = fit_turn(messages, budget=3600)
+    # Хватило сократить самый давний; два последних результата не трогаются никогда.
+    assert compacted == 1 and "сокращено до 2000 из 4000" in fitted[2].content
+    assert [message.content for message in fitted[3:]] == [message.content for message in messages[3:]]
+    tight, compacted = fit_turn(messages, budget=10)
+    assert compacted == 2 and tight[4].content == messages[4].content and len(tight[2].content) < 400
+
+
+def test_long_turn_is_compacted_instead_of_overflowing(tmp_path):
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    for name in "abcd":
+        (workspace / f"{name}.txt").write_text(name * 6000, encoding="utf-8")
+    provider = ScriptedProvider(*(call("read_file", path=f"{name}.txt") for name in "abcd"), "Готово")
+    small = settings(tmp_path).model_copy(update={"default_context_tokens": 6000})
+    with TestClient(create_app(small, llm_provider=provider)) as client:
+        session = project_session(client, workspace)
+        events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Прочитай всё"}))
+
+    assert events[-1]["type"] == "done"
+    assert any("сокращены давние результаты" in event.get("text", "") for event in events if event["type"] == "log")
+    results = [message.content for message in provider.requests[-1]["messages"] if message.role == "tool"]
+    assert "сокращено" in results[0] and "d" * 6000 in results[-1] and "c" * 6000 in results[-2]
+
+
+def test_turn_does_not_end_while_plan_has_open_steps(tmp_path):
+    provider = ScriptedProvider(
+        call("plan", action="set", steps=["Тест-кейсы", "Автотесты"]),
+        "Тест-кейсы готовы: …",
+        call("plan", action="done", step=1, note="в ответе"),
+        call("plan", action="done", step=2, note="tests/test_login.py"),
+        "Итог: всё сделано",
+    )
+    with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
+        session = post_session(client, {"model": "test"}).json()
+        url = f"/api/sessions/{session['id']}"
+        events = events_of(client.post(url + "/turns/stream", json={"content": "Сделай кейсы и автотесты"}))
+        # Новый ход с вопросом не по плану: старый, даже незаконченный, план ход не держит.
+        client.app.state.session_service.set_plan(session["id"], [{"text": "Старое", "done": False}], "old")
+        later = events_of(client.post(url + "/turns/stream", json={"content": "Который час?"}))
+
+    assert events[-1]["type"] == "done" and events[-1]["message"]["content"] == "Итог: всё сделано"
+    assert any("В плане не сделано пунктов: 2" in event.get("text", "") for event in events if event["type"] == "log")
+    nudge = provider.requests[2]["messages"][-1]
+    assert nudge.role == "user" and "2. Автотесты" in nudge.content
+    # План — в системном промпте каждого запроса, пока в нём есть несделанное.
+    assert "1. [ ] Тест-кейсы" in provider.system_prompt(1) and "1. [x] Тест-кейсы — в ответе" in provider.system_prompt(3)
+    assert later[-1]["type"] == "done" and "Старое" in provider.system_prompt(-1)
+
+
+def test_question_to_user_ends_turn_even_with_open_plan(tmp_path):
+    provider = ScriptedProvider(call("plan", action="set", steps=["Кейсы", "Автотесты"]), "Какой фреймворк использовать?")
+    with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
+        session = post_session(client, {"model": "test"}).json()
+        events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Сделай"}))
+        stored = client.app.state.session_service.get(session["id"])
+
+    assert events[-1]["message"]["content"] == "Какой фреймворк использовать?" and len(provider.requests) == 2
+    assert [step["text"] for step in stored.plan] == ["Кейсы", "Автотесты"]

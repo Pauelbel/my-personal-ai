@@ -269,6 +269,14 @@ function proposalBody(node, proposal) {
       proposal.requires_approval ? "каждый вызов с подтверждением, может менять файлы" : "только чтение, без подтверждения",
       proposal.network ? "нужен интернет" : "без сети",
     ];
+    if (proposal.requires?.length) {
+      const missing = proposal.missing ?? [];
+      flags.push(`пакеты: ${proposal.requires.join(", ")}${missing.length ? ` (ещё не установлены: ${missing.join(", ")})` : ""}`);
+    }
+    if (proposal.secrets?.length) {
+      const absent = proposal.missing_secrets ?? [];
+      flags.push(`секреты: ${proposal.secrets.join(", ")}${absent.length ? ` (ещё не заданы: ${absent.join(", ")})` : ""}`);
+    }
     node.append(el("p", "hint", flags.join(" · ")));
     node.append(block("Параметры", JSON.stringify(proposal.parameters, null, 2)));
     node.append(block("Код script.py", proposal.content, true));

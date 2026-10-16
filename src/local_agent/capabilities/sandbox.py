@@ -7,6 +7,7 @@
   рабочая папка смонтирована на запись только инструментам с подтверждением,
   сеть закрыта, если инструмент не заявил, что она ему нужна.
 Без bubblewrap остаются таймаут, лимиты и чистое окружение — об этом пишется в лог.
+Пакеты сверх стандартной библиотеки — из общего окружения песочницы (pyenv.py), его ставит пользователь.
 На Windows нет ни bubblewrap, ни лимитов процесса (модуля resource): остаются таймаут, обрезанный вывод
 и чистое окружение.
 """
@@ -48,9 +49,14 @@ def bwrap_path() -> str | None:
     return shutil.which("bwrap")
 
 
-async def run_script(script: Path, arguments: dict, workspace: Path | None, policy: SandboxPolicy) -> ToolResult:
+async def run_script(
+    script: Path, arguments: dict, workspace: Path | None, policy: SandboxPolicy, python: Path | None = None,
+    secrets: dict[str, str] | None = None,
+) -> ToolResult:
+    """python — интерпретатор окружения песочницы с поставленными пакетами; без него — интерпретатор приложения.
+    secrets — секреты, которые инструмент объявил в tool.md: скрипт получает их переменными окружения."""
     script = script.resolve()
-    python = Path(sys.executable)
+    python = python or Path(sys.executable)
     with tempfile.TemporaryDirectory(prefix="meepo-script-") as scratch:
         cwd = workspace.resolve() if workspace else Path(scratch)
         command = [str(python), "-I", "-B", str(script)]
@@ -59,7 +65,7 @@ async def run_script(script: Path, arguments: dict, workspace: Path | None, poli
             command = [*_bwrap_arguments(bwrap, script, cwd, Path(scratch), python, policy), *command]
         else:
             logger.warning("bubblewrap не найден: скрипт %s запускается без изоляции файловой системы и сети", script)
-        env = _environment(scratch)
+        env = {**_environment(scratch), **(secrets or {})}
         # preexec_fn и новая сессия процесса есть только в POSIX.
         posix = {"preexec_fn": lambda: _limits(policy.timeout), "start_new_session": True} if resource else {}
         process = await asyncio.create_subprocess_exec(
@@ -90,8 +96,9 @@ def _bwrap_arguments(bwrap: str, script: Path, cwd: Path, scratch: Path, python:
         "--tmpfs", "/home", "--tmpfs", "/root", "--tmpfs", "/run", "--tmpfs", "/tmp",
         "--bind", str(scratch), str(scratch),
     ]
-    # Окружение приложения (python и библиотеки) нужно скрипту только на чтение.
-    environment = Path(sys.prefix)
+    # Окружение (python и библиотеки) нужно скрипту только на чтение: приложения или песочницы,
+    # смотря чьим интерпретатором запущен скрипт; bin/python лежит в <окружение>/bin.
+    environment = Path(sys.prefix) if python == Path(sys.executable) else python.parent.parent
     for path in dict.fromkeys([environment, python.parent, script.parent]):
         arguments += ["--ro-bind", str(path), str(path)]
     if policy.writable_workspace:

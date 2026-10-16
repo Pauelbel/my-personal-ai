@@ -6,6 +6,7 @@ import { imageInput } from "./attach.js";
 import { el, renderMessages, scrollDown, StreamingMessage } from "./chat.js";
 import { renderCards } from "./panel.js";
 import { openNote, showWiki } from "./pages.js";
+import { fitInput, recall, remember } from "./util.js";
 
 const $ = (selector) => document.querySelector(selector);
 export const LINT_PROMPT = "/lint — проверь вики: найди противоречия, устаревшее и дубли, которые стоит слить. "
@@ -272,15 +273,6 @@ function visible() {
 }
 
 function autosize() {
-  const input = $("#wiki-chat-input");
-  input.style.height = "auto";
-  input.style.height = `${Math.min(input.scrollHeight, window.innerHeight * MAX_INPUT_SHARE)}px`;
+  fitInput($("#wiki-chat-input"), MAX_INPUT_SHARE);
 }
 
-function remember(key, value) {
-  try { localStorage.setItem(key, value); } catch { /* без хранилища просто не запомним */ }
-}
-
-function recall(key) {
-  try { return localStorage.getItem(key); } catch { return null; }
-}

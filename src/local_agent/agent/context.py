@@ -32,6 +32,10 @@ PAGE_TITLE = re.compile(r"^- Page Title: (.+)$", re.MULTILINE)
 # устарели, их ref уже не работают, а места в контексте они занимают больше всего.
 SNAPSHOT_SECTION = "### Snapshot\n"
 STALE_SNAPSHOT = SNAPSHOT_SECTION + "(снимок устарел: страница с тех пор менялась, свежий — ниже)"
+# Сжатие внутри хода: последние результаты инструментов нужны целиком, давние сокращаются ступенями,
+# пока запрос не поместится в окно.
+KEEP_RECENT_RESULTS = 2
+COMPACT_STEPS = (OLD_TOOL_RESULT_CHARS, 500, 150)
 
 
 def estimate_tokens(text: str | None) -> int:
@@ -118,6 +122,32 @@ def drop_stale_snapshots(messages: list[ChatMessage]) -> list[ChatMessage]:
         head = result[index].content.split(SNAPSHOT_SECTION, 1)[0]
         result[index] = replace(result[index], content=head + STALE_SNAPSHOT)
     return result
+
+
+def fit_turn(messages: list[ChatMessage], budget: int, extra_tokens: int = 0) -> tuple[list[ChatMessage], int]:
+    """Укладывает запрос хода в окно: сокращает давние результаты инструментов, начиная с самых старых.
+    extra_tokens — схемы инструментов, которые уйдут рядом с сообщениями. Возвращает сообщения и сколько сокращено."""
+    total = extra_tokens + sum(estimate_message_tokens(message) for message in messages)
+    if total <= budget:
+        return messages, 0
+    result = list(messages)
+    tools = [index for index, message in enumerate(result) if message.role == "tool"]
+    candidates = tools[:-KEEP_RECENT_RESULTS] if len(tools) > KEEP_RECENT_RESULTS else []
+    compacted: set[int] = set()
+    for limit in COMPACT_STEPS:
+        for index in candidates:
+            content = result[index].content or ""
+            if len(content) <= limit:
+                continue
+            before = estimate_message_tokens(result[index])
+            note = f"\n… (сокращено до {limit} из {len(content)} символов, чтобы ход поместился в окно модели; "\
+                   "если это важно, вызови инструмент снова)"
+            result[index] = replace(result[index], content=content[:limit] + note)
+            total -= before - estimate_message_tokens(result[index])
+            compacted.add(index)
+            if total <= budget:
+                return result, len(compacted)
+    return result, len(compacted)
 
 
 def build_context(

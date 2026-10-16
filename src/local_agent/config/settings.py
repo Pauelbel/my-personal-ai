@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     index_path: Path | None = None
     checkpoints_path: Path | None = None
     mcp_config_path: Path | None = None
+    # Общее Python-окружение песочницы: пакеты, которые пользователь разрешил поставить скриптам агента.
+    sandbox_env_path: Path | None = None
+    # Секреты инструментов (токены, адреса): задаются формой коннектора («настроить»), модель их не видит.
+    secrets_path: Path | None = None
     logs_path: Path | None = None
     # Модель для саб-агентов, чтобы они не делили одну модель с основным: провайдер из LLM_PROVIDERS и ID модели.
     # Пусто — модель сессии, которая поручила задачу.

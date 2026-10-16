@@ -1,7 +1,9 @@
 """Инструменты, которые написал агент: папка data/tools/<id>/ с тремя файлами, их можно править руками.
 
-- tool.md — заголовок с параметрами (name, description, requires_approval, network, timeout)
-  и текст: зачем инструмент нужен;
+- tool.md — заголовок с параметрами (name, description, requires_approval, network, timeout, requires, secrets)
+  и текст: зачем инструмент нужен; requires — пакеты PyPI через запятую из окружения песочницы;
+  secrets — имена секретов через запятую: скрипт получит их значения переменными окружения
+  (JIRA_EMAIL? — необязательный: без него инструмент запускается, переменной просто нет);
 - parameters.json — JSON Schema аргументов;
 - script.py — сам скрипт: аргументы приходят JSON-объектом в stdin, результат — в stdout.
 
@@ -15,14 +17,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from local_agent.capabilities.pyenv import PythonEnv, check_requirements
 from local_agent.capabilities.sandbox import DEFAULT_TIMEOUT_SECONDS, SandboxPolicy, run_script
+from local_agent.capabilities.secrets import SecretStore, check_secret_names
 from local_agent.tools.base import ToolResult
 
 logger = logging.getLogger(__name__)
 
+# Где пользователь задаёт доступы инструмента.
+WHERE = "«Возможности → Инструменты → Коннекторы → настроить»"
 TOOL_ID = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
 ARCHIVED = re.compile(r"(?P<id>[a-z][a-z0-9_]{2,40})\.[0-9a-f]{32}")
-TOOL_KEYS = {"name", "description", "requires_approval", "network", "timeout"}
+TOOL_KEYS = {"name", "description", "requires_approval", "network", "timeout", "requires", "secrets"}
 MAX_TIMEOUT = 300
 
 
@@ -37,6 +43,12 @@ class ScriptTool:
     timeout: int
     folder: Path
     reason: str = ""
+    requires: tuple[str, ...] = ()
+    # Окружение песочницы задаёт CapabilityService; без него скрипт видит только стандартную библиотеку.
+    env: PythonEnv | None = None
+    secrets: tuple[str, ...] = ()
+    # Хранилище секретов задаёт CapabilityService; значения в модель не попадают — их видит только скрипт.
+    secret_store: SecretStore | None = None
 
     @property
     def script(self) -> Path:
@@ -44,7 +56,26 @@ class ScriptTool:
 
     async def execute(self, arguments: dict[str, object], workspace: Path | None) -> ToolResult:
         policy = SandboxPolicy(self.timeout, self.network, writable_workspace=self.requires_approval)
-        return await run_script(self.script, arguments, workspace, policy)
+        if self.requires:
+            missing = self.env.missing(list(self.requires)) if self.env else list(self.requires)
+            if missing:
+                return ToolResult(
+                    f"Инструменту {self.id} не хватает пакетов: {', '.join(missing)}. Попроси пользователя "
+                    "установить их через install_packages и вызови инструмент снова.", is_error=True,
+                )
+        names = [name.removesuffix("?") for name in self.secrets]
+        values = self.secret_store.pick(names) if self.secret_store else {}
+        if absent := [name for name in self.secrets if not name.endswith("?") and name not in values]:
+            return ToolResult(
+                f"Инструмент {self.id} не настроен: нет {', '.join(absent)}. Попроси пользователя заполнить форму "
+                f"{WHERE}; адрес, логин и токен в чат не пиши и не проси.", is_error=True,
+            )
+        python = self.env.python if self.env and self.env.exists else None
+        result = await run_script(self.script, arguments, workspace, policy, python, values)
+        if self.secret_store and values:
+            # Скрипт мог напечатать токен: модель его не увидит.
+            result = ToolResult(self.secret_store.mask(result.content), result.is_error)
+        return result
 
 
 def load_script_tools(root: Path) -> list[ScriptTool]:
@@ -83,6 +114,12 @@ def read_script_tool(folder: Path, tool_id: str | None = None) -> ScriptTool:
     if not (folder / "script.py").is_file():
         raise ValueError("нет script.py")
     timeout = int(fields.get("timeout") or DEFAULT_TIMEOUT_SECONDS)
+    requires = _list(fields.get("requires", ""))
+    if requires and (problem := check_requirements(requires)):
+        raise ValueError(f"requires: {problem}")
+    secrets = _list(fields.get("secrets", ""))
+    if secrets and (problem := check_secret_names(secrets)):
+        raise ValueError(f"secrets: {problem}")
     return ScriptTool(
         id=tool_id,
         name=fields.get("name") or tool_id,
@@ -93,12 +130,15 @@ def read_script_tool(folder: Path, tool_id: str | None = None) -> ScriptTool:
         timeout=max(1, min(timeout, MAX_TIMEOUT)),
         folder=folder,
         reason=body.strip(),
+        requires=tuple(requires),
+        secrets=tuple(secrets),
     )
 
 
 def write_script_tool(
     root: Path, tool_id: str, *, name: str, description: str, reason: str, parameters: dict, code: str,
-    requires_approval: bool, network: bool, timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    requires_approval: bool, network: bool, timeout: int = DEFAULT_TIMEOUT_SECONDS, requires: list[str] | None = None,
+    secrets: list[str] | None = None,
 ) -> ScriptTool:
     """Создаёт или перезаписывает папку инструмента; файлы пишутся во временную папку и подменяют старую разом."""
     if not TOOL_ID.fullmatch(tool_id):
@@ -111,6 +151,10 @@ def write_script_tool(
         f"requires_approval: {'true' if requires_approval else 'false'}",
         f"network: {'true' if network else 'false'}", f"timeout: {timeout}",
     ]
+    if requires:
+        header.append(f"requires: {', '.join(requires)}")
+    if secrets:
+        header.append(f"secrets: {', '.join(secrets)}")
     (staging / "tool.md").write_text("---\n" + "\n".join(header) + "\n---\n" + reason.strip() + "\n", encoding="utf-8")
     (staging / "parameters.json").write_text(json.dumps(parameters, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (staging / "script.py").write_text(code.rstrip() + "\n", encoding="utf-8")
@@ -150,6 +194,10 @@ def restore_script_tool(root: Path, archive_id: str) -> ScriptTool:
         raise FileExistsError("Инструмент с таким id уже есть")
     source.rename(target)
     return read_script_tool(target)
+
+
+def _list(value: str) -> list[str]:
+    return [item.strip() for item in value.strip("[]").split(",") if item.strip()]
 
 
 def _one_line(value: str) -> str:

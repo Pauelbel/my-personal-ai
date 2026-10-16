@@ -1,15 +1,16 @@
 // Страницы вне чата: вики, возможности агента, долговременная память.
 // Списки — деревья в стиле терминала (tree.js), возможности разложены по вкладкам.
-import { openAgentForm } from "./agents.js";
+import { openAgentForm, openMainForm } from "./agents.js";
 import { api } from "./api.js";
 import { el, renderMarkdown } from "./chat.js";
 import { createGraph } from "./graph.js";
 import { guide, rowAction, stem, treeRow } from "./tree.js";
+import { recall, remember } from "./util.js";
 
 const $ = (selector) => document.querySelector(selector);
-const ORIGIN = { builtin: "Встроенные", agent: "Созданы агентом", extra: "Дополнения" };
-const KIND = { tool: "инструмент", skill: "скилл", agent: "саб-агент" };
-const ARCHIVE_GROUP = { tool: "Инструменты", skill: "Скиллы", agent: "Саб-агенты" };
+const ORIGIN = { connector: "Коннекторы — доступ к рабочим системам", builtin: "Встроенные", agent: "Созданы агентом", extra: "Дополнения" };
+const KIND = { tool: "инструмент", skill: "скилл", agent: "агент" };
+const ARCHIVE_GROUP = { tool: "Инструменты", skill: "Скиллы", agent: "Агенты" };
 
 // Строки детей одной группы: ветки «├─», у последней — «└─».
 function branch(items, lines, build) {
@@ -302,7 +303,7 @@ function wikiPath(from, href) {
 
 // ---------- возможности ----------
 
-const CAP_TABS = [["tools", "Инструменты"], ["skills", "Скиллы"], ["agents", "Саб-агенты"], ["mcp", "MCP"], ["archive", "Архив"]];
+const CAP_TABS = [["tools", "Инструменты"], ["skills", "Скиллы"], ["agents", "Агенты"], ["mcp", "MCP"], ["python", "Пакеты"], ["archive", "Архив"]];
 let capTab = recall("capabilities-tab") ?? "tools";
 let capData = null;
 
@@ -320,7 +321,8 @@ function renderCapabilities(toast) {
   const reload = () => showCapabilities(toast);
   const counts = {
     tools: data.tools.filter((tool) => tool.origin !== "mcp").length, skills: data.skills.length,
-    agents: data.agents.length, mcp: data.mcp.length, archive: data.archive.length,
+    agents: data.agents.length + 1, mcp: data.mcp.length, python: data.python.packages.length,
+    archive: data.archive.length,
   };
   $("#cap-tabs").replaceChildren(...CAP_TABS.map(([id, label]) => {
     const tab = el("button", "", label);
@@ -336,27 +338,58 @@ function renderCapabilities(toast) {
   }));
   const views = {
     tools: () => groups(Object.entries(ORIGIN).map(([origin, title]) => [title, data.tools.filter((tool) => tool.origin === origin)]),
-      (tool, lines, last) => capRow(tool.id, tool.description, [tool.requires_approval ? "с подтверждением" : "без подтверждения"], [
-        tool.origin === "agent" && link("код", () => showSource("tool", tool.id, toast)),
-        ["agent", "extra"].includes(tool.origin) && link("в архив", () => archive("tool", tool.id, reload, toast)),
+      (tool, lines, last) => capRow(tool.id, tool.description, [
+        tool.origin === "connector" ? (tool.configured ? "настроен" : "нужно настроить")
+          : tool.requires_approval ? "с подтверждением" : "без подтверждения",
+      ], [
+        tool.origin === "connector" && link("настроить", () => openConnector(tool, reload, toast)),
+        ["agent", "connector"].includes(tool.origin) && link("код", () => showSource("tool", tool.id, reload, toast)),
+        ["agent", "connector", "extra"].includes(tool.origin) && link("в архив", () => archive("tool", tool.id, reload, toast)),
       ], lines, last)),
     skills: () => groups([["data/skills", data.skills]], (skill, lines, last) => capRow(skill.id, skill.description, [], [
-      link("текст", () => showSource("skill", skill.id, toast)),
+      link("текст", () => showSource("skill", skill.id, reload, toast)),
       link("в архив", () => archive("skill", skill.id, reload, toast)),
     ], lines, last), "Скиллов пока нет — агент предложит их, когда задачи начнут повторяться."),
-    agents: () => groups([["data/agents", data.agents]], (agent, lines, last) => capRow(agent.name, agent.description, [
+    // Основной агент — первым и отдельно: его промпт встроен, смотреть можно, править — только свои правила.
+    agents: () => [
+      ...groups([["Основной агент · встроен", [{ id: "main", name: "Основной агент" }]]], (agent, lines, last) => {
+        const row = capRow(agent.name, "Общается с вами, распределяет задачи между агентами, помнит вас и наращивает возможности",
+          ["руководитель"], [
+            link("промпт", () => showSource("agent", "main", reload, toast)),
+            link("правила", () => editAgent("main", reload, toast)),
+          ], lines, last);
+        row.classList.add("main-agent");
+        return row;
+      }),
+      ...groups([["data/agents", data.agents]], (agent, lines, last) => capRow(agent.name, agent.description, [
       agent.tools.length ? agent.tools.join(", ") : "без инструментов",
     ], [
       link("править", () => editAgent(agent.id, reload, toast)),
-      link("промпт", () => showSource("agent", agent.id, toast)),
+      link("промпт", () => showSource("agent", agent.id, reload, toast)),
       link("в архив", () => archive("agent", agent.id, reload, toast)),
-    ], lines, last), "Саб-агентов пока нет — агент предложит их для повторяющихся направлений."),
+    ], lines, last), "Других агентов пока нет — основной предложит их для повторяющихся направлений."),
+    ],
     mcp: () => mcpRows(data),
+    python: () => groups([[data.python.path ?? "песочница", data.python.packages]], (item, lines, last) => capRow(
+      `${item.name} ${item.version}`, "", [item.tools.length ? `нужен: ${item.tools.join(", ")}` : "не используется"], [
+        link("удалить", () => uninstall(item, reload, toast)),
+      ], lines, last),
+    "Пакетов нет: скрипты агента видят только стандартную библиотеку Python. Агент попросит установить нужное — с вашего согласия."),
     archive: () => groups(Object.entries(ARCHIVE_GROUP).map(([kind, title]) => [title, data.archive.filter((item) => item.kind === kind)]),
       (item, lines, last) => capRow(item.id, item.name === item.id ? "" : item.name, [], [
         link("вернуть", async () => {
           try {
             await api.restore(item.kind, item.archive_id);
+            await reload();
+          } catch (error) {
+            toast(error);
+          }
+        }),
+        // Встроенное дополнение удалить нельзя — его можно только не включать.
+        !item.archive_id.startsWith("extra:") && link("удалить", async () => {
+          if (!window.confirm(`Удалить ${KIND[item.kind]} ${item.id} из архива навсегда? Вернуть его будет нельзя.`)) return;
+          try {
+            await api.purge(item.kind, item.archive_id);
             await reload();
           } catch (error) {
             toast(error);
@@ -403,7 +436,7 @@ function capRow(name, description, badges, actions, lines, last) {
 function link(text, handler) {
   const button = rowAction(text, text, handler);
   button.classList.add("shown");
-  button.classList.toggle("danger", text === "в архив");
+  button.classList.toggle("danger", ["в архив", "удалить"].includes(text));
   return button;
 }
 
@@ -426,41 +459,224 @@ async function archive(kind, id, reload, toast) {
   }
 }
 
+// ---------- настройка коннектора ----------
+
+// Поле формы по имени доступа: JIRA_URL → «Адрес», JIRA_TOKEN → «Токен» и т. д. Имя видно под полем мелко:
+// по нему скрипт читает значение (os.environ).
+function fieldMeta(name) {
+  if (name.endsWith("_URL")) return { label: "Адрес", type: "url", placeholder: "https://jira.company.ru" };
+  if (/_(EMAIL|USER|LOGIN)$/.test(name)) return { label: "Логин или почта", type: "text", placeholder: "me@company.ru" };
+  if (name.endsWith("_PASSWORD")) return { label: "Пароль", type: "password" };
+  if (/_(TOKEN|KEY)$/.test(name)) return { label: "Токен", type: "password" };
+  if (name.endsWith("_VERIFY_SSL")) return { label: "Проверять сертификат HTTPS", type: "checkbox" };
+  return { label: name, type: "password" };
+}
+
+// Подсказки для известных коннекторов: где взять значение.
+const FIELD_HINTS = {
+  JIRA_URL: "Адрес, по которому вы открываете Jira в браузере, без /browse/…",
+  JIRA_TOKEN: "Jira Server / Data Center: аватар → Профиль → Personal Access Tokens → Создать. "
+    + "Jira Cloud (*.atlassian.net): id.atlassian.com → Security → API tokens.",
+  JIRA_EMAIL: "Только для Jira Cloud — почта вашей учётной записи. Для корпоративной Jira оставьте пустым.",
+  JIRA_VERIFY_SSL: "Снимите, если Jira на корпоративном (самоподписанном) сертификате и проверка пишет про CERTIFICATE.",
+};
+
+let connectorDialog = null;
+
+function openConnector(tool, reload, toast) {
+  connectorDialog?.remove();
+  const dialog = connectorDialog = el("dialog", "connector-dialog");
+  const form = el("form", "connector");
+  form.method = "dialog";
+  const about = el("div", "connector-about");
+  about.append(
+    el("p", "", tool.full_description ?? tool.description),
+    el("p", "hint", "Заполните доступы — и агент сам будет вызывать этот инструмент, когда вы попросите "
+      + "(например: «покажи мои задачи в Jira»). Значения хранятся только у вас (data/secrets.json); "
+      + "агент и чат их не видят. Токен и пароль после сохранения не показываются — только «задан»."),
+  );
+  form.append(el("h3", "", `Настройка: ${tool.name}`), about);
+  // Порядок как в обычной форме входа: адрес, логин, токен или пароль, галочки — в конце.
+  const order = { url: 0, text: 1, password: 2, checkbox: 3 };
+  const fields = [...tool.fields].sort((a, b) => order[fieldMeta(a.name).type] - order[fieldMeta(b.name).type]);
+  const inputs = fields.map((field) => {
+    const meta = fieldMeta(field.name);
+    const label = el("label", meta.type === "checkbox" ? "check" : "");
+    const input = el("input");
+    input.type = meta.type;
+    input.name = field.name;
+    if (meta.type === "checkbox") {
+      input.checked = (field.value ?? "true").toLowerCase() !== "false";
+      label.append(input, el("span", "", meta.label));
+    } else {
+      input.autocomplete = meta.type === "password" ? "new-password" : "off";
+      input.spellcheck = false;
+      input.value = meta.type === "password" ? "" : field.value ?? "";
+      input.placeholder = meta.type === "password" && field.set ? "задан — оставьте пустым, чтобы не менять" : meta.placeholder ?? "";
+      const title = el("span", "", `${meta.label}${field.optional ? " (необязательно)" : ""}`);
+      if (field.set && meta.type === "password") title.append(el("span", "connector-set", " · задан"));
+      label.append(title, input);
+    }
+    const hint = FIELD_HINTS[field.name];
+    label.append(el("span", "connector-name", `${hint ? `${hint} · ` : ""}${field.name}`));
+    form.append(label);
+    return { field, meta, input };
+  });
+  const status = el("span", "connector-status");
+  status.setAttribute("role", "status");
+  const actions = el("div", "dialog-actions");
+  const check = el("button", "", "Проверить подключение");
+  check.type = "button";
+  check.hidden = !tool.checkable;
+  const close = el("button", "", "Закрыть");
+  close.type = "button";
+  const save = el("button", "primary", "Сохранить");
+  save.type = "submit";
+  actions.append(status, check, close, save);
+  form.append(actions);
+  dialog.append(form);
+  document.body.append(dialog);
+
+  const show = (text, ok) => {
+    status.textContent = text;
+    status.classList.toggle("ok", ok === true);
+    status.classList.toggle("failed", ok === false);
+  };
+  // Запоминаем, что уже записано: повторное «Проверить» не пишет то же самое и не теряет снятую галочку.
+  const put = async (field, value) => {
+    await api.setSecret(field.name, value);
+    Object.assign(field, { set: true, value });
+  };
+  const drop = async (field) => {
+    await api.deleteSecret(field.name);
+    Object.assign(field, { set: false, value: undefined });
+  };
+  const store = async () => {
+    for (const { field, meta, input } of inputs) {
+      if (meta.type === "checkbox") {
+        // Проверка включена по умолчанию: храним только «выключено».
+        if (!input.checked && field.value !== "false") await put(field, "false");
+        else if (input.checked && field.set) await drop(field);
+        continue;
+      }
+      const value = input.value.trim();
+      if (meta.type === "password") {
+        if (value) {
+          await put(field, value);
+          input.value = "";
+          input.placeholder = "задан — оставьте пустым, чтобы не менять";
+        }
+      } else if (value !== (field.value ?? "")) {
+        if (value) await put(field, value);
+        else if (field.set) await drop(field);
+      }
+    }
+  };
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await store();
+      dialog.close();
+      await reload();
+    } catch (error) {
+      show(error.message, false);
+    }
+  });
+  check.addEventListener("click", async () => {
+    show("Сохраняю и проверяю…");
+    try {
+      await store();
+      show((await api.checkConnector(tool.id)).message, true);
+      void reload();
+    } catch (error) {
+      show(error.message, false);
+    }
+  });
+  close.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("close", () => dialog.remove());
+  dialog.showModal();
+}
+
+async function uninstall(item, reload, toast) {
+  const users = item.tools.length ? ` Он нужен инструментам: ${item.tools.join(", ")} — они перестанут работать.` : "";
+  if (!window.confirm(`Удалить пакет ${item.name} из песочницы?${users}`)) return;
+  try {
+    await api.uninstallPackage(item.name);
+    await reload();
+  } catch (error) {
+    toast(error);
+  }
+}
+
 // Форме нужен агент целиком (промпт и скиллы), а в обзоре возможностей — только строка списка.
 async function editAgent(id, reload, toast) {
   try {
     const agent = (await api.agents()).find((item) => item.id === id);
-    if (agent) await openAgentForm(agent, reload);
+    if (agent?.builtin) openMainForm(agent, reload);
+    else if (agent) await openAgentForm(agent, reload);
   } catch (error) {
     toast(error);
   }
 }
 
-async function showSource(kind, id, toast) {
+// Поле — во весь текст вместе с рамкой: иначе оно на пару пикселей ниже текста и прокручивается внутри себя.
+function fitEditor(editor) {
+  // Сброс высоты на миг укорачивает список файлов — прокрутку списка возвращаем, чтобы он не прыгал при наборе.
+  const list = $("#source-files");
+  const scrolled = list.scrollTop;
+  editor.style.height = "auto";
+  editor.style.height = `${editor.scrollHeight + editor.offsetHeight - editor.clientHeight}px`;
+  editor.scrollTop = 0;
+  list.scrollTop = scrolled;
+}
+
+// Файлы возможности — прямо в окне: строки переносятся, окно не выходит за экран, «Сохранить» проверяет файл
+// и записывает его, только если он рабочий.
+async function showSource(kind, id, reload, toast) {
   try {
     const source = await api.capabilitySource(kind, id);
     $("#source-title").textContent = `${KIND[kind]} ${id}`;
-    $("#source-path").textContent = `${source.path} — правьте файлы в редакторе, затем «Перечитать с диска».`;
-    $("#source-files").replaceChildren(...Object.entries(source.files).flatMap(([name, text]) => {
-      const pre = el("pre");
-      const code = el("code");
-      code.textContent = text;
-      pre.append(code);
-      return [el("h4", "", name), pre];
-    }));
+    $("#source-path").textContent = source.path;
+    const editors = Object.entries(source.files).map(([name, text]) => {
+      const editor = el("textarea", "source-editor");
+      Object.assign(editor, { value: text, spellcheck: false });
+      editor.setAttribute("aria-label", name);
+      editor.dataset.name = name;
+      editor.dataset.original = text;
+      editor.readOnly = Boolean(source.readonly);
+      editor.addEventListener("input", () => {
+        fitEditor(editor);
+        sync();
+      });
+      return editor;
+    });
+    const save = $("#source-save");
+    const sync = () => { save.disabled = !editors.some((editor) => editor.value !== editor.dataset.original); };
+    $("#source-files").replaceChildren(...editors.flatMap((editor) => [el("h4", "", editor.dataset.name), editor]));
+    $("#source-status").textContent = source.readonly ? "Только просмотр" : "";
+    save.hidden = Boolean(source.readonly);
+    sync();
+    save.onclick = async () => {
+      const files = Object.fromEntries(editors.filter((editor) => editor.value !== editor.dataset.original)
+        .map((editor) => [editor.dataset.name, editor.value]));
+      save.disabled = true;
+      try {
+        await api.saveSource(kind, id, files);
+        for (const editor of editors) editor.dataset.original = editor.value;
+        $("#source-status").textContent = "Сохранено";
+        await reload();
+      } catch (error) {
+        $("#source-status").textContent = error.message;
+      }
+      sync();
+    };
     $("#source-dialog").showModal();
+    for (const editor of editors) fitEditor(editor);
   } catch (error) {
     toast(error);
   }
 }
 
-function remember(key, value) {
-  try { localStorage.setItem(key, value); } catch { /* без хранилища просто не запомним */ }
-}
-
-function recall(key) {
-  try { return localStorage.getItem(key); } catch { return null; }
-}
 
 // ---------- память ----------
 

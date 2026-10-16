@@ -24,8 +24,9 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from local_agent.agent.context import drop_stale_snapshots
+from local_agent.agent.context import drop_stale_snapshots, estimate_tokens, fit_turn
 from local_agent.agent.errors import AgentRuntimeError
+from local_agent.agent.plan import open_steps, plan_prompt
 from local_agent.capabilities.toolbox import Toolbox
 from local_agent.llm.base import LLMEmptyResponse, LLMRepetition, stream_chat
 from local_agent.llm.models import ChatMessage, ChatResult, ReasoningDelta, ToolCall
@@ -41,9 +42,13 @@ logger = logging.getLogger(__name__)
 MAX_CALLS_PER_ROUND = 4
 LOG_ARGUMENTS_CHARS = 160
 INTERRUPTED_SUFFIX = "\n\n_(ответ прерван)_"
+# Запас на ответ для хода из старого чекпоинта, в состоянии которого бюджета ещё нет.
+DEFAULT_RESPONSE_RESERVE = 1024
 DECISIONS = {"approve", "reject", "reply"}
 # Сколько раз за ход модель просят сделать обещанное вызовом инструмента: дальше её ответ — итог хода.
 MAX_NUDGES = 3
+# Сколько раз за ход модель возвращают к несделанным пунктам плана: дальше её ответ — итог хода.
+MAX_PLAN_NUDGES = 4
 NUDGE = (
     "Ты написал, что делаешь следующий шаг, но не вызвал инструмент — так ход закончится и работа встанет. "
     "Сделай этот шаг сейчас вызовом инструмента. Если задача уже выполнена целиком — напиши итог; "
@@ -75,6 +80,8 @@ class TurnState(TypedDict, total=False):
     provider_id: str
     model: str
     window: int
+    # Окно за вычетом запаса на ответ: в него укладывается каждый запрос хода.
+    budget: int
     rounds: int
     max_rounds: int
     # Контекст запроса к модели в формате ChatMessage, но словарями: так его можно сохранить в чекпоинт.
@@ -91,6 +98,8 @@ class TurnState(TypedDict, total=False):
     output_tokens: int
     # Сколько раз за ход модель подтолкнули сделать обещанное действие вызовом инструмента.
     nudges: int
+    # Сколько раз модель вернули к несделанным пунктам плана.
+    plan_nudges: int
 
 
 @dataclass
@@ -153,7 +162,17 @@ def _call_model(deps: GraphDeps):
             messages[0] = ChatMessage("system", (messages[0].content or "").replace(
                 CATALOG_MARKER, deps.catalog(session, box),
             ))
+        # План задачи — в конце системного промпта перед каждым запросом: так модель не теряет его части.
+        if (steps := plan_prompt(session.plan)) and messages and messages[0].role == "system":
+            messages[0] = ChatMessage("system", f"{messages[0].content or ''}\n\n{steps}")
+        # Внутри хода результаты инструментов копятся: если запрос уже не влезает в окно, давние сокращаются.
+        budget = state.get("budget") or max(state["window"] - DEFAULT_RESPONSE_RESERVE, 0)
+        schemas = estimate_tokens(json.dumps(offered, ensure_ascii=False)) if offered else 0
+        messages, compacted = fit_turn(messages, budget, schemas)
+        if compacted:
+            write(log(f"Контекст хода не помещался в окно: сокращены давние результаты инструментов ({compacted})"))
         partial: list[str] = []
+        thoughts: list[str] = []
         result: ChatResult | None = None
         requested = time.perf_counter()
         first_token_at = None
@@ -169,6 +188,7 @@ def _call_model(deps: GraphDeps):
                         partial.append(item)
                         write({"type": "delta", "text": item})
                     elif isinstance(item, ReasoningDelta):
+                        thoughts.append(item.text)
                         write({"type": "reasoning", "text": item.text})
                     else:
                         result = item
@@ -183,13 +203,16 @@ def _call_model(deps: GraphDeps):
                     ) from None
                 # Напечатанное в оборванной попытке не сохраняем: повтор начнёт ответ заново.
                 partial.clear()
+                thoughts.clear()
                 problem = "зациклилась" if looped else "вернула пустой ответ"
                 write(log(f"Модель {problem} — повторяю" + (" без инструментов" if attempts[attempt + 1] is None else "")))
                 write({"type": "retry"})
             except (asyncio.CancelledError, GeneratorExit):
                 # «Стоп» или закрытая вкладка: сохраняем то, что модель успела написать.
                 if text := "".join(partial).strip():
-                    deps.conversation.add_assistant_message(state["session_id"], text + INTERRUPTED_SUFFIX)
+                    deps.conversation.add_assistant_message(
+                        state["session_id"], text + INTERRUPTED_SUFFIX, reasoning="".join(thoughts),
+                    )
                 raise
         if result is None:
             raise AgentRuntimeError("Модель не вернула ответ")
@@ -199,6 +222,7 @@ def _call_model(deps: GraphDeps):
         totals = {"spent": state.get("spent", 0.0) + elapsed, "output_tokens": state.get("output_tokens", 0) + written}
         # Не «partial»: в нём могут быть рассуждения, пришедшие текстом, а result.content уже очищен от них.
         text = result.content or ""
+        reasoning = "".join(thoughts)
         if result.tool_calls and rounds >= max_rounds:
             # Лимит раундов: инструменты в последнем запросе уже не предлагались, а модель всё равно их зовёт.
             # Ход не обрывается ошибкой — заканчивается ответом, и работу можно продолжить следующим сообщением.
@@ -208,6 +232,7 @@ def _call_model(deps: GraphDeps):
         if result.tool_calls:
             saved = await asyncio.to_thread(
                 deps.conversation.add_assistant_message, state["session_id"], text, result.tool_calls,
+                reasoning=reasoning,
             )
             write({"type": "tool_calls", "message": saved})
             assistant = {
@@ -230,10 +255,29 @@ def _call_model(deps: GraphDeps):
                 ],
                 "decisions": {}, "answer": None, "nudges": nudges + 1, **totals,
             }
+        plan_nudges = state.get("plan_nudges", 0)
+        remaining = open_steps(session.plan) if session.plan_request == state["request_id"] else []
+        if remaining and offered and plan_nudges < MAX_PLAN_NUDGES and not result.content.rstrip().endswith("?"):
+            # План этого хода не закончен: ответ остаётся в чате промежуточным, модель просим сделать следующий пункт.
+            # Вопрос пользователю ход заканчивает — без ответа дальше нельзя.
+            saved = await asyncio.to_thread(
+                deps.conversation.add_assistant_message, state["session_id"], result.content, reasoning=reasoning,
+            )
+            write({"type": "tool_calls", "message": saved})
+            write(log(f"В плане не сделано пунктов: {len(remaining)} — прошу продолжить"))
+            return {
+                "messages": [
+                    *state["messages"], {"role": "assistant", "content": result.content},
+                    {"role": "user", "content": plan_nudge(remaining)},
+                ],
+                "decisions": {}, "answer": None, "plan_nudges": plan_nudges + 1, **totals,
+            }
         if rounds and offered and nudges < MAX_NUDGES and promises_action(result.content):
             # Маленькая модель пишет «Перехожу в корзину.» и молчит: текст без вызова закончил бы ход,
             # и пользователю пришлось бы писать «продолжай». Текст остаётся в чате, модель просим продолжить.
-            saved = await asyncio.to_thread(deps.conversation.add_assistant_message, state["session_id"], result.content)
+            saved = await asyncio.to_thread(
+                deps.conversation.add_assistant_message, state["session_id"], result.content, reasoning=reasoning,
+            )
             write({"type": "tool_calls", "message": saved})
             write(log("Модель пообещала действие без вызова инструмента — прошу продолжить"))
             return {
@@ -251,7 +295,7 @@ def _call_model(deps: GraphDeps):
             output_tokens=totals["output_tokens"] or None, tokens_per_second=round(speed, 1) if speed else None,
         )
         answer = await asyncio.to_thread(
-            deps.conversation.add_assistant_message, state["session_id"], result.content, (), stats,
+            deps.conversation.add_assistant_message, state["session_id"], result.content, (), stats, reasoning,
         )
         deps.sessions.set_usage(state["session_id"], {
             "context_tokens": count,
@@ -427,6 +471,15 @@ def describe_parameters(schema: dict) -> str:
         note = f" — {spec['description']}" if spec.get("description") else ""
         parts.append(f"{name} ({spec.get('type', 'any')}{', обязательный' if name in required else ''}){note}")
     return "; ".join(parts) or "нет"
+
+
+def plan_nudge(remaining: list[tuple[int, str]]) -> str:
+    steps = "; ".join(f"{index}. {text}" for index, text in remaining)
+    return (
+        f"В плане ещё не сделано: {steps}. Сделай пункт {remaining[0][0]} сейчас — вызовом инструмента, "
+        "и отметь его через plan done. Если пункт сделать нельзя — отметь его done с причиной в note "
+        "или задай пользователю вопрос."
+    )
 
 
 def promises_action(text: str) -> bool:
