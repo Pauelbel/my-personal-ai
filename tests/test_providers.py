@@ -71,3 +71,31 @@ def test_ollama_without_key_sends_no_authorization(tmp_path):
         probe = client.post("/api/providers/probe", json={"name": "Дом", "kind": "ollama", "base_url": "http://127.0.0.1:11434/v1"})
 
     assert probe.json()["models"] == ["gemma4:12b"] and seen == [None]
+
+
+def test_probe_uses_ssl_verification_setting(tmp_path, monkeypatch):
+    import local_agent.llm.openai_compatible as adapter
+
+    real_client = adapter.httpx.AsyncClient
+    verification_options = []
+
+    def capture_client(*args, **kwargs):
+        verification_options.append(kwargs.get("verify"))
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(adapter.httpx, "AsyncClient", capture_client)
+    configured = settings(tmp_path)
+    configured.llm_verify_ssl = False
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": "corporate-model"}]})
+
+    with TestClient(create_app(configured, llm_provider=ScriptedProvider())) as client:
+        client.app.state.provider_transport = httpx.MockTransport(respond)
+        response = client.post(
+            "/api/providers/probe",
+            json={"name": "Работа", "kind": "openai", "base_url": "https://llm.example.com/v1"},
+        )
+
+    assert response.json() == {"models": ["corporate-model"]}
+    assert verification_options[-1] is False

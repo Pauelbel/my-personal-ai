@@ -26,6 +26,7 @@ class OpenAICompatibleProvider:
         *,
         name: str = "LM Studio",
         api_key: str = "",
+        verify_ssl: bool = True,
     ) -> None:
         self.name = name
         base = base_url.rstrip("/")
@@ -35,6 +36,7 @@ class OpenAICompatibleProvider:
             base_url=base + "/",
             timeout=timeout_seconds,
             transport=transport,
+            verify=verify_ssl,
             headers={"Authorization": f"Bearer {api_key}"} if api_key else None,
         )
         self._context_cache: dict[str, tuple[float, int | None]] = {}

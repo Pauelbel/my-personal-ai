@@ -74,6 +74,7 @@ async def probe(payload: Probe, request: Request) -> dict:
         key = _stored_key(request, payload.id)
     client = OpenAICompatibleProvider(
         payload.base_url, PROBE_TIMEOUT_SECONDS, _transport(request), name=payload.name, api_key=key or "",
+        verify_ssl=request.app.state.settings.llm_verify_ssl,
     )
     try:
         models = await client.list_models()
@@ -142,8 +143,10 @@ async def delete(provider_id: str, request: Request) -> None:
         await previous.close()
 
 
-def build(entry: ProviderEntry, timeout: float, transport=None) -> OpenAICompatibleProvider:
-    return OpenAICompatibleProvider(entry.base_url, timeout, transport, name=entry.name, api_key=entry.api_key)
+def build(entry: ProviderEntry, timeout: float, transport=None, *, verify_ssl: bool = True) -> OpenAICompatibleProvider:
+    return OpenAICompatibleProvider(
+        entry.base_url, timeout, transport, name=entry.name, api_key=entry.api_key, verify_ssl=verify_ssl
+    )
 
 
 def _transport(request: Request):
@@ -160,7 +163,13 @@ def apply_default(state, provider: str, model: str) -> None:
 
 async def _register(request: Request, entry: ProviderEntry) -> None:
     state = request.app.state
-    previous = state.llm_registry.set(entry.id, build(entry, state.settings.llm_timeout_seconds, _transport(request)))
+    previous = state.llm_registry.set(
+        entry.id,
+        build(
+            entry, state.settings.llm_timeout_seconds, _transport(request),
+            verify_ssl=state.settings.llm_verify_ssl,
+        ),
+    )
     if previous is not None:
         await previous.close()
 

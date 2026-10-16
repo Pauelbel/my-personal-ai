@@ -90,7 +90,8 @@ from local_agent.wiki.tools import (
 def build_providers(settings: Settings, lm_studio: LLMProvider | None) -> LLMRegistry:
     providers: dict[str, LLMProvider] = {
         "lm_studio": lm_studio or OpenAICompatibleProvider(
-            settings.llm_base_url, settings.llm_timeout_seconds, name=settings.llm_name
+            settings.llm_base_url, settings.llm_timeout_seconds, name=settings.llm_name,
+            verify_ssl=settings.llm_verify_ssl,
         ),
     }
     for config in settings.llm_providers:
@@ -99,6 +100,7 @@ def build_providers(settings: Settings, lm_studio: LLMProvider | None) -> LLMReg
             settings.llm_timeout_seconds,
             name=config.name,
             api_key=config.api_key,
+            verify_ssl=settings.llm_verify_ssl,
         )
     return LLMRegistry(providers)
 
@@ -162,7 +164,12 @@ def create_app(
             state.default_provider = "lm_studio"
             stored = state.provider_store.load()
             for entry in stored.providers:
-                state.llm_registry.set(entry.id, build_stored_provider(entry, active_settings.llm_timeout_seconds))
+                state.llm_registry.set(
+                    entry.id,
+                    build_stored_provider(
+                        entry, active_settings.llm_timeout_seconds, verify_ssl=active_settings.llm_verify_ssl
+                    ),
+                )
             apply_default(state, stored.default_provider, stored.default_model)
             state.memory_service = MemoryService(
                 memory_store,

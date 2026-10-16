@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     default_context_tokens: int = Field(default=8192, gt=0)
     response_reserve_tokens: int = Field(default=1024, ge=0)
     llm_timeout_seconds: float = Field(default=120.0, gt=0)
+    llm_verify_ssl: bool = True
     allowed_hosts: str = "127.0.0.1,localhost"
 
     @property
