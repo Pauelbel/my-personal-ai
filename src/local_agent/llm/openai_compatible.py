@@ -110,7 +110,9 @@ class OpenAICompatibleProvider:
         except httpx.TimeoutException as exc:
             raise LLMProviderUnavailable(f"{self.name} не ответил за отведённое время") from exc
         except httpx.RequestError as exc:
-            raise LLMProviderUnavailable(f"Не удалось подключиться к {self.name}") from exc
+            raise LLMProviderUnavailable(
+                f"Не удалось подключиться к {self.name}: {type(exc).__name__}: {exc}"
+            ) from exc
         except (ValueError, TypeError, AttributeError) as exc:
             raise LLMProviderError(f"{self.name} вернул некорректный поток ответа") from exc
         tool_calls = tuple(
@@ -244,7 +246,9 @@ class OpenAICompatibleProvider:
         except httpx.TimeoutException as exc:
             raise LLMProviderUnavailable(f"{self.name} не ответил за отведённое время") from exc
         except httpx.RequestError as exc:
-            raise LLMProviderUnavailable(f"Не удалось подключиться к {self.name}") from exc
+            raise LLMProviderUnavailable(
+                f"Не удалось подключиться к {self.name}: {type(exc).__name__}: {exc}"
+            ) from exc
         except httpx.HTTPStatusError as exc:
             raise LLMProviderError(self._http_error(exc.response)) from exc
         except ValueError as exc:

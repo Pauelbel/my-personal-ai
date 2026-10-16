@@ -125,6 +125,27 @@ def test_http_error_carries_server_explanation_and_vllm_window() -> None:
     assert window == 131072 and unknown is None
 
 
+def test_connection_error_includes_transport_details() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("certificate verify failed", request=request)
+
+    async def exercise() -> str:
+        provider = OpenAICompatibleProvider(
+            "https://llm.example/v1", timeout_seconds=5, transport=httpx.MockTransport(respond), name="Сервер",
+        )
+        try:
+            await provider.list_models()
+        except Exception as exc:
+            return str(exc)
+        finally:
+            await provider.close()
+        raise AssertionError("list_models unexpectedly succeeded")
+
+    assert asyncio.run(exercise()) == (
+        "Не удалось подключиться к Сервер: ConnectError: certificate verify failed"
+    )
+
+
 def test_ollama_window_comes_from_loaded_models() -> None:
     """Ollama не сообщает окно в /v1/models, только у загруженной модели в /api/ps."""
     loaded = []
