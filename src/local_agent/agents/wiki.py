@@ -1,6 +1,6 @@
 """Агент чата вики: живёт вне проектов, работает только с заметками и ссылками и помнит лишь хвост разговора."""
 
-from local_agent.agent.models import Agent
+from local_agent.agents.models import Agent
 
 WIKI_AGENT_ID = "wiki"
 

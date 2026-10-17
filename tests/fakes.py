@@ -22,8 +22,17 @@ def call(tool: str, /, **arguments) -> tuple[str, dict]:
     return (tool, arguments)
 
 
+class Said(tuple):
+    """Шаг сценария: текст ответа и вызов инструмента в одном ответе модели."""
+
+
+def say(text: str, step: tuple[str, dict]) -> Said:
+    return Said((text, step))
+
+
 class ScriptedProvider:
-    """steps — по шагу на запрос: строка — ответ текстом, (имя, аргументы) — вызов инструмента."""
+    """steps — по шагу на запрос: строка — ответ текстом, (имя, аргументы) — вызов инструмента,
+    say(текст, вызов) — текст и вызов вместе."""
 
     def __init__(self, *steps) -> None:
         self.steps = list(steps)
@@ -34,10 +43,11 @@ class ScriptedProvider:
         step = self.steps.pop(0) if self.steps else "Готово"
         if isinstance(step, str):
             return ChatResult(content=step, input_tokens=100, output_tokens=5)
-        name, arguments = step
         index = len(self.requests)
+        # say(текст, вызов) — текст и вызов в одном ответе, как часто пишет Gemma.
+        text, (name, arguments) = step if isinstance(step, Said) else (None, step)
         return ChatResult(
-            content=None,
+            content=text,
             tool_calls=(ToolCall(f"call-{index}", name, json.dumps(arguments, ensure_ascii=False)),),
         )
 

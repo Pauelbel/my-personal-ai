@@ -3,8 +3,9 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from local_agent.agent.loader import load_agents, load_skills
-from local_agent.agent.main_agent import MAIN_AGENT_ID, MAIN_PROMPT
+from local_agent.agents.files import load_agents
+from local_agent.agents.main import MAIN_AGENT_ID, MAIN_PROMPT
+from local_agent.skills.files import load_skills
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
 
@@ -37,7 +38,7 @@ def source(kind: str, item_id: str, request: Request) -> CapabilitySource:
         rules = request.app.state.main_instructions.read()
         return CapabilitySource(
             kind=kind, id=item_id, readonly=True,
-            path="встроен в приложение (src/local_agent/agent/main_agent.py); свои правила — кнопкой «правила»",
+            path="встроен в приложение (src/local_agent/agents/main.py); свои правила — кнопкой «правила»",
             files={"Встроенный промпт": MAIN_PROMPT, "Ваши правила — добавляются в конец промпта": rules or "(нет)"},
         )
     if kind == "tool" and capabilities.is_script_tool(item_id):
@@ -113,6 +114,17 @@ async def uninstall_package(name: str, request: Request) -> None:
     result = await env.uninstall(name)
     if result.is_error:
         raise HTTPException(status_code=400, detail=result.content)
+
+
+@router.post("/library/{kind}/{item_id}")
+def enable(kind: str, item_id: str, request: Request) -> dict:
+    """«Включить» готовую заготовку: скилл, коннектор или встроенное дополнение."""
+    try:
+        return {"id": request.app.state.capabilities.enable(kind, item_id)}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/reload")

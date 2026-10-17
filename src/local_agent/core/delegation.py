@@ -9,18 +9,16 @@
 
 import asyncio
 import logging
-from pathlib import Path
 from uuid import uuid4
 
-from local_agent.agent.errors import AgentRuntimeError, SessionBusyError
-from local_agent.agent.main_agent import MAIN_AGENT_ID, MAIN_AGENT_NAME
-from local_agent.agent.registry import AgentRegistry
+from local_agent.agents.main import MAIN_AGENT_ID, MAIN_AGENT_NAME
+from local_agent.agents.registry import AgentRegistry
+from local_agent.core.errors import AgentRuntimeError, SessionBusyError
 from local_agent.llm.base import LLMProviderError
 from local_agent.memory.conversation import ConversationService
 from local_agent.memory.models import Message
 from local_agent.sessions.models import Session
 from local_agent.sessions.service import SessionService
-from local_agent.tools.base import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -328,94 +326,6 @@ class DelegationManager:
             self._turns.start(parent_id, self._runtime.stream_turn(parent_id, content, f"report-{uuid4().hex[:8]}", sender=sender))
         except SessionBusyError:
             await asyncio.to_thread(self._conversation.add_user_message, parent_id, content, sender)
-
-
-class DelegateTool:
-    id = "delegate"
-    name = "Поручить саб-агенту"
-    requires_approval = False
-
-    def __init__(self, manager: DelegationManager, agents: AgentRegistry, parent: Session) -> None:
-        self._manager = manager
-        self._agents = agents
-        self._parent = parent
-
-    @property
-    def description(self) -> str:
-        return (
-            "Поручить задачу саб-агенту. Он работает в фоне, ты продолжаешь разговор; результат придёт "
-            "отдельным сообщением. Передай задачу целиком: что сделать, пути, условия, формат результата"
-        )
-
-    @property
-    def parameters(self) -> dict[str, object]:
-        return {
-            "type": "object",
-            "properties": {
-                "agent": {"type": "string", "enum": [agent.id for agent in self._agents.all()]},
-                "task": {"type": "string", "description": "Задача целиком"},
-            },
-            "required": ["agent", "task"],
-            "additionalProperties": False,
-        }
-
-    async def execute(self, arguments: dict[str, object], workspace: Path | None) -> ToolResult:
-        agent, task = arguments.get("agent"), arguments.get("task")
-        if not isinstance(agent, str) or not isinstance(task, str) or not task.strip():
-            return ToolResult("Нужны agent и task", is_error=True)
-        try:
-            child = self._manager.delegate(self._parent, agent, task.strip())
-        except ValueError as exc:
-            return ToolResult(str(exc), is_error=True)
-        return ToolResult(
-            f"Задача поручена {agent} (задача {child.id[:8]}). Скажи пользователю, что работа идёт в фоне "
-            "и результат придёт сообщением; не жди его и не выдумывай результат."
-        )
-
-
-class AskAgentTool:
-    """Саб-агент обращается к другому агенту команды — с вопросом или поручением — и ждёт ответа."""
-
-    id = "ask_agent"
-    name = "Обратиться к агенту"
-    requires_approval = False
-
-    def __init__(self, manager: DelegationManager, agents: AgentRegistry, asker: Session, targets: tuple[str, ...]) -> None:
-        self._manager = manager
-        self._agents = agents
-        self._asker = asker
-        self._targets = targets
-
-    @property
-    def description(self) -> str:
-        known = [agent for agent in (self._agents.get(item) for item in self._targets) if agent]
-        return (
-            "Обратиться к другому агенту команды: поручить ему часть задачи или задать вопрос — и дождаться ответа. "
-            "Передай всё целиком: что нужно, пути, контекст, в каком виде вернуть. "
-            "К кому можно обратиться: " + "; ".join(f"{agent.id} — {agent.description or agent.name}" for agent in known)
-        )
-
-    @property
-    def parameters(self) -> dict[str, object]:
-        return {
-            "type": "object",
-            "properties": {
-                "agent": {"type": "string", "enum": list(self._targets)},
-                "question": {"type": "string", "description": "Поручение или вопрос целиком"},
-            },
-            "required": ["agent", "question"],
-            "additionalProperties": False,
-        }
-
-    async def execute(self, arguments: dict[str, object], workspace: Path | None) -> ToolResult:
-        agent, question = arguments.get("agent"), arguments.get("question")
-        if agent not in self._targets or not isinstance(question, str) or not question.strip():
-            return ToolResult(f"Нужны agent (один из: {', '.join(self._targets)}) и question", is_error=True)
-        try:
-            text = await self._manager.ask(self._asker, agent, question.strip())
-        except ValueError as exc:
-            return ToolResult(str(exc), is_error=True)
-        return ToolResult(f"Ответ {agent}:\n\n{text}")
 
 
 def _title(text: str) -> str:

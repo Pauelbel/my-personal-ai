@@ -1,13 +1,8 @@
-"""Реестр находит инструменты по ID."""
+"""Реестр всех инструментов приложения: встроенные, скрипты, MCP и дополнения находятся по ID."""
 
 from collections.abc import Iterable
 
-from local_agent.tools.base import Tool
-
-
-def normalize_tool_ids(tool_ids: Iterable[str]) -> list[str]:
-    """Старые разрешения чтения Git относятся к единому инструменту Git."""
-    return list(dict.fromkeys("git" if item in {"git_log", "git_show"} else item for item in tool_ids))
+from local_agent.core.tool import Tool
 
 
 class ToolRegistry:

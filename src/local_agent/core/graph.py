@@ -4,6 +4,8 @@
 и контекст, которые собирает runtime. Состояние — простые словари, чтобы чекпоинт в SQLite
 переживал перезапуск сервера. Подтверждения — interrupt в отдельном узле approve, в котором
 нет побочных эффектов: при resume LangGraph выполняет узел заново, и инструменты не вызываются дважды.
+Карточка лимита шагов («продолжить или остановить?») — interrupt в самом начале call_model, до запроса к модели:
+повторный запуск узла после решения тоже ничего не делает дважды.
 
 Узлы пишут в поток через get_stream_writer события того же вида, что раньше отдавал runtime:
 log, delta, reasoning, tool_calls, tool_result, user_message, done.
@@ -15,7 +17,6 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypedDict
@@ -24,10 +25,11 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from local_agent.agent.context import drop_stale_snapshots, estimate_tokens, fit_turn
-from local_agent.agent.errors import AgentRuntimeError
-from local_agent.agent.plan import open_steps, plan_prompt
-from local_agent.capabilities.toolbox import Toolbox
+from local_agent.core.context import drop_stale_snapshots, estimate_tokens, fit_turn
+from local_agent.core.errors import AgentRuntimeError
+from local_agent.core.plan import open_steps, plan_prompt
+from local_agent.core.tool import CURRENT_TURN, Tool, ToolResult
+from local_agent.core.toolbox import Toolbox
 from local_agent.llm.base import LLMEmptyResponse, LLMRepetition, stream_chat
 from local_agent.llm.models import ChatMessage, ChatResult, ReasoningDelta, ToolCall
 from local_agent.llm.registry import LLMRegistry
@@ -35,13 +37,14 @@ from local_agent.memory.conversation import ConversationService
 from local_agent.memory.models import MessageStats
 from local_agent.sessions.models import Session
 from local_agent.sessions.service import SessionService
-from local_agent.tools.base import Tool, ToolResult
 
 logger = logging.getLogger(__name__)
 
 MAX_CALLS_PER_ROUND = 4
 LOG_ARGUMENTS_CHARS = 160
 INTERRUPTED_SUFFIX = "\n\n_(ответ прерван)_"
+# Итог хода, остановленного кнопкой «Стоп» до того, как модель что-то написала.
+STOPPED_TEXT = "_(ход остановлен)_"
 # Запас на ответ для хода из старого чекпоинта, в состоянии которого бюджета ещё нет.
 DEFAULT_RESPONSE_RESERVE = 1024
 DECISIONS = {"approve", "reject", "reply"}
@@ -68,10 +71,12 @@ NOT_ACTIONS = {
     # Ждёт саб-агента: «Я сообщу, когда будет готово», «Вернусь с результатом».
     "сообщу", "доложу", "отвечу", "вернусь", "дождусь", "подожду", "оповещу", "уведомлю",
 }
-# Чей ход сейчас выполняет инструмент: сессия, провайдер и модель. Нужно инструментам, которые сами зовут модель.
 # Место реестра возможностей в системном промпте, который хранится в состоянии хода.
 CATALOG_MARKER = "\u2063CAPABILITIES\u2063"
-CURRENT_TURN: ContextVar[dict | None] = ContextVar("current_turn", default=None)
+STOP_NOTE = (
+    "Пользователь остановил работу на лимите шагов. Инструменты больше не вызывай. Коротко напиши итог: "
+    "что уже сделано (и где лежит результат) и что осталось сделать."
+)
 
 
 class TurnState(TypedDict, total=False):
@@ -100,6 +105,10 @@ class TurnState(TypedDict, total=False):
     nudges: int
     # Сколько раз модель вернули к несделанным пунктам плана.
     plan_nudges: int
+    # На сколько шагов «Продолжить» в карточке лимита продлевает ход (обычно — лимит агента).
+    round_step: int
+    # Пользователь остановил ход на лимите: последний запрос — без инструментов, только итог.
+    stopped: bool
 
 
 @dataclass
@@ -149,11 +158,29 @@ def _call_model(deps: GraphDeps):
         if provider is None:
             raise AgentRuntimeError("Провайдер LLM не найден")
         rounds, max_rounds = state.get("rounds", 0), state["max_rounds"]
+        stopped = state.get("stopped", False)
+        limit: dict = {}
+        if rounds >= max_rounds and not stopped:
+            # Лимит шагов за ход: продолжать или нет, решает пользователь карточкой. Узел ещё ничего не сделал,
+            # поэтому после решения LangGraph спокойно выполнит его заново.
+            step = state.get("round_step") or max_rounds
+            decision = normalize_decision(interrupt({
+                "kind": "limit",
+                "title": f"Сделано {rounds} {_steps(rounds)} — продолжить работу?",
+                "text": (f"За этот ход агент сделал {rounds} {_steps(rounds)} с инструментами — это лимит хода. "
+                         f"«Продолжить» даст ещё {step} {_steps(step)}; «Остановить» — агент напишет итог: "
+                         "что сделано и что осталось."),
+                "session_id": state["session_id"],
+            }))
+            if decision["action"] == "approve":
+                max_rounds = limit["max_rounds"] = rounds + step
+            else:
+                stopped = limit["stopped"] = True
         definitions = box.definitions()
-        offered = definitions if rounds < max_rounds else None
+        offered = definitions if rounds < max_rounds and not stopped else None
         write(log(
             f"Запрос к {state['provider_id']} · {state['model']}" + (f" · раунд {rounds + 1}" if rounds else "")
-            + ("" if offered or not definitions else " · без инструментов (лимит раундов)")
+            + ("" if offered or not definitions else " · без инструментов: работа остановлена на лимите")
         ))
         if offered:
             write(log("Подключены: " + ", ".join(item["function"]["name"] for item in offered)))
@@ -165,6 +192,8 @@ def _call_model(deps: GraphDeps):
         # План задачи — в конце системного промпта перед каждым запросом: так модель не теряет его части.
         if (steps := plan_prompt(session.plan)) and messages and messages[0].role == "system":
             messages[0] = ChatMessage("system", f"{messages[0].content or ''}\n\n{steps}")
+        if stopped:
+            messages.append(ChatMessage("user", STOP_NOTE))
         # Внутри хода результаты инструментов копятся: если запрос уже не влезает в окно, давние сокращаются.
         budget = state.get("budget") or max(state["window"] - DEFAULT_RESPONSE_RESERVE, 0)
         schemas = estimate_tokens(json.dumps(offered, ensure_ascii=False)) if offered else 0
@@ -219,15 +248,14 @@ def _call_model(deps: GraphDeps):
         elapsed = time.perf_counter() - requested
         write(log(_round_summary(result, elapsed)))
         written = result.output_tokens if isinstance(result.output_tokens, int) and result.output_tokens > 0 else 0
-        totals = {"spent": state.get("spent", 0.0) + elapsed, "output_tokens": state.get("output_tokens", 0) + written}
+        totals = {"spent": state.get("spent", 0.0) + elapsed, "output_tokens": state.get("output_tokens", 0) + written, **limit}
         # Не «partial»: в нём могут быть рассуждения, пришедшие текстом, а result.content уже очищен от них.
         text = result.content or ""
         reasoning = "".join(thoughts)
-        if result.tool_calls and rounds >= max_rounds:
-            # Лимит раундов: инструменты в последнем запросе уже не предлагались, а модель всё равно их зовёт.
+        if result.tool_calls and offered is None:
+            # Работу остановили на лимите: инструменты не предлагались, а модель всё равно их зовёт.
             # Ход не обрывается ошибкой — заканчивается ответом, и работу можно продолжить следующим сообщением.
-            note = (f"Дошёл до лимита в {max_rounds} шагов с инструментами за один ход и остановился. "
-                    "Напишите «продолжай» — продолжу с этого места.")
+            note = f"Работа остановлена после {rounds} {_steps(rounds)}. Напишите «продолжай» — продолжу с этого места."
             result = replace(result, content=f"{text.strip()}\n\n{note}" if text.strip() else note, tool_calls=())
         if result.tool_calls:
             saved = await asyncio.to_thread(
@@ -378,7 +406,7 @@ def _run_tools(deps: GraphDeps):
                 ))
             saved = await asyncio.to_thread(
                 deps.conversation.add_tool_message, state["session_id"],
-                call_id=call["id"], name=call["name"], content=output.content, is_error=output.is_error,
+                call_id=call["id"], name=call["name"], content=output.content, is_error=output.is_error, meta=output.meta,
             )
             write({"type": "tool_result", "message": saved})
             messages.append({"role": "tool", "content": output.content, "tool_call_id": call["id"]})
@@ -471,6 +499,13 @@ def describe_parameters(schema: dict) -> str:
         note = f" — {spec['description']}" if spec.get("description") else ""
         parts.append(f"{name} ({spec.get('type', 'any')}{', обязательный' if name in required else ''}){note}")
     return "; ".join(parts) or "нет"
+
+
+def _steps(count: int) -> str:
+    tens, units = count % 100, count % 10
+    if 11 <= tens <= 14:
+        return "шагов"
+    return "шаг" if units == 1 else "шага" if 2 <= units <= 4 else "шагов"
 
 
 def plan_nudge(remaining: list[tuple[int, str]]) -> str:

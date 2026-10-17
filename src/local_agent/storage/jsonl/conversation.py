@@ -125,6 +125,8 @@ class JsonlConversationStore:
             data["attachments"] = message.attachments
         if message.reasoning:
             data["reasoning"] = message.reasoning
+        if message.meta:
+            data["meta"] = message.meta
         return (json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
     @staticmethod

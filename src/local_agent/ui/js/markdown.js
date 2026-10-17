@@ -23,7 +23,8 @@ function appendInline(parent, source) {
       index += lineBreak[0].length;
       continue;
     }
-    if (source[index] === "\\" && index + 1 < source.length) {
+    // Обратный слеш экранирует только знаки препинания (\*, \_, \|): «C:\new» и «\n» остаются как есть.
+    if (source[index] === "\\" && PUNCTUATION.test(source[index + 1] ?? "")) {
       appendText(parent, source[index + 1]);
       index += 2;
       continue;
@@ -98,7 +99,7 @@ function splitTableRow(line) {
   let escaped = false;
   for (const character of line.trim().replace(/^\|/, "").replace(/\|$/, "")) {
     if (escaped) {
-      cell += character;
+      cell += PUNCTUATION.test(character) ? character : `\\${character}`;
       escaped = false;
     } else if (character === "\\") escaped = true;
     else if (character === "|") {
@@ -151,6 +152,13 @@ function appendTable(parent, header, divider, rows, first) {
   table.append(body);
   wrapper.append(table);
   parent.append(wrapper);
+}
+
+const PUNCTUATION = /^[!-/:-@[-`{-~]$/;
+const LIST_ITEM = /^(\s*)([-+*]|\d+[.)])\s+(.+)$/;
+
+function indentOf(line) {
+  return line.length - line.trimStart().length;
 }
 
 function isBlockStart(line) {
@@ -223,15 +231,30 @@ export function appendMarkdown(parent, source, offset = 0) {
       continue;
     }
 
-    const listMatch = /^\s*([-+*]|\d+[.)])\s+(.+)$/.exec(line);
+    const listMatch = LIST_ITEM.exec(line);
     if (listMatch) {
-      const ordered = /\d/.test(listMatch[1][0]);
+      const base = listMatch[1].length;
+      const ordered = /\d/.test(listMatch[2][0]);
       const list = document.createElement(ordered ? "ol" : "ul");
+      // «2. Баг-репорты» после маркированного списка — продолжение нумерации, а не новый пункт 1.
+      const first = Number.parseInt(listMatch[2], 10);
+      if (ordered && first > 1) list.start = first;
+      let item = null;
       while (index < lines.length) {
-        const itemMatch = /^\s*([-+*]|\d+[.)])\s+(.+)$/.exec(lines[index]);
-        if (!itemMatch || /\d/.test(itemMatch[1][0]) !== ordered) break;
-        const item = mark(document.createElement("li"), offset + index + 1);
-        appendInline(item, itemMatch[2]);
+        const current = lines[index];
+        // Строки глубже пунктов списка — вложенный список или текст последнего пункта.
+        if (item && current.trim() && indentOf(current) > base) {
+          const nested = [];
+          const from = index;
+          while (index < lines.length && lines[index].trim() && indentOf(lines[index]) > base) nested.push(lines[index++]);
+          const shift = Math.min(...nested.map(indentOf));
+          appendMarkdown(item, nested.map((text) => text.slice(shift)).join("\n"), offset + from);
+          continue;
+        }
+        const itemMatch = LIST_ITEM.exec(current);
+        if (!itemMatch || itemMatch[1].length !== base || /\d/.test(itemMatch[2][0]) !== ordered) break;
+        item = mark(document.createElement("li"), offset + index + 1);
+        appendInline(item, itemMatch[3]);
         list.append(item);
         index += 1;
       }

@@ -206,14 +206,18 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
    Фон под подписью на кромке — --frame-bg: тот же, что у контейнера рамки. */
 .messages { flex: 1; overflow: auto; padding: 20px var(--gutter) 8px; font: 14px/1.6 var(--mono); }
 .messages code, .messages pre { font-size: 13px; }
-/* Сообщения за пределами экрана не раскладываются и не рисуются: длинная лента не тормозит ввод. */
-.messages > * { content-visibility: auto; contain-intrinsic-size: auto 120px; }
+/* Ответы и ходы за пределами экрана не раскладываются и не рисуются: длинная лента не тормозит ввод.
+   Только у них: content-visibility обрезает всё, что выходит за край, а у отчёта агента подпись сидит на рамке. */
+.messages > :is(.msg.assistant, .work) { content-visibility: auto; contain-intrinsic-size: auto 120px; }
 .msg { margin: 0 0 18px; }
 .msg.user { display: flex; justify-content: flex-end; }
 .msg.user .bubble {
   background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 12px;
   max-width: 85%; white-space: pre-wrap; overflow-wrap: anywhere;
 }
+/* Длинное задание свёрнуто до нескольких строк; «Показать полностью» — под текстом. */
+.msg.user.folded .bubble-text { max-height: 9.6em; overflow: hidden; mask-image: linear-gradient(to bottom, black 55%, transparent); }
+.msg.user .fold { display: block; margin: 4px 0 0 auto; padding: 0; font: 12px var(--mono); white-space: normal; }
 .msg.assistant .text { overflow-wrap: anywhere; line-height: 1.6; }
 .msg .text > :first-child { margin-top: 0; }
 .msg .text > :last-child { margin-bottom: 0; }
@@ -241,12 +245,17 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
   font: 12px/1.6 var(--mono); padding: 2px 0;
 }
 .work-head::-webkit-details-marker { display: none; }
-.work-title { font-weight: 600; color: var(--accent-2); }
+/* Щелчок по строке не оставляет рамку фокуса; с клавиатуры фокус виден. */
+.work-head:focus { outline: none; }
+.work-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* Заголовок хода — что модель делала («Работал в браузере»): спокойный серый, процесс не спорит с ответом. */
+.work-title { font-weight: 500; color: var(--muted); }
+.live .work-title { color: var(--fg); }
 .work-head:hover .work-title { color: var(--fg); }
 .work-caret { display: inline-block; transition: transform .15s; }
 .work:not([open]) .work-caret { transform: rotate(-90deg); }
-.work-body { padding: 4px 0 0 12px; border-left: 2px solid color-mix(in srgb, var(--accent-2) 35%, transparent); }
-.work-body .tools { margin: 18px 0 10px; }
+.work-body { padding: 6px 0 2px; }
+.work-icon { color: var(--accent-2); }
 .work-note { color: var(--muted); margin: 6px 0; overflow-wrap: anywhere; }
 .work-note > :first-child { margin-top: 0; }
 .work-note > :last-child { margin-bottom: 0; }
@@ -268,40 +277,33 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .msg-action:hover:not(:disabled) { color: var(--fg); background: transparent; }
 @media (hover: none) { .msg-foot.bare { opacity: 1; } }
 
-/* Вызовы инструментов: строки в рамке, подпись и итог — на верхней кромке */
-.tools {
-  position: relative; margin: 22px 0 18px; padding: 12px 10px 6px; border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--accent-2) 55%, transparent);
-}
-.tools:not([open]) { padding: 6px 10px 0; }
-.tools-head {
-  position: absolute; top: -0.8em; left: 10px; right: 10px; display: flex; justify-content: space-between; gap: 8px;
-  font: 12px/1.6 var(--mono); color: var(--muted); cursor: pointer; list-style: none;
-}
-.tools-head::-webkit-details-marker { display: none; }
-.tools-title, .tools-meta { background: var(--frame-bg); padding: 0 6px; white-space: nowrap; }
-.tools-title { font-weight: 600; color: var(--accent-2); }
-.tools-head:hover .tools-title { color: var(--fg); }
-.tools-caret { display: inline-block; transition: transform .15s; }
-.tools:not([open]) .tools-caret { transform: rotate(-90deg); }
-.tools-rows { display: flex; flex-direction: column; }
+/* Шаги хода — одна рамка, строка на шаг: «✓ Открыта страница  saucedemo.com  1,2 с ›»; раскрыть — подробности. */
+.steps { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
+.steps > .step + .step { border-top: 1px solid var(--line); }
 .step { font: 13px/1.6 var(--mono); color: var(--muted); }
 .step summary {
-  display: grid; grid-template-columns: 1.4em minmax(0, min(calc(var(--name-ch, 20) * 1ch), 28ch)) minmax(0, 1fr) auto; align-items: baseline; gap: 12px;
-  padding: 1px 4px; border-radius: 4px; cursor: pointer; list-style: none;
+  display: grid; grid-template-columns: 1.4em auto minmax(0, 1fr) auto 1ch; align-items: baseline; gap: 10px;
+  padding: 5px 10px; cursor: pointer; list-style: none;
 }
 .step summary::-webkit-details-marker { display: none; }
+.step summary::after { content: "›"; color: var(--muted); transition: transform .15s; }
+.step[open] summary::after { transform: rotate(90deg); }
 .step summary:hover, .step[open] summary { background: var(--surface-2); color: var(--fg); }
 .step-icon { text-align: center; color: var(--ok); }
 .step.failed :is(.step-icon, .step-name, .step-meta) { color: var(--danger); }
 .step.pending .step-icon { color: var(--accent); animation: pulse 1s infinite alternate; }
-.step-name { font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.step-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-name { color: var(--muted); white-space: nowrap; }
+.step-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
 .step-meta { text-align: right; white-space: nowrap; }
+/* Размышления и промежуточные реплики — приглушённые строки среди шагов. */
+.step:is(.thought, .note) .step-icon { color: var(--muted); }
+.step:is(.thought, .note) .step-target { color: var(--muted); }
+.step.thought .step-target { font-style: italic; }
 .step pre {
-  white-space: pre-wrap; max-height: 280px; overflow: auto; margin: 4px 0 8px; padding: 8px 10px; color: var(--fg);
-  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 12px;
+  white-space: pre-wrap; max-height: 280px; overflow: auto; margin: 0; padding: 8px 12px; color: var(--fg);
+  background: var(--bg); border-top: 1px solid var(--line); font-size: 12px;
 }
+.step .step-text { padding: 8px 12px; border-top: 1px solid var(--line); background: var(--bg); font-size: 13px; }
 
 /* Markdown: ответы в чате, вики и просмотр файлов */
 :is(.msg .text, .reader) a { color: var(--accent-2); text-decoration: none; }
@@ -311,9 +313,10 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 :is(.msg .text, .reader) h2 { font-size: 1.22em; }
 :is(.msg .text, .reader) h3 { font-size: 1.08em; }
 :is(.msg .text, .reader) :is(h4, h5, h6) { font-size: 1em; }
-:is(.msg .text, .reader) :is(ul, ol) { padding-left: 1.5em; }
-:is(.msg .text, .reader) ul { list-style-type: "–  "; }
-:is(.msg .text, .reader) ul ul { list-style-type: "·  "; }
+/* Маркер должен помещаться в отступ списка: сообщение обрезает всё, что выходит за его край (content-visibility). */
+:is(.msg .text, .reader) ul { padding-left: 1.8em; list-style-type: "– "; }
+:is(.msg .text, .reader) ol { padding-left: 2.4em; }
+:is(.msg .text, .reader) ul ul { list-style-type: "· "; }
 :is(.msg .text, .reader) li::marker { color: var(--marker); }
 :is(.msg .text, .reader) ol > li::marker { font: .9em var(--mono); }
 :is(.msg .text, .reader) li + li { margin-top: 3px; }
@@ -336,13 +339,15 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 @media (hover: none) { .copy { opacity: 1; } }
 
-/* Печатающийся ответ */
-/* Идущий ход — одна строка с колесом; раскрытая показывает рассуждения и лог вживую. */
-.live { margin: 0 0 8px; font: 12px var(--mono); color: var(--muted); }
-.live-head { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; list-style: none; }
-.live-head::-webkit-details-marker { display: none; }
-.live-head:hover { color: var(--fg); }
-.live:not([open]) .work-caret { transform: rotate(-90deg); }
+/* Идущий ход — та же строка «ход работы», только с колесом: внутри шаги, рассуждения, текст и журнал. */
+.live-head { align-items: center; }
+/* Строка хода всегда в одну строку: длинное название этапа обрезается многоточием. */
+.live-head .work-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Файлы, созданные и изменённые за ход, — строкой в конце хода; щелчок открывает файл во вкладке «Файлы». */
+.turn-files { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: -8px 0 18px; font: 12px/1.6 var(--mono); color: var(--muted); }
+.turn-files code { color: var(--accent-2); background: var(--surface-2); border-radius: 4px; padding: 1px 6px; }
+/* Готовый результат этапа — в чате после хода работы, с подписью «✓ Этап 1 · Тест-кейсы». */
+.msg.stage .stage-head { font: 600 12px/1.6 var(--mono); color: var(--ok); margin-bottom: 4px; }
 .spinner {
   width: 11px; height: 11px; border-radius: 50%; flex: none;
   border: 2px solid color-mix(in srgb, var(--agent) 25%, transparent); border-top-color: var(--agent);
@@ -350,12 +355,13 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
-.live pre, .work-thought {
+.work-thought, .live-log pre {
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; margin: 6px 0;
   padding: 6px 10px; border-left: 2px solid var(--line); font: 12px/1.5 var(--mono); color: var(--muted);
 }
-.live-log { opacity: .8; }
-.live-log:empty { display: none; }
+.live-log { margin: 6px 0 2px; }
+.live-log > summary { cursor: pointer; font: 11px var(--mono); color: var(--muted); }
+.live-log > summary:hover { color: var(--fg); }
 .empty { display: flex; flex-direction: column; align-items: center; gap: 2px; margin-top: 12vh; color: var(--muted); text-align: center; }
 .empty img { width: 112px; height: 112px; margin-bottom: 10px; filter: drop-shadow(0 8px 18px var(--shadow)); }
 .empty strong { font-size: 22px; color: var(--fg); }
@@ -405,7 +411,12 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 .frame-label, .model-name { font-weight: 600; color: var(--fg); }
 .frame-label { color: var(--accent-2); margin-right: 6px; }
 .model-name { overflow: hidden; text-overflow: ellipsis; }
-.composer-box { padding: 16px 8px 14px; }
+.composer-box { padding: 16px 8px 14px; container-type: inline-size; }
+/* Имя модели не сжимается в «g…»: тесно — сначала уходят подпись «контекст» и скорость, потом вся шкала. */
+.composer-box .frame-left { flex-shrink: 0; max-width: 100%; }
+.composer-box .usage { overflow: hidden; }
+@container (max-width: 560px) { .usage-label, .usage .speed { display: none; } }
+@container (max-width: 400px) { .usage { display: none; } }
 .composer-row { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .prompt-mark { flex: none; color: var(--ok); font: 13px/28px var(--mono); padding-left: 4px; }
 .composer textarea {

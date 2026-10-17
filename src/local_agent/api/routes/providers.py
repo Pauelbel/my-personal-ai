@@ -7,9 +7,10 @@
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from local_agent.assembly import apply_default
 from local_agent.llm.base import LLMProviderError
 from local_agent.llm.openai_compatible import OpenAICompatibleProvider
-from local_agent.llm.store import KINDS, ProviderEntry, masked, provider_id
+from local_agent.llm.store import KINDS, ProviderEntry, build_provider, masked, provider_id
 
 router = APIRouter(prefix="/providers", tags=["providers"])
 # Список моделей нужен быстро: если сервер не ответил за это время, он недоступен.
@@ -143,29 +144,16 @@ async def delete(provider_id: str, request: Request) -> None:
         await previous.close()
 
 
-def build(entry: ProviderEntry, timeout: float, transport=None, *, verify_ssl: bool = True) -> OpenAICompatibleProvider:
-    return OpenAICompatibleProvider(
-        entry.base_url, timeout, transport, name=entry.name, api_key=entry.api_key, verify_ssl=verify_ssl
-    )
-
-
 def _transport(request: Request):
     """Подмена HTTP-транспорта — только для тестов; в работе None, и запросы идут в сеть."""
     return getattr(request.app.state, "provider_transport", None)
-
-
-def apply_default(state, provider: str, model: str) -> None:
-    """Выбор из настроек заменяет DEFAULT_MODEL из .env на время работы сервера."""
-    if provider and model:
-        state.default_provider = provider
-        state.settings.default_model = model
 
 
 async def _register(request: Request, entry: ProviderEntry) -> None:
     state = request.app.state
     previous = state.llm_registry.set(
         entry.id,
-        build(
+        build_provider(
             entry, state.settings.llm_timeout_seconds, _transport(request),
             verify_ssl=state.settings.llm_verify_ssl,
         ),

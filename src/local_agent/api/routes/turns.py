@@ -11,14 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from local_agent.agent.runtime import (
-    AgentRuntime,
-    AgentRuntimeError,
-    SessionBusyError,
-    SessionNotFoundError,
-)
-from local_agent.agent.turn_hub import Turn, TurnHub
 from local_agent.api.routes.sessions import get_session_service
+from local_agent.core.runtime import AgentRuntime, AgentRuntimeError, SessionBusyError, SessionNotFoundError
+from local_agent.core.turns import Turn, TurnHub
 from local_agent.llm.base import LLMProviderError, LLMProviderUnavailable
 from local_agent.memory.models import Message
 from local_agent.sessions.service import SessionService

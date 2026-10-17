@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from local_agent.capabilities.mcp import MCPManager, sanitize
-from local_agent.tools.registry import ToolRegistry
+from local_agent.core.registry import ToolRegistry
+from local_agent.mcp.manager import MCPManager, sanitize
 from local_agent.tools.web import check_public_url, html_to_text
 
 
@@ -48,7 +48,7 @@ def test_default_config_is_written_once(tmp_path):
 
 
 def test_mcp_server_sees_display_but_not_secrets(monkeypatch):
-    from local_agent.capabilities.mcp import server_environment
+    from local_agent.mcp.manager import server_environment
 
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
@@ -61,7 +61,7 @@ def test_mcp_server_sees_display_but_not_secrets(monkeypatch):
 def test_mcp_element_ref_copied_from_snapshot_is_unwrapped():
     from types import SimpleNamespace
 
-    from local_agent.capabilities.mcp import MCPTool
+    from local_agent.mcp.manager import MCPTool
 
     sent = []
 
@@ -81,7 +81,7 @@ def test_mcp_element_ref_copied_from_snapshot_is_unwrapped():
 def test_mcp_tool_description_is_translated_from_config():
     from types import SimpleNamespace
 
-    from local_agent.capabilities.mcp import BROWSER_DESCRIPTIONS, MCPTool
+    from local_agent.mcp.manager import BROWSER_DESCRIPTIONS, MCPTool
 
     def tool(name, description):
         return SimpleNamespace(name=name, title=None, description=description, input_schema={}, annotations=None)
@@ -96,7 +96,7 @@ def test_mcp_tool_description_is_translated_from_config():
 def test_open_browser_page_is_reminded_on_next_turn():
     from datetime import UTC, datetime
 
-    from local_agent.agent.context import browser_state, build_system_prompt
+    from local_agent.core.context import browser_state, build_system_prompt
     from local_agent.memory.models import Message
 
     def tool(name, content):
@@ -116,8 +116,8 @@ def test_open_browser_page_is_reminded_on_next_turn():
 def test_pointer_actions_pause_only_in_visible_browser(monkeypatch):
     from types import SimpleNamespace
 
-    from local_agent.capabilities import mcp
-    from local_agent.capabilities.mcp import POINTER_PAUSE_SECONDS, MCPTool
+    from local_agent.mcp import manager as mcp
+    from local_agent.mcp.manager import POINTER_PAUSE_SECONDS, MCPTool
 
     pauses = []
 
@@ -144,7 +144,7 @@ def test_pointer_actions_pause_only_in_visible_browser(monkeypatch):
 def _browser_tool(name, text, **options):
     from types import SimpleNamespace
 
-    from local_agent.capabilities.mcp import MCPTool
+    from local_agent.mcp.manager import MCPTool
 
     class Session:
         async def call_tool(self, remote, arguments):
@@ -155,7 +155,7 @@ def _browser_tool(name, text, **options):
 
 
 def test_snapshot_file_is_inlined_and_long_result_says_it_is_cut(tmp_path):
-    from local_agent.capabilities.mcp import MAX_RESULT_CHARS
+    from local_agent.mcp.manager import MAX_RESULT_CHARS
 
     snapshots = tmp_path / ".playwright-mcp"
     snapshots.mkdir()
@@ -175,7 +175,7 @@ def test_snapshot_file_is_inlined_and_long_result_says_it_is_cut(tmp_path):
 
 
 def test_browser_kit_is_bound_together_without_taking_slots():
-    from local_agent.capabilities.toolbox import MAX_ACTIVE_TOOLS, Toolbox
+    from local_agent.core.toolbox import MAX_ACTIVE_TOOLS, Toolbox
 
     browser = [_browser_tool(name, "ok") for name in ("browser_navigate", "browser_hover", "browser_wait_for", "browser_tabs")]
     others = [SimpleTool(f"tool_{number}") for number in range(MAX_ACTIVE_TOOLS)]
@@ -198,7 +198,7 @@ class SimpleTool:
 
 
 def test_only_latest_page_snapshot_stays_in_turn_context():
-    from local_agent.agent.context import drop_stale_snapshots
+    from local_agent.core.context import drop_stale_snapshots
     from local_agent.llm.models import ChatMessage
 
     def snapshot(url, body):

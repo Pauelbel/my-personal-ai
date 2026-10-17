@@ -19,8 +19,8 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from local_agent.tools.base import ToolResult
-from local_agent.tools.registry import ToolRegistry
+from local_agent.core.registry import ToolRegistry
+from local_agent.core.tool import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ POINTER_PAUSE_SECONDS = 0.7
 # модель прочитать не может. Подставляем снимок в ответ, а файл удаляем, чтобы они не копились.
 SNAPSHOT_LINK = re.compile(r"^- \[Snapshot\]\((?P<path>[^)]+\.yml)\)$", re.MULTILINE)
 # Основной набор браузера подключается целиком: не видя, например, browser_hover, модель решает, что навести
-# курсор нечем, и пишет код для run_code_unsafe. Набор не занимает слотов activate (capabilities/toolbox.py).
+# курсор нечем, и пишет код для run_code_unsafe. Набор не занимает слотов activate (core/toolbox.py).
 BROWSER_KIT = (
     "browser_navigate", "browser_navigate_back", "browser_snapshot", "browser_find", "browser_click",
     "browser_type", "browser_hover", "browser_press_key", "browser_select_option", "browser_wait_for",

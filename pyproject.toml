@@ -23,9 +23,6 @@ local-agent = "local_agent.main:run"
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.6"]
-spike = [
-    "langchain-openai>=1.7.0",
-]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/local_agent"]

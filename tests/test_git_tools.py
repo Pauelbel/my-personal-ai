@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from local_agent.agent.loader import load_agents
+from local_agent.agents.files import load_agents
 from local_agent.tools.git import GitLogTool, GitShowTool, GitTool
 
 

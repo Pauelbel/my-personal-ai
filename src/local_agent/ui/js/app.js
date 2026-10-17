@@ -156,9 +156,11 @@ async function loadMessages() {
   try {
     const messages = await api.messages(id);
     if (state.current !== id) return;
+    // Сессию только что открыли — её разговор показываем с конца; иначе позиция чтения сохраняется.
+    const opened = state.loaded !== id;
     state.messages = messages;
     state.loaded = id;
-    renderChat();
+    renderChat({ follow: opened });
   } catch (error) {
     toast(error);
   }
@@ -887,7 +889,11 @@ async function run(sessionId, start, onSaved = () => {}, content = null, attachm
   state.controller = controller;
   state.bubble?.finish();
   state.bubble = new StreamingMessage($("#messages"));
+  // Новая реплика ещё не пришла: строка этого хода не должна забрать себе предыдущий, уже законченный ход.
+  state.bubble.fresh = Boolean(content || attachments.length);
   render();
+  // Продолжение после карточки или подключение к идущему ходу: шаги, что уже были, сразу уходят в строку хода.
+  redrawKeepingBubble();
   // При подключении к идущему ходу события повторяются с начала: уже загруженные сообщения не дублируем.
   const push = (message) => {
     if (state.current !== sessionId || state.messages.some((item) => item.id === message.id)) return;
@@ -899,20 +905,23 @@ async function run(sessionId, start, onSaved = () => {}, content = null, attachm
       if (event.type === "user_message") {
         onSaved();
         push(event.message);
-        redrawKeepingBubble();
+        bubble.fresh = false;
+        redrawKeepingBubble(true);
       } else if (event.type === "delta") bubble.append(event.text);
       else if (event.type === "reasoning") bubble.addReasoning(event.text);
       else if (event.type === "log") bubble.addLog(event.text);
       // Модель зациклилась или ответила пустотой — сервер повторяет запрос, оборванный текст убираем.
-      else if (event.type === "retry") bubble.reset("Повторяю запрос");
+      else if (event.type === "retry") bubble.reset("retry");
       else if (event.type === "tool_calls") {
         push(event.message);
-        bubble.reset("Выполняется инструмент");
+        // Промежуточная реплика без вызовов (модель попросили продолжить) — модель снова думает.
+        const names = (event.message.tool_calls ?? []).map((call) => call.name);
+        bubble.reset(names.length ? "tool" : "thinking", names);
         redrawKeepingBubble();
       } else if (event.type === "tool_result") {
         push(event.message);
         if (state.current === sessionId) revealToolChange(event.message);
-        bubble.setStatus("Модель думает");
+        bubble.setStatus("thinking");
         redrawKeepingBubble();
       } else if (event.type === "done") push(event.message);
       else if (event.type === "interrupt") void refreshPanel();
@@ -920,8 +929,9 @@ async function run(sessionId, start, onSaved = () => {}, content = null, attachm
     });
   } catch (error) {
     if (error.name !== "AbortError") {
-      toast(error);
+      // Причина уже видна над полем ввода рядом с «Повторить»: всплывающее сообщение её не дублирует.
       if (content || attachments.length) state.failed = { sessionId, content, attachments, reason: error.message };
+      else toast(error);
     }
   } finally {
     // Пока этот поток заканчивался, могли подключиться к другому: его состояние не трогаем.
@@ -979,10 +989,19 @@ function renderQueue() {
   }));
 }
 
-function redrawKeepingBubble() {
+// follow — показать конец разговора в любом случае: например, после своей отправленной реплики.
+function redrawKeepingBubble(follow = false) {
+  const container = $("#messages");
+  const stick = follow || container.scrollHeight - container.scrollTop - container.clientHeight < 120;
   renderChat();
   state.bubble?.attach();
-  scrollDown($("#messages"));
+  if (stick) scrollDown(container);
+}
+
+// После перерисовки: был внизу — снова вниз, читал выше — та же позиция.
+function keepScroll(container, { top, stick }) {
+  if (stick) scrollDown(container);
+  else container.scrollTop = top;
 }
 
 // ---------- отрисовка ----------
@@ -1012,20 +1031,31 @@ function render() {
   $("#input").disabled = !session && !streaming;
   $("#send").disabled = !session && !streaming;
   renderQueue();
-  const waiting = Boolean(session?.pending) && !streaming;
+  // Что ход ждёт решения, видно по самой карточке над полем ввода: отдельная надпись не нужна.
   const missing = Boolean(session?.model) && !state.modelsUnknown
     && ![...$("#model-select").options].some((option) => option.value === `${session.provider}${SEP}${session.model}` && !option.text.endsWith("нет на сервере"));
   const note = $("#composer-note");
-  note.hidden = !waiting && !missing;
-  note.textContent = waiting ? "Ход ждёт решения по карточке выше. Сообщение отсюда станет ответом на неё."
-    : missing ? `Модели «${session.model}» нет на сервере — выберите модель под полем ввода.` : "";
+  note.hidden = !missing;
+  note.textContent = missing ? `Модели «${session.model}» нет на сервере — выберите модель под полем ввода.` : "";
   const mode = $("#mode-badge");
   mode.hidden = !project;
   mode.textContent = project?.mode === "read" ? "только чтение" : "полные права";
   mode.classList.toggle("read", project?.mode === "read");
   renderUsage(session);
+  // Этап плана задачи — в строке идущего хода: «этап 2/3: Баг-репорты». План от прошлой задачи не показываем,
+  // пока агент в этом ходе его не тронул (новая реплика может быть о другом).
+  if (state.bubble && streaming && state.streaming === session?.id) {
+    const plan = JSON.stringify(session.plan ?? []);
+    state.bubble.planBefore ??= state.bubble.fresh ? plan : "";
+    state.bubble.setStage(plan !== state.bubble.planBefore ? stageOf(session.plan) : "");
+  }
   showModel();
   renderSidebar();
+}
+
+function stageOf(plan) {
+  const index = (plan ?? []).findIndex((step) => !step.done);
+  return index < 0 ? "" : `этап ${index + 1}/${plan.length}: ${plan[index].text}`;
 }
 
 // Над чатом с агентом — с кем разговор и где он, «Очистить», а в сессии ещё «убрать из сессии».
@@ -1055,12 +1085,14 @@ function renderUsage(session) {
   const cells = Math.max(Math.round(share * 6), 1);
   const meter = el("span", `meter-text${share >= 0.85 ? " full" : share >= 0.6 ? " warn" : ""}`, "▰".repeat(cells) + "▱".repeat(6 - cells));
   usage.title = `Последний запрос занял ${session.context_tokens} из ${session.context_window} токенов окна модели`;
-  usage.replaceChildren(el("span", "", "контекст"), meter, el("span", "", `${Math.round(share * 100)}%`));
+  usage.replaceChildren(el("span", "usage-label", "контекст"), meter, el("span", "", `${Math.round(share * 100)}%`));
   if (session.tokens_per_second) usage.append(el("span", "speed", `· ${Math.round(session.tokens_per_second)} ток/с`));
 }
 
-function renderChat() {
+function renderChat({ follow = false } = {}) {
   const container = $("#messages");
+  // Перерисовка на каждом шаге агента не дёргает прокрутку: читающего выше оставляем на месте.
+  const scroll = { top: container.scrollTop, stick: follow || container.scrollHeight - container.scrollTop - container.clientHeight < 120 };
   const session = current();
   // Общий чат — тот же основной агент: приветствие обычное.
   const agent = session && session.agent_id !== "main" && (session.kind === "agent" || session.parent_id) ? agentName(session) : null;
@@ -1068,10 +1100,18 @@ function renderChat() {
   const owner = session && session.kind === "chat" && !session.parent_id;
   const lines = owner ? (state.teamLog ?? []).map((item) => ({ ...item, role: "team", created_at: item.at })) : [];
   const timeline = lines.length ? [...state.messages, ...lines].sort((a, b) => a.created_at.localeCompare(b.created_at)) : state.messages;
+  const own = Boolean(session) && state.streaming === session.id && Boolean(state.bubble);
+  const fresh = own && state.bubble.fresh;
   renderMessages(container, timeline, agent ? [`Разговор с агентом «${agent}»`, session.kind === "agent"
     ? "Здесь можно обсудить его роль и задать общий вопрос. Файлы проектов отсюда ему недоступны."
-    : "Поручения основного агента и ваши сообщения идут сюда по очереди. «Очистить» начнёт разговор заново."] : undefined);
-  scrollDown(container);
+    : "Поручения основного агента и ваши сообщения идут сюда по очереди. «Очистить» начнёт разговор заново."] : undefined, {
+    // Идущий ход этой сессии — одной строкой печатающегося ответа; стоящий на карточке — «ждёт решения».
+    // Пока новая реплика не пришла, последний ход в истории — прошлый, законченный: его не трогаем.
+    live: own && !fresh ? state.bubble : null,
+    waiting: Boolean(session?.pending),
+    busy: !fresh && (own || Boolean(session && state.attention.running?.includes(session.id))),
+  });
+  keepScroll(container, scroll);
 }
 
 async function refreshPanel() {
@@ -1482,7 +1522,7 @@ function fitScreen() {
 }
 
 function placeholder(streaming) {
-  if (streaming) return narrow.matches ? "В очередь" : "Ход идёт — Enter поставит сообщение в очередь";
+  if (streaming) return narrow.matches ? "В очередь" : "Ход идёт · Enter — в очередь";
   return "Сообщение агенту";
 }
 

@@ -119,6 +119,7 @@ export const api = {
   capabilities: () => request("/capabilities"),
   capabilitySource: (kind, id) => request(`/capabilities/${kind}/${encodeURIComponent(id)}`),
   archive: (kind, id) => request(`/capabilities/${kind}/${encodeURIComponent(id)}/archive`, { method: "POST" }),
+  enable: (kind, id) => request(`/capabilities/library/${kind}/${encodeURIComponent(id)}`, { method: "POST" }),
   restore: (kind, archiveId) => request(`/capabilities/${kind}/restore/${encodeURIComponent(archiveId)}`, { method: "POST" }),
   saveSource: (kind, id, files) => request(`/capabilities/${kind}/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ files }) }),
   purge: (kind, archiveId) => request(`/capabilities/${kind}/archive/${encodeURIComponent(archiveId)}`, { method: "DELETE" }),

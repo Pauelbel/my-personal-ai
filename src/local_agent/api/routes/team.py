@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter, HTTPException, Request
 
-from local_agent.agent.errors import SessionBusyError
-from local_agent.capabilities.delegation import DELEGATOR
+from local_agent.core.delegation import DELEGATOR
+from local_agent.core.errors import SessionBusyError
 from local_agent.sessions.models import Session
 
 router = APIRouter(prefix="/sessions/{session_id}/team", tags=["team"])

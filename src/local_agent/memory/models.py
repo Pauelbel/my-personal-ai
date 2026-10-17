@@ -42,6 +42,8 @@ class Message(BaseModel):
     stats: MessageStats | None = None
     # Рассуждения модели перед этим ответом: только для показа в «ходе работы», в контекст модели не идут.
     reasoning: str | None = None
+    # Служебные данные результата инструмента для интерфейса (например, какой текст — итог этапа плана).
+    meta: dict | None = None
     # Картинки, которые пользователь вставил в реплику: имена файлов в data/attachments.
     attachments: list[str] = Field(default_factory=list)
 

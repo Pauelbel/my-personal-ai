@@ -1,4 +1,4 @@
-"""Инструменты, которые написал агент: папка data/tools/<id>/ с тремя файлами, их можно править руками.
+"""Инструменты-скрипты: папка data/tools/<id>/ с тремя файлами — их пишет агент или они включены из library/.
 
 - tool.md — заголовок с параметрами (name, description, requires_approval, network, timeout, requires, secrets)
   и текст: зачем инструмент нужен; requires — пакеты PyPI через запятую из окружения песочницы;
@@ -17,13 +17,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from local_agent.capabilities.pyenv import PythonEnv, check_requirements
-from local_agent.capabilities.sandbox import DEFAULT_TIMEOUT_SECONDS, SandboxPolicy, run_script
-from local_agent.capabilities.secrets import SecretStore, check_secret_names
-from local_agent.tools.base import ToolResult
+from local_agent.connectors.pyenv import PythonEnv, check_requirements
+from local_agent.connectors.sandbox import DEFAULT_TIMEOUT_SECONDS, SandboxPolicy, run_script
+from local_agent.connectors.secrets import SecretStore, check_secret_names
+from local_agent.core.tool import ToolResult
 
 logger = logging.getLogger(__name__)
 
+# Готовые коннекторы рядом с кодом: connectors/library/<id>/ — те же три файла.
+LIBRARY = Path(__file__).resolve().parent / "library"
 # Где пользователь задаёт доступы инструмента.
 WHERE = "«Возможности → Инструменты → Коннекторы → настроить»"
 TOOL_ID = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
@@ -76,6 +78,11 @@ class ScriptTool:
             # Скрипт мог напечатать токен: модель его не увидит.
             result = ToolResult(self.secret_store.mask(result.content), result.is_error)
         return result
+
+
+def library_tools() -> list[ScriptTool]:
+    """Готовые коннекторы из connectors/library: включаются кнопкой «включить» — папка копируется в data/tools."""
+    return load_script_tools(LIBRARY) if LIBRARY.is_dir() else []
 
 
 def load_script_tools(root: Path) -> list[ScriptTool]:

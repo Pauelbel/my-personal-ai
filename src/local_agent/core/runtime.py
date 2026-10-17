@@ -15,28 +15,26 @@ from uuid import uuid4
 
 from langgraph.types import Command
 
-from local_agent.agent.context import (
+from local_agent.agents.files import MAX_TOOL_ROUNDS_LIMIT
+from local_agent.agents.main import HANDOFF_RULE, LANGUAGE_REMINDER, LANGUAGE_RULE, MAIN_AGENT_ID, main_agent
+from local_agent.agents.models import Agent
+from local_agent.agents.registry import AgentRegistry
+from local_agent.agents.team import team_prompt
+from local_agent.agents.wiki import wiki_agent
+from local_agent.core.context import (
     browser_state,
     build_context,
     build_system_prompt,
     estimate_message_tokens,
     estimate_tokens,
 )
-from local_agent.agent.errors import (
-    AgentRuntimeError,
-    NothingPendingError,
-    SessionBusyError,
-    SessionNotFoundError,
-)
-from local_agent.agent.loader import MAX_TOOL_ROUNDS_LIMIT
-from local_agent.agent.main_agent import HANDOFF_RULE, LANGUAGE_REMINDER, LANGUAGE_RULE, MAIN_AGENT_ID, main_agent
-from local_agent.agent.models import Agent
-from local_agent.agent.project_instructions import load_project_instructions
-from local_agent.agent.registry import AgentRegistry, SkillRegistry
-from local_agent.agent.summary import ConversationSummarizer
-from local_agent.agent.team import team_prompt
-from local_agent.capabilities.toolbox import DEFAULT_ACTIVE_TOOLS, ActivateTool, Toolbox
-from local_agent.graph.agent_graph import CATALOG_MARKER, GraphDeps, build_agent_graph, from_chat, log
+from local_agent.core.errors import AgentRuntimeError, NothingPendingError, SessionBusyError, SessionNotFoundError
+from local_agent.core.graph import CATALOG_MARKER, STOPPED_TEXT, GraphDeps, build_agent_graph, from_chat, log
+from local_agent.core.project_instructions import load_project_instructions
+from local_agent.core.registry import ToolRegistry
+from local_agent.core.summary import ConversationSummarizer
+from local_agent.core.tool import Tool, summary_line
+from local_agent.core.toolbox import DEFAULT_ACTIVE_TOOLS, ActivateTool, Toolbox, UseSkillTool
 from local_agent.llm.base import context_length
 from local_agent.llm.registry import LLMRegistry
 from local_agent.memory.conversation import ConversationService
@@ -44,10 +42,7 @@ from local_agent.memory.models import Message
 from local_agent.memory.service import MemoryService, MemoryServiceError
 from local_agent.sessions.models import Session
 from local_agent.sessions.service import SessionService
-from local_agent.tools.base import Tool, summary_line
-from local_agent.tools.registry import ToolRegistry
-from local_agent.tools.skills import UseSkillTool
-from local_agent.wiki.agent import wiki_agent
+from local_agent.skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +235,14 @@ class AgentRuntime:
         lock = self._session_locks.get(session_id)
         return lock is not None and lock.locked()
 
+    def mark_stopped(self, session_id: str) -> None:
+        """«Стоп» посреди хода: если итога нет (модель ещё думала или шли инструменты), ход в чате подписывается
+        «ход остановлен» — иначе под репликой пользователя пусто, и непонятно, что случилось."""
+        last = self._conversation.recent(session_id, 1)
+        if last and last[-1].role == "assistant" and not last[-1].tool_calls:
+            return
+        self._conversation.add_assistant_message(session_id, STOPPED_TEXT)
+
     async def run_turn(
         self, session_id: str, content: str, request_id: str, attachments: tuple[str, ...] = (),
     ) -> Message:
@@ -376,7 +379,9 @@ class AgentRuntime:
         self._sessions.set_pending(session.id, thread, None)
         state = {
             "session_id": session.id, "request_id": request_id, "provider_id": provider_id, "model": model,
-            "window": window, "budget": budget, "rounds": 0, "max_rounds": agent.max_tool_rounds or self._limits.max_tool_rounds,
+            "window": window, "budget": budget, "rounds": 0,
+            "max_rounds": agent.max_tool_rounds or self._limits.max_tool_rounds,
+            "round_step": agent.max_tool_rounds or self._limits.max_tool_rounds,
             "messages": [from_chat(message) for message in context.messages],
             "decisions": {}, "answer": None,
             "included": context.included_count, "history_count": self._conversation.count(session.id),

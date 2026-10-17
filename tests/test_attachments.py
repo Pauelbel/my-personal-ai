@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 from tests.fakes import ScriptedProvider, call, events_of, post_session
 from tests.test_graph_flow import settings
 
-from local_agent.agent.context import IMAGE_MESSAGES, build_context
 from local_agent.api.app import create_app
+from local_agent.core.context import IMAGE_MESSAGES, build_context
 from local_agent.llm.models import ChatMessage
 from local_agent.llm.openai_compatible import OpenAICompatibleProvider
 from local_agent.memory.attachments import AttachmentStore

@@ -5,7 +5,7 @@ from tests.fakes import ScriptedProvider, call, events_of
 from tests.test_graph_flow import settings
 
 from local_agent.api.app import create_app
-from local_agent.capabilities.lessons import LESSONS_HEADER, lessons_of, with_lesson
+from local_agent.tools.growth.learn import LESSONS_HEADER, lessons_of, with_lesson
 
 RULE = "Тест-кейсы оформляй таблицей и всегда с предусловиями"
 

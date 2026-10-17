@@ -1,6 +1,6 @@
 """Долгий прогон генерации по всей документации из командной строки; прерванный запуск продолжается с места остановки.
 
-    uv run python -m local_agent.extras.testgen softwlc_md/v1.37_SoftWLC --workspace ~/my_projects/job_wifi --limit 5
+    uv run python -m local_agent.tools.testgen softwlc_md/v1.37_SoftWLC --workspace ~/my_projects/job_wifi --limit 5
 """
 
 import argparse
@@ -9,13 +9,13 @@ import sys
 from pathlib import Path
 
 from local_agent.config.settings import get_settings
-from local_agent.extras.testgen.pipeline import CHUNK_CHARS, MAX_CASES, CaseGenerator, PageResult, summary
 from local_agent.llm.openai_compatible import OpenAICompatibleProvider
+from local_agent.tools.testgen.pipeline import CHUNK_CHARS, MAX_CASES, CaseGenerator, PageResult, summary
 
 
 def main() -> None:
     settings = get_settings()
-    parser = argparse.ArgumentParser(prog="python -m local_agent.extras.testgen", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(prog="python -m local_agent.tools.testgen", description=__doc__.splitlines()[0])
     parser.add_argument("section", help="папка или страница документации относительно рабочей папки")
     parser.add_argument("--workspace", default=".", help="рабочая папка проекта (по умолчанию текущая)")
     parser.add_argument("--model", default=settings.default_model, help="модель (по умолчанию DEFAULT_MODEL)")

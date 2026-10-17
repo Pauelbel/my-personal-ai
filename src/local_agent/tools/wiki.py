@@ -10,7 +10,7 @@ import asyncio
 from datetime import date
 from pathlib import Path
 
-from local_agent.tools.base import ToolResult
+from local_agent.core.tool import ToolResult
 from local_agent.wiki.notes import MATCH_THRESHOLD
 from local_agent.wiki.service import NoteFields, WikiService
 

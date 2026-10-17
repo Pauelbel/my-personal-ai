@@ -9,7 +9,7 @@ from tests.fakes import ScriptedProvider, call, events_of, post_session
 from tests.test_graph_flow import project_session, settings
 
 from local_agent.api.app import create_app
-from local_agent.capabilities.sandbox import bwrap_path
+from local_agent.connectors.sandbox import bwrap_path
 from local_agent.llm.models import ChatResult, ToolCall
 
 GREET = 'import json, sys\nargs = json.load(sys.stdin)\nprint(f"Привет, {args[\'name\']}")\n'
@@ -318,9 +318,9 @@ def test_agents_address_each_other_in_their_session_dialogs_without_cycles(tmp_p
 
 
 def test_team_prompt_lists_reachable_agents_and_restriction_narrows_them(tmp_path):
-    from local_agent.agent.models import Agent
-    from local_agent.agent.registry import AgentRegistry
-    from local_agent.agent.team import reachable, team_graph, team_prompt
+    from local_agent.agents.models import Agent
+    from local_agent.agents.registry import AgentRegistry
+    from local_agent.agents.team import reachable, team_graph, team_prompt
 
     def agent(agent_id, links=()):
         return Agent(id=agent_id, name=agent_id.upper(), system_prompt="x", llm_provider="", model="",

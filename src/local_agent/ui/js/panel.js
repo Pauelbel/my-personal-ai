@@ -61,6 +61,8 @@ function cardNode(card, onDecision, onOpen, readFile, busy, inChat) {
   if (pending.kind === "question") return questionNode(node, pending, card, onDecision, busy);
   // Кто сделает задачу: предложенный агент, сам основной или другой агент. Выбор запомнится для таких задач.
   if (pending.kind === "route") return routeNode(node, pending, card, onDecision, busy);
+  // Лимит шагов за ход: продолжить работу или остановить и получить итог.
+  if (pending.kind === "limit") return limitNode(node, pending, card, onDecision, busy);
   // Правки вики после lint — список с галочками: применятся только отмеченные.
   const checks = pending.kind === "wiki_lint" ? editsBody(node, pending.edits || []) : null;
   if (pending.kind === "proposal") proposalBody(node, pending.proposal || {});
@@ -103,6 +105,23 @@ function cardNode(card, onDecision, onOpen, readFile, busy, inChat) {
   });
   actions.append(...[approve, trust, reject, reply].filter(Boolean));
   node.append(actions, text, send);
+  return node;
+}
+
+function limitNode(node, pending, card, onDecision, busy) {
+  const go = button("Продолжить", "primary");
+  const stop = button("Остановить");
+  const all = [go, stop];
+  for (const item of all) item.disabled = busy;
+  const decide = async (decision) => {
+    for (const item of all) item.disabled = true;
+    await onDecision(card, decision);
+  };
+  go.addEventListener("click", () => decide({ action: "approve" }));
+  stop.addEventListener("click", () => decide({ action: "reject" }));
+  const actions = el("div", "actions");
+  actions.append(go, stop);
+  node.append(el("p", "reason", pending.text || ""), actions);
   return node;
 }
 

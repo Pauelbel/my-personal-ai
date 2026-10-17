@@ -1,14 +1,21 @@
 """Контракт инструмента описывает вызов, не привязывая его к конкретной реализации."""
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+# Чей ход сейчас выполняет инструмент: сессия, провайдер и модель. Ядро ставит его перед вызовом;
+# нужно инструментам, которые сами зовут модель или помечают состояние хода.
+CURRENT_TURN: ContextVar[dict | None] = ContextVar("current_turn", default=None)
 
 
 @dataclass(frozen=True)
 class ToolResult:
     content: str
     is_error: bool = False
+    # Служебные данные для интерфейса: сохраняются с результатом в истории, модели не отправляются.
+    meta: dict | None = None
 
 
 class Tool(Protocol):

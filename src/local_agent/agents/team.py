@@ -5,9 +5,9 @@
 и правила из своего промпта, а справочник «Команда» рисует те же связи.
 """
 
-from local_agent.agent.main_agent import MAIN_AGENT_DESCRIPTION, MAIN_AGENT_ID, MAIN_AGENT_NAME
-from local_agent.agent.models import Agent
-from local_agent.agent.registry import AgentRegistry
+from local_agent.agents.main import MAIN_AGENT_DESCRIPTION, MAIN_AGENT_ID, MAIN_AGENT_NAME
+from local_agent.agents.models import Agent
+from local_agent.agents.registry import AgentRegistry
 
 
 def reachable(agent: Agent, registry: AgentRegistry) -> tuple[str, ...]:

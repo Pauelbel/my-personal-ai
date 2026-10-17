@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 
 from local_agent.llm.base import LLMEmptyResponse, LLMProviderError, LLMProviderUnavailable
-from local_agent.llm.markup import ThinkingRouter, clean_reasoning, recover_tool_calls
+from local_agent.llm.markup import ThinkingRouter, clean_reasoning, recover_json_call, recover_tool_calls
 from local_agent.llm.models import ChatMessage, ChatResult, ReasoningDelta, ToolCall
 
 CONTEXT_CACHE_SECONDS = 60
@@ -293,4 +293,7 @@ def _recover(tools: list[dict[str, object]], content: str, reasoning: str) -> tu
     if calls:
         return calls, rest
     calls, _ = recover_tool_calls(reasoning, known)
-    return calls, content
+    if calls:
+        return calls, content
+    call, rest = recover_json_call(content, tools)
+    return ((call,), rest) if call else ((), content)

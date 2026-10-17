@@ -8,9 +8,9 @@
 from dataclasses import replace
 from pathlib import Path
 
-from local_agent.agent.models import Agent
-from local_agent.tools.base import ToolResult
-from local_agent.tools.registry import ToolRegistry
+from local_agent.agents.models import Agent
+from local_agent.core.registry import ToolRegistry
+from local_agent.core.tool import ToolResult
 
 
 class AskUserTool:

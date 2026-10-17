@@ -7,9 +7,9 @@ from dataclasses import replace
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from local_agent.agent.main_agent import MAIN_AGENT_DESCRIPTION, MAIN_AGENT_ID, MAIN_AGENT_NAME
-from local_agent.agent.models import Agent
-from local_agent.agent.team import team_graph
+from local_agent.agents.main import MAIN_AGENT_DESCRIPTION, MAIN_AGENT_ID, MAIN_AGENT_NAME
+from local_agent.agents.models import Agent
+from local_agent.agents.team import team_graph
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 

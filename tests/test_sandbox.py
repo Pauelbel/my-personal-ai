@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from local_agent.capabilities.sandbox import SandboxPolicy, bwrap_path, run_script
+from local_agent.connectors.sandbox import SandboxPolicy, bwrap_path, run_script
 
 pytestmark = pytest.mark.skipif(bwrap_path() is None, reason="нужен bubblewrap")
 

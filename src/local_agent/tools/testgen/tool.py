@@ -2,10 +2,11 @@
 
 from pathlib import Path
 
-from local_agent.extras.testgen.pipeline import OUTPUT_DIR, CaseGenerator, summary
+from local_agent.core.tool import CURRENT_TURN, ToolResult
 from local_agent.llm.base import LLMProvider, LLMProviderUnavailable
-from local_agent.tools.base import ToolResult
-from local_agent.tools.filesystem import _inside_workspace, _workspace_root
+from local_agent.llm.registry import LLMRegistry
+from local_agent.tools.files import _inside_workspace, _workspace_root
+from local_agent.tools.testgen.pipeline import OUTPUT_DIR, CaseGenerator, summary
 
 DEFAULT_LIMIT = 3
 MAX_LIMIT = 20
@@ -61,3 +62,18 @@ class GenerateTestCasesTool:
             return ToolResult(f"{exc}. Готовые страницы сохранены, повторный запуск продолжит с места остановки.", is_error=True)
         except (OSError, ValueError) as exc:
             return ToolResult(str(exc), is_error=True)
+
+
+class TestCasesExtra(GenerateTestCasesTool):
+    """Генерация тест-кейсов идёт на модели того хода, в котором её вызвали."""
+
+    def __init__(self, providers: LLMRegistry) -> None:
+        super().__init__()
+        self._providers = providers
+
+    async def execute(self, arguments: dict[str, object], workspace: Path) -> ToolResult:
+        turn = CURRENT_TURN.get() or {}
+        provider = self._providers.get(turn.get("provider_id", ""))
+        if provider is None or not turn.get("model"):
+            return ToolResult("Генерации нужна модель текущей сессии", is_error=True)
+        return await GenerateTestCasesTool(provider, turn["model"]).execute(arguments, workspace)

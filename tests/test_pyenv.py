@@ -7,10 +7,10 @@ from fastapi.testclient import TestClient
 from tests.test_graph_flow import settings
 
 from local_agent.api.app import create_app
-from local_agent.capabilities.proposals import InstallPackagesTool
-from local_agent.capabilities.pyenv import PythonEnv, check_requirements, requirement_name
-from local_agent.capabilities.sandbox import bwrap_path
-from local_agent.capabilities.scripts import read_script_tool, write_script_tool
+from local_agent.connectors.pyenv import PythonEnv, check_requirements, requirement_name
+from local_agent.connectors.sandbox import bwrap_path
+from local_agent.connectors.scripts import read_script_tool, write_script_tool
+from local_agent.tools.growth.propose import InstallPackagesTool
 
 USES_PACKAGE = "import hello_pkg\nprint(hello_pkg.GREETING)\n"
 

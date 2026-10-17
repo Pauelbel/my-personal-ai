@@ -63,7 +63,7 @@ export async function sendWiki(text, onSaved = () => {}, attachments = []) {
       await refreshWikiChat(true);
       return;
     }
-    await run((signal, onEvent) => api.send(session.id, text, signal, onEvent, false, attachments), onSaved);
+    await run((signal, onEvent) => api.send(session.id, text, signal, onEvent, false, attachments), onSaved, true);
   } catch (error) {
     toast(error);
   }
@@ -126,10 +126,12 @@ async function clear() {
 }
 
 // start(signal, onEvent) — поток хода: новое сообщение, решение по карточке или подключение к идущему ходу.
-async function run(start, onSaved = () => {}) {
+// fresh — ход начат новой репликой: пока она не пришла, строка хода не забирает прошлый, законченный ход.
+async function run(start, onSaved = () => {}, fresh = false) {
   const controller = new AbortController();
   chat.bubble?.finish();
   Object.assign(chat, { controller, running: true, bubble: new StreamingMessage($("#wiki-chat-log")) });
+  chat.bubble.fresh = fresh;
   draw();
   // При подключении к идущему ходу события повторяются с начала: уже загруженные сообщения не дублируем.
   const push = (message) => {
@@ -147,19 +149,21 @@ async function run(start, onSaved = () => {}) {
       if (event.type === "user_message") {
         onSaved();
         push(event.message);
+        bubble.fresh = false;
         redraw();
       } else if (event.type === "delta") bubble.append(event.text);
       else if (event.type === "reasoning") bubble.addReasoning(event.text);
       else if (event.type === "log") bubble.addLog(event.text);
       // Модель зациклилась или ответила пустотой — сервер повторяет запрос, оборванный текст убираем.
-      else if (event.type === "retry") bubble.reset("Повторяю запрос");
+      else if (event.type === "retry") bubble.reset("retry");
       else if (event.type === "tool_calls") {
         push(event.message);
-        bubble.reset("Выполняется инструмент");
+        const names = (event.message.tool_calls ?? []).map((call) => call.name);
+        bubble.reset(names.length ? "tool" : "thinking", names);
         redraw();
       } else if (event.type === "tool_result") {
         push(event.message);
-        bubble.setStatus("Модель думает");
+        bubble.setStatus("thinking");
         redraw();
       } else if (event.type === "done") push(event.message);
       else if (event.type === "error") throw new Error(event.message);
@@ -229,7 +233,10 @@ function drawLog() {
   }
   if (cut < messages.length) {
     const recent = el("div");
-    renderMessages(recent, messages.slice(cut));
+    const own = chat.running && chat.bubble && !chat.bubble.fresh;
+    renderMessages(recent, messages.slice(cut), undefined, {
+      live: own ? chat.bubble : null, waiting: Boolean(chat.session?.pending), busy: Boolean(own),
+    });
     log.append(recent);
   }
   if (near || chat.running) scrollDown(log);

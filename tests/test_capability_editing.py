@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from tests.test_graph_flow import settings
 
 from local_agent.api.app import create_app
-from local_agent.capabilities.scripts import write_script_tool
+from local_agent.connectors.scripts import write_script_tool
 
 SKILL = "---\nname: Тест-кейсы\ndescription: составить тест-кейсы\n---\nПиши кейсы.\n"
 
@@ -59,8 +59,8 @@ def test_archived_skill_can_be_deleted_for_good(tmp_path):
         assert client.delete(f"/api/capabilities/skill/archive/{entry['archive_id']}").status_code == 404
         # Путь за пределы архива не принимается: такой записи в архиве нет.
         assert client.delete("/api/capabilities/skill/archive/..%2F..%2Fsecrets.json").status_code in (404, 405)
-        extra = client.delete("/api/capabilities/tool/archive/extra:generate_test_cases")
-        assert extra.status_code == 400
+        # Дополнения не лежат в архиве — они среди готовых: удалять там нечего.
+        assert client.delete("/api/capabilities/tool/archive/extra:generate_test_cases").status_code == 404
 
     assert not list((tmp_path / "skills" / ".deleted").iterdir())
 

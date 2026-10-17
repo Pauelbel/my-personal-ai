@@ -12,6 +12,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from local_agent.llm.openai_compatible import OpenAICompatibleProvider
+
 # Тип сервера → подпись и адрес по умолчанию: адрес подставляется в форму, его можно поменять.
 KINDS = {
     "ollama": ("Ollama", "http://127.0.0.1:11434/v1"),
@@ -70,3 +72,10 @@ def provider_id(name: str, taken: set[str]) -> str:
 def masked(key: str) -> str:
     """Ключ в интерфейсе — только хвост: по нему видно, какой ключ сохранён, но целиком его не достать."""
     return f"…{key[-4:]}" if len(key) > 8 else ("задан" if key else "")
+
+
+def build_provider(entry: ProviderEntry, timeout: float, transport=None, *, verify_ssl: bool = True) -> OpenAICompatibleProvider:
+    """Провайдер из записи настроек: адрес, имя и ключ."""
+    return OpenAICompatibleProvider(
+        entry.base_url, timeout, transport, name=entry.name, api_key=entry.api_key, verify_ssl=verify_ssl
+    )

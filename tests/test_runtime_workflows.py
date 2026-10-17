@@ -16,7 +16,7 @@ from local_agent.llm.models import ChatResult, ToolCall
 
 RULE = "Тестовые отчёты этого проекта называются «Проверка Маяк»."
 RULE_PATH = ".github/instructions/learnings.instructions.md"
-EXTRAS_SKILLS = Path(__file__).resolve().parents[1] / "src/local_agent/extras/skills"
+EXTRAS_SKILLS = Path(__file__).resolve().parents[1] / "src/local_agent/skills/library"
 
 
 def settings(tmp_path):
@@ -62,7 +62,7 @@ def test_skill_write_approval_and_new_dialog(tmp_path, approved):
     workspace = tmp_path / "project"
     workspace.mkdir()
     provider = WorkflowProvider()
-    # Стартовых навыков больше нет: нужный берём из необязательного набора.
+    # Стартовых скиллов нет: нужный берём из готовых (skills/library).
     (tmp_path / "skills").mkdir()
     shutil.copy(EXTRAS_SKILLS / "update-skills.md", tmp_path / "skills")
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:

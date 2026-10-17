@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from local_agent.agent.main_agent import MAIN_AGENT_ID
+from local_agent.agents.main import MAIN_AGENT_ID
 from local_agent.sessions.models import DEFAULT_SESSION_TITLE, Session
 from local_agent.sessions.service import SessionService
 

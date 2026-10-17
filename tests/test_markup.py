@@ -72,3 +72,48 @@ def test_thinking_inside_content_goes_to_reasoning_not_chat():
     reasoning = "".join(item.text for item in items if isinstance(item, ReasoningDelta))
     assert shown == "Привет!" and "Надо ответить" in reasoning and "<|channel>" not in reasoning
     assert items[-1].content == "Привет!"
+
+
+PROPOSE = {"type": "function", "function": {"name": "propose", "parameters": {
+    "type": "object",
+    "properties": {key: {"type": "string"} for key in (
+        "kind", "name", "title", "description", "reason", "content", "parameters", "requires_approval", "network",
+        "requires", "secrets", "tools", "skills")},
+    "required": ["kind", "name", "title", "description", "reason", "content"],
+}}}
+READ = {"type": "function", "function": {"name": "read_file", "parameters": {
+    "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
+LEAKED = (
+    "Кейсы готовы. Следующий шаг — поиск багов.\n\n पायल {\n  \"name\": \"py_worker\",\n  \"title\": \"Python worker\",\n"
+    "  \"description\": \"Runs scripts\",\n  \"reason\": \"Нужен запуск\",\n  \"content\": \"import sys\\nprint(1)\",\n"
+    "  \"kind\": \"tool\",\n  \"network\": false,\n  \"requires\": [],\n  \"secrets\": []\n}"
+)
+
+
+def test_bare_json_arguments_become_the_matching_tool_call():
+    from local_agent.llm.markup import recover_json_call
+
+    call, rest = recover_json_call(LEAKED, [PROPOSE, READ])
+    assert call.name == "propose" and json.loads(call.arguments)["content"] == "import sys\nprint(1)"
+    # Мусорный токен перед JSON убран, текст до вызова остался.
+    assert rest == "Кейсы готовы. Следующий шаг — поиск багов."
+    wrapped, _ = recover_json_call('Читаю. {"name": "read_file", "arguments": {"path": "a.md"}}', [PROPOSE, READ])
+    assert wrapped.name == "read_file" and json.loads(wrapped.arguments) == {"path": "a.md"}
+
+
+def test_json_example_in_answer_is_not_a_call():
+    from local_agent.llm.markup import recover_json_call
+
+    fenced = "Пример:\n```json\n" + LEAKED.split("पायल ")[1] + "\n```"
+    assert recover_json_call(fenced, [PROPOSE, READ]) == (None, fenced)
+    # Один ключ слишком легко совпадает случайно.
+    assert recover_json_call('Файл: {"path": "a.md"}', [PROPOSE, READ])[0] is None
+    # Не хватает обязательных ключей — не вызов.
+    assert recover_json_call('{"kind": "tool", "name": "x"}', [PROPOSE, READ])[0] is None
+
+
+def test_stream_recovers_bare_json_call():
+    items = stream({"content": LEAKED}, tools=[PROPOSE, READ])
+    result = items[-1]
+    assert [call.name for call in result.tool_calls] == ["propose"]
+    assert result.content == "Кейсы готовы. Следующий шаг — поиск багов."

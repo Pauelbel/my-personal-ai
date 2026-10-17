@@ -6,7 +6,7 @@
 import re
 from pathlib import Path
 
-from local_agent.tools.docs import MarkdownIndex
+from local_agent.shared.markdown_index import MarkdownIndex
 
 ENTRY = re.compile(r"^- (.+)$")
 SECTION = re.compile(r"^##\s+(.+?)\s*$")

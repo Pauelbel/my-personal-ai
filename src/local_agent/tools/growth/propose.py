@@ -9,14 +9,15 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 
-from local_agent.agent.loader import AGENT_ID, SKILL_ID
-from local_agent.agent.main_agent import MAIN_AGENT_ID
-from local_agent.agent.models import Agent
-from local_agent.capabilities.pyenv import check_requirements
-from local_agent.capabilities.scripts import TOOL_ID, WHERE
-from local_agent.capabilities.secrets import check_secret_names
-from local_agent.capabilities.service import KINDS, CapabilityService
-from local_agent.tools.base import ToolResult
+from local_agent.agents.files import AGENT_ID
+from local_agent.agents.main import MAIN_AGENT_ID
+from local_agent.agents.models import Agent
+from local_agent.catalog.service import KINDS, CapabilityService
+from local_agent.connectors.pyenv import check_requirements
+from local_agent.connectors.scripts import TOOL_ID, WHERE
+from local_agent.connectors.secrets import check_secret_names
+from local_agent.core.tool import ToolResult
+from local_agent.skills.files import SKILL_ID
 
 KIND_NAMES = {"tool": "инструмент", "skill": "скилл", "agent": "саб-агента"}
 MAX_DESCRIPTION = 200
@@ -200,8 +201,8 @@ class ArchiveTool:
     name = "Архив возможностей"
     requires_approval = True
     description = (
-        "Убрать ненужный инструмент (созданный агентом), скилл или саб-агента в архив либо вернуть из архива. "
-        "Файлы не удаляются. Пользователь подтверждает"
+        "Убрать ненужный инструмент (созданный агентом), скилл или саб-агента в архив либо вернуть из архива; "
+        "restore включает и готовую заготовку (помечены «готовый» в реестре). Файлы не удаляются. Пользователь подтверждает"
     )
     parameters = {
         "type": "object",
@@ -227,14 +228,16 @@ class ArchiveTool:
                 return f"{item_id} нет среди активных"
             if kind == "tool" and not (self._capabilities.is_script_tool(item_id) or self._capabilities.is_extra(item_id)):
                 return "встроенные инструменты в архив не убираются"
-        elif self._capabilities.archived(kind, item_id) is None:
-            return f"{item_id} нет в архиве"
         elif self._capabilities.exists(kind, item_id):
             return f"{item_id} уже активен"
+        elif self._capabilities.archived(kind, item_id) is None and not self._capabilities.in_library(kind, item_id):
+            return f"{item_id} нет ни в архиве, ни среди готовых"
         return None
 
     def approval_payload(self, arguments: dict[str, object]) -> dict:
-        verb = "Убрать в архив" if arguments["action"] == "archive" else "Вернуть из архива"
+        restore = arguments["action"] == "restore"
+        ready = restore and self._capabilities.archived(arguments["kind"], arguments["name"]) is None
+        verb = "Включить готовый" if ready else "Вернуть из архива" if restore else "Убрать в архив"
         return {
             "kind": "proposal",
             "title": f"{verb} {KIND_NAMES[arguments['kind']]} {arguments['name']}",
@@ -250,7 +253,10 @@ class ArchiveTool:
             if arguments["action"] == "archive":
                 await asyncio.to_thread(self._capabilities.archive, kind, item_id)
                 return ToolResult(f"{item_id} убран в архив. Вернуть можно через archive с action restore.")
-            await asyncio.to_thread(self._capabilities.restore, kind, self._capabilities.archived(kind, item_id))
+            if (entry := self._capabilities.archived(kind, item_id)) is not None:
+                await asyncio.to_thread(self._capabilities.restore, kind, entry)
+            else:
+                await asyncio.to_thread(self._capabilities.enable, kind, item_id)
             return ToolResult(f"{item_id} снова активен.")
         except (OSError, ValueError) as exc:
             return ToolResult(f"Не получилось: {exc}", is_error=True)

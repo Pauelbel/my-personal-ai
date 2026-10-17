@@ -14,10 +14,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from local_agent.extras.testgen.style import lint
 from local_agent.llm.base import LLMProvider, LLMProviderError, LLMProviderUnavailable
 from local_agent.llm.models import ChatMessage
-from local_agent.tools.filesystem import SKIPPED_DIRS
+from local_agent.shared.folders import SKIPPED_DIRS
+from local_agent.tools.testgen.style import lint
 
 CONFIG_DIR = "testgen"
 OUTPUT_DIR = f"{CONFIG_DIR}/test_cases"

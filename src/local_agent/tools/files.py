@@ -6,14 +6,12 @@ import os
 import re
 from pathlib import Path
 
-from local_agent.tools.base import ToolResult
+from local_agent.core.tool import ToolResult
+from local_agent.shared.folders import MAX_SEARCH_FILE_BYTES, MAX_SEARCH_FILES, SKIPPED_DIRS
 
 MAX_READ_BYTES = 64 * 1024
 MAX_WRITE_BYTES = 256 * 1024
-MAX_SEARCH_FILE_BYTES = 1024 * 1024
-MAX_SEARCH_FILES = 5000
 MAX_SEARCH_MATCHES = 50
-SKIPPED_DIRS = {".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache"}
 
 
 def _workspace_root(workspace: Path) -> Path:

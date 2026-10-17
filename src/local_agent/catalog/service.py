@@ -1,7 +1,9 @@
-"""Возможности агента: инструменты, скиллы и саб-агенты — создание, архив, восстановление и список для UI.
+"""Каталог возможностей: инструменты, скиллы и агенты — создание, правка, архив, готовые заготовки и список для UI.
 
-Всё созданное — файлы на диске (data/tools, data/skills, data/agents), которые можно править руками;
-реестры в памяти обновляются сразу, без перезапуска.
+Всё рабочее — файлы на диске (data/tools, data/skills, data/agents), которые можно править руками;
+реестры в памяти обновляются сразу, без перезапуска. Готовые заготовки лежат в коде рядом со своим видом
+(skills/library, connectors/library) и встроенные дополнения (tools/testgen): «включить» копирует заготовку
+в data/ или включает дополнение — дальше это обычная возможность.
 """
 
 
@@ -11,25 +13,20 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from local_agent.agent import loader
-from local_agent.agent.main_agent import MAIN_AGENT_ID
-from local_agent.agent.models import Agent
-from local_agent.agent.registry import AgentRegistry, SkillRegistry
-from local_agent.capabilities import scripts
-from local_agent.capabilities.extras import ExtrasStore
-from local_agent.capabilities.pyenv import PythonEnv, requirement_name
-from local_agent.capabilities.secrets import PUBLIC_SUFFIXES, SecretStore
-from local_agent.tools.base import Tool, summary_line
-from local_agent.tools.registry import ToolRegistry
-
-# Готовые инструменты-скрипты (коннекторы): при первом запуске кладутся в data/tools, дальше они ваши —
-# их можно править, архивировать и удалять; удалённый не возвращается.
-BUNDLED_TOOLS = Path(__file__).resolve().parent.parent / "extras" / "tools"
-SEEDED_FILE = ".bundled"
+from local_agent.agents import files as agent_files
+from local_agent.agents.main import MAIN_AGENT_ID
+from local_agent.agents.models import Agent
+from local_agent.agents.registry import AgentRegistry
+from local_agent.catalog.extras import ExtrasStore
+from local_agent.connectors import scripts
+from local_agent.connectors.pyenv import PythonEnv, requirement_name
+from local_agent.connectors.secrets import PUBLIC_SUFFIXES, SecretStore
+from local_agent.core.registry import ToolRegistry
+from local_agent.core.tool import Tool, summary_line
+from local_agent.skills import files as skill_files
+from local_agent.skills.registry import SkillRegistry
 
 KINDS = ("tool", "skill", "agent")
-# Запись архива для готового дополнения, которое ещё не включали.
-EXTRA_PREFIX = "extra:"
 
 
 @dataclass(frozen=True)
@@ -57,28 +54,11 @@ class CapabilityService:
         self.secrets = secrets
 
     def load(self) -> None:
-        """Инструменты, созданные агентом, подхватываются с диска при старте."""
-        self._seed_bundled()
+        """Инструменты-скрипты и включённые дополнения подхватываются при старте."""
         for tool in scripts.load_script_tools(self.paths.tools):
             self.tools.replace(self._bind(tool))
         for tool_id in self._extras_store.enabled() & set(self.extras):
             self.tools.replace(self.extras[tool_id][1]())
-
-    def _seed_bundled(self) -> None:
-        """Кладёт готовый инструмент в data/tools один раз: список уже положенных — в data/tools/.bundled."""
-        root = self.paths.tools
-        root.mkdir(parents=True, exist_ok=True)
-        marker = root / SEEDED_FILE
-        seeded = set(marker.read_text(encoding="utf-8").split()) if marker.exists() else set()
-        added = []
-        for folder in sorted(path for path in BUNDLED_TOOLS.iterdir() if path.is_dir()) if BUNDLED_TOOLS.is_dir() else []:
-            if folder.name in seeded:
-                continue
-            if not (root / folder.name).exists():
-                shutil.copytree(folder, root / folder.name, ignore=shutil.ignore_patterns("__pycache__"))
-            added.append(folder.name)
-        if added:
-            marker.write_text("\n".join(sorted(seeded | set(added))) + "\n", encoding="utf-8")
 
     # ---------- проверки ----------
 
@@ -113,7 +93,7 @@ class CapabilityService:
         return tool
 
     def save_skill(self, skill_id: str, name: str, description: str, instructions: str):
-        skill = loader.write_skill(self.paths.skills, skill_id, name, description, instructions)
+        skill = skill_files.write_skill(self.paths.skills, skill_id, name, description, instructions)
         self.skills.replace(skill)
         return skill
 
@@ -121,7 +101,7 @@ class CapabilityService:
         if agent.id == MAIN_AGENT_ID:
             raise ValueError("Имя main занято основным агентом")
         create = self.agents.get(agent.id) is None
-        saved = loader.write_agent(
+        saved = agent_files.write_agent(
             self.paths.agents, agent,
             known_tools={tool.id for tool in self.tools.all()},
             known_skills={skill.id for skill in self.skills.all()},
@@ -140,8 +120,54 @@ class CapabilityService:
         others = [item for item in agent.agents if item != target]
         return self.save_agent(replace(agent, agents=tuple(others + [target] if connected else others)))
 
+    # ---------- готовые заготовки ----------
+
+    def library(self) -> list[dict]:
+        """Готовые, но не включённые: скиллы из skills/library, коннекторы из connectors/library, дополнения."""
+        items = [
+            {"kind": "skill", "id": skill.id, "name": skill.name, "description": skill.description}
+            for skill in skill_files.library_skills() if self.skills.get(skill.id) is None
+        ]
+        items += [
+            {"kind": "tool", "id": tool.id, "name": tool.name, "description": summary_line(tool.description, 200)}
+            for tool in scripts.library_tools() if self.tools.get(tool.id) is None
+        ]
+        items += [
+            {"kind": "tool", "id": tool_id, "name": tool_id, "description": description}
+            for tool_id, (description, _) in self.extras.items() if self.tools.get(tool_id) is None
+        ]
+        return items
+
+    def in_library(self, kind: str, item_id: str) -> bool:
+        return any(item["kind"] == kind and item["id"] == item_id for item in self.library())
+
+    def enable(self, kind: str, item_id: str) -> str:
+        """Включает готовую заготовку: скилл и коннектор копируются в data/ и дальше правятся как свои."""
+        if not self.in_library(kind, item_id):
+            raise FileNotFoundError("Такой готовой заготовки нет или она уже включена")
+        if kind == "skill":
+            target = self.paths.skills / f"{item_id}.md"
+            if target.exists():
+                raise FileExistsError("Скилл с таким id уже есть")
+            self.paths.skills.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(skill_files.LIBRARY / f"{item_id}.md", target)
+            self.skills.replace(skill_files.parse_skill(target))
+        elif item_id in self.extras:
+            self._extras_store.set(item_id, True)
+            self.tools.replace(self.extras[item_id][1]())
+        else:
+            target = self.paths.tools / item_id
+            if target.exists():
+                raise FileExistsError("Инструмент с таким id уже есть")
+            shutil.copytree(scripts.LIBRARY / item_id, target, ignore=shutil.ignore_patterns("__pycache__"))
+            self.tools.replace(self._bind(scripts.read_script_tool(target)))
+        return item_id
+
+    # ---------- архив ----------
+
     def archive(self, kind: str, item_id: str) -> None:
         if kind == "tool":
+            # Дополнение не удаляется, а выключается: оно снова появится среди готовых.
             if self.is_extra(item_id) and self.tools.get(item_id) is not None:
                 self._extras_store.set(item_id, False)
                 self.tools.unregister(item_id)
@@ -153,31 +179,24 @@ class CapabilityService:
         elif kind == "skill":
             if self.skills.get(item_id) is None:
                 raise FileNotFoundError("Скилла нет")
-            loader.archive_skill(self.paths.skills, item_id)
+            skill_files.archive_skill(self.paths.skills, item_id)
             self.skills.remove(item_id)
         else:
             if self.agents.get(item_id) is None:
                 raise FileNotFoundError("Саб-агента нет")
-            loader.archive_agent(self.paths.agents, item_id)
+            agent_files.archive_agent(self.paths.agents, item_id)
             self.agents.remove(item_id)
 
     def restore(self, kind: str, archive_id: str) -> str:
-        if kind == "tool" and archive_id.startswith(EXTRA_PREFIX):
-            tool_id = archive_id.removeprefix(EXTRA_PREFIX)
-            if tool_id not in self.extras:
-                raise FileNotFoundError("Такого дополнения нет")
-            self._extras_store.set(tool_id, True)
-            self.tools.replace(self.extras[tool_id][1]())
-            return tool_id
         if kind == "tool":
             tool = self._bind(scripts.restore_script_tool(self.paths.tools, archive_id))
             self.tools.replace(tool)
             return tool.id
         if kind == "skill":
-            skill = loader.restore_skill(self.paths.skills, archive_id)
+            skill = skill_files.restore_skill(self.paths.skills, archive_id)
             self.skills.replace(skill)
             return skill.id
-        agent = loader.restore_agent(self.paths.agents, archive_id)
+        agent = agent_files.restore_agent(self.paths.agents, archive_id)
         self.agents.replace(agent)
         return agent.id
 
@@ -198,10 +217,10 @@ class CapabilityService:
             draft.write_text(files[name], encoding="utf-8", newline="\n")
             try:
                 if kind == "skill":
-                    parsed = loader._parse_skill(draft, item_id)
+                    parsed = skill_files.parse_skill(draft, item_id)
                 else:
-                    parsed = loader._parse_agent(draft)
-                    loader._check_agent(
+                    parsed = agent_files.parse_agent(draft)
+                    agent_files.check_agent(
                         parsed, {tool.id for tool in self.tools.all()}, {skill.id for skill in self.skills.all()},
                     )
             except ValueError as exc:
@@ -236,8 +255,6 @@ class CapabilityService:
 
     def purge(self, kind: str, archive_id: str) -> None:
         """Окончательно удаляет запись архива: вернуть её будет нельзя."""
-        if kind == "tool" and archive_id.startswith(EXTRA_PREFIX):
-            raise ValueError("Дополнение встроено в приложение: его можно только оставить выключенным")
         if not any(entry == archive_id for entry, _, _ in self._archive(kind)):
             raise FileNotFoundError("Записи архива нет")
         root = {"tool": self.paths.tools, "skill": self.paths.skills, "agent": self.paths.agents}[kind]
@@ -285,8 +302,8 @@ class CapabilityService:
             "packages": [{"name": name, "version": version, "tools": users[name]} for name, version in packages.items()],
         }
         return {
-            "tools": tools, "skills": skills, "agents": agents, "archive": archive, "python": python,
-            "secrets": self.secret_overview(),
+            "tools": tools, "skills": skills, "agents": agents, "archive": archive, "library": self.library(),
+            "python": python,
         }
 
     def _origin(self, tool: Tool) -> str:
@@ -315,19 +332,11 @@ class CapabilityService:
             "checkable": 'action == "check"' in tool.script.read_text(encoding="utf-8"),
         }
 
-    def secret_overview(self) -> list[dict]:
-        """Имена секретов без значений: какие заданы и каким инструментам нужны (в том числе ещё не заданные)."""
-        stored = set(self.secrets.names()) if self.secrets else set()
-        users: dict[str, list[str]] = {name: [] for name in stored}
-        for tool in self.tools.all():
-            for name in getattr(tool, "secrets", ()):
-                users.setdefault(name.removesuffix("?"), []).append(tool.id)
-        return [{"name": name, "set": name in stored, "tools": users[name]} for name in sorted(users)]
-
     def archive_lines(self) -> list[str]:
-        """Архив одной строкой на элемент: агент может предложить вернуть нужное."""
+        """Архив и готовые заготовки одной строкой на элемент: агент может предложить вернуть или включить нужное."""
         names = {"tool": "инструмент", "skill": "скилл", "agent": "саб-агент"}
-        lines = []
+        lines = [f"- {names[item['kind']]} {item['id']} — {summary_line(item['description'] or item['name'])} (готовый)"
+                 for item in self.library()]
         for kind in KINDS:
             seen = set()
             for _archive_id, item_id, name in reversed(self._archive(kind)):
@@ -339,13 +348,9 @@ class CapabilityService:
 
     def _archive(self, kind: str) -> list[tuple[str, str, str]]:
         if kind == "tool":
-            extras = [
-                (EXTRA_PREFIX + tool_id, tool_id, description) for tool_id, (description, _) in self.extras.items()
-                if self.tools.get(tool_id) is None
-            ]
-            return extras + [
+            return [
                 (archive_id, item_id, item_id) for archive_id, item_id in scripts.archived_script_tools(self.paths.tools)
             ]
         if kind == "skill":
-            return [(archive_id, skill.id, skill.name) for archive_id, skill in loader.archived_skills(self.paths.skills)]
-        return [(archive_id, agent.id, agent.name) for archive_id, agent in loader.archived_agents(self.paths.agents)]
+            return [(archive_id, skill.id, skill.name) for archive_id, skill in skill_files.archived_skills(self.paths.skills)]
+        return [(archive_id, agent.id, agent.name) for archive_id, agent in agent_files.archived_agents(self.paths.agents)]

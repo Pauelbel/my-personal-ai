@@ -45,7 +45,7 @@ class ConversationService:
         )
 
     def add_tool_message(
-        self, session_id: str, *, call_id: str, name: str, content: str, is_error: bool
+        self, session_id: str, *, call_id: str, name: str, content: str, is_error: bool, meta: dict | None = None,
     ) -> Message:
         return self._add(
             session_id,
@@ -54,6 +54,7 @@ class ConversationService:
             tool_call_id=call_id,
             tool_name=name,
             is_error=is_error,
+            meta=meta,
         )
 
     def _add(self, session_id: str, **fields) -> Message:

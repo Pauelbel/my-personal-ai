@@ -68,3 +68,24 @@ assert.equal(find(names, "em").length, 1);
 assert.equal(find(names, "em")[0].textContent, "важно");
 assert.equal(find(names, "strong")[0].textContent, "жирно");
 assert.match(names.textContent, /read_file и git_log/);
+
+// Нумерация продолжается после маркированного списка, а вложенный список уходит внутрь пункта.
+{
+  const root = new MockNode("div");
+  appendMarkdown(root, "1. Тест-кейсы\n- кейс\n2. Баг-репорты\n   - баг А\n   - баг Б\n3. Автотесты");
+  const lists = root.children.filter((child) => child.tag === "ol" || child.tag === "ul");
+  assert.deepEqual(lists.map((list) => list.tag), ["ol", "ul", "ol"]);
+  assert.equal(lists[2].start, 2);
+  const [second, third] = lists[2].children;
+  assert.equal(second.children.find((child) => child.tag === "ul").children.length, 2);
+  assert.match(third.textContent, /Автотесты/);
+}
+
+// Обратный слеш экранирует только знаки препинания: пути Windows и «\n» в тексте не теряют слеш.
+{
+  const root = new MockNode("div");
+  appendMarkdown(root, "Путь C:\\new\\test и \\*звёздочка\\*, строка a\\nb");
+  assert.match(root.textContent, /C:\\new\\test/);
+  assert.match(root.textContent, /\*звёздочка\*/);
+  assert.match(root.textContent, /a\\nb/);
+}

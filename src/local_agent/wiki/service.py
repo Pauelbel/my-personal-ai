@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import unquote
 
-from local_agent.tools.docs import MarkdownIndex
+from local_agent.shared.markdown_index import MarkdownIndex
 from local_agent.wiki import notes
 from local_agent.wiki.notes import INDEX_FILE, MATCH_THRESHOLD, IndexEntry, Note
 

@@ -6,10 +6,10 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.fakes import post_session
 
-from local_agent.agent.context import build_system_prompt
-from local_agent.agent.project_instructions import load_project_instructions
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
+from local_agent.core.context import build_system_prompt
+from local_agent.core.project_instructions import load_project_instructions
 from local_agent.llm.models import ChatResult
 
 

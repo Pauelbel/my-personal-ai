@@ -6,9 +6,9 @@
 import asyncio
 from pathlib import Path
 
+from local_agent.core.tool import ToolResult
 from local_agent.memory.markdown import DEFAULT_DOCUMENTS
 from local_agent.memory.service import MemoryService, MemoryServiceError
-from local_agent.tools.base import ToolResult
 
 
 class MemorySearchTool:

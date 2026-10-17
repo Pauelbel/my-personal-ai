@@ -1,42 +1,11 @@
-"""Готовые дополнения: встроенные в приложение инструменты, которые по умолчанию выключены.
+"""Какие встроенные дополнения включены: список id в data/tools/extras.json.
 
-Агент видит их в реестре среди архива и может предложить вернуть (archive restore) — с утверждением
-пользователя, как любую другую возможность. Включённые хранятся в data/tools/extras.json.
+Дополнение — инструмент в коде приложения, выключенный по умолчанию (например, tools/testgen). Какие они есть,
+решает сборка (assembly.py); включают их кнопкой «включить» на вкладке «Готовые».
 """
 
 import json
-from collections.abc import Callable
 from pathlib import Path
-
-from local_agent.extras.testgen.tool import GenerateTestCasesTool
-from local_agent.graph.agent_graph import CURRENT_TURN
-from local_agent.llm.registry import LLMRegistry
-from local_agent.tools.base import Tool, ToolResult
-
-
-class TestCasesExtra(GenerateTestCasesTool):
-    """Генерация тест-кейсов идёт на модели того хода, в котором её вызвали."""
-
-    def __init__(self, providers: LLMRegistry) -> None:
-        super().__init__()
-        self._providers = providers
-
-    async def execute(self, arguments: dict[str, object], workspace: Path) -> ToolResult:
-        turn = CURRENT_TURN.get() or {}
-        provider = self._providers.get(turn.get("provider_id", ""))
-        if provider is None or not turn.get("model"):
-            return ToolResult("Генерации нужна модель текущей сессии", is_error=True)
-        return await GenerateTestCasesTool(provider, turn["model"]).execute(arguments, workspace)
-
-
-def extra_factories(providers: LLMRegistry) -> dict[str, tuple[str, Callable[[], Tool]]]:
-    """id → (описание, фабрика)."""
-    return {
-        GenerateTestCasesTool.id: (
-            "Генерация ручных тест-кейсов по Markdown-документации раздела постранично",
-            lambda: TestCasesExtra(providers),
-        ),
-    }
 
 
 class ExtrasStore:

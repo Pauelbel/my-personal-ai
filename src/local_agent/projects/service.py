@@ -8,11 +8,11 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from local_agent.projects.models import Project
-from local_agent.sessions.service import InvalidWorkspaceError, SessionService, validate_workspace
-from local_agent.storage.json.projects import JsonProjectRepository
+from local_agent.projects.repository import ProjectRepository
 
 logger = logging.getLogger(__name__)
 # Так выбор папки подписывает домашнюю папку. Раньше подпись становилась названием проекта,
@@ -28,8 +28,29 @@ class ProjectError(ValueError):
     """Проект нельзя создать или изменить с такими параметрами."""
 
 
+class InvalidWorkspaceError(ValueError):
+    """Рабочая папка не существует или указана относительным путём."""
+
+
+def validate_workspace(workspace: str) -> str:
+    path = Path(workspace).expanduser()
+    if not path.is_absolute() or not path.is_dir():
+        raise InvalidWorkspaceError("Рабочая папка должна быть существующей папкой с абсолютным путём")
+    return str(path.resolve())
+
+
+class Sessions(Protocol):
+    """Что сервису проектов нужно от сессий: проекты лежат слоем ниже и сам пакет sessions не импортируют."""
+
+    def list(self) -> list: ...
+
+    def delete(self, session_id: str) -> bool: ...
+
+    def assign_project(self, session_id: str, project_id: str) -> object: ...
+
+
 class ProjectService:
-    def __init__(self, repository: JsonProjectRepository, sessions: SessionService) -> None:
+    def __init__(self, repository: ProjectRepository, sessions: Sessions) -> None:
         self._repository = repository
         self._sessions = sessions
 

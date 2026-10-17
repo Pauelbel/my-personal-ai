@@ -303,7 +303,7 @@ function wikiPath(from, href) {
 
 // ---------- возможности ----------
 
-const CAP_TABS = [["tools", "Инструменты"], ["skills", "Скиллы"], ["agents", "Агенты"], ["mcp", "MCP"], ["python", "Пакеты"], ["archive", "Архив"]];
+const CAP_TABS = [["tools", "Инструменты"], ["skills", "Скиллы"], ["agents", "Агенты"], ["mcp", "MCP"], ["python", "Пакеты"], ["library", "Готовые"], ["archive", "Архив"]];
 let capTab = recall("capabilities-tab") ?? "tools";
 let capData = null;
 
@@ -322,7 +322,7 @@ function renderCapabilities(toast) {
   const counts = {
     tools: data.tools.filter((tool) => tool.origin !== "mcp").length, skills: data.skills.length,
     agents: data.agents.length + 1, mcp: data.mcp.length, python: data.python.packages.length,
-    archive: data.archive.length,
+    library: data.library.length, archive: data.archive.length,
   };
   $("#cap-tabs").replaceChildren(...CAP_TABS.map(([id, label]) => {
     const tab = el("button", "", label);
@@ -375,6 +375,18 @@ function renderCapabilities(toast) {
         link("удалить", () => uninstall(item, reload, toast)),
       ], lines, last),
     "Пакетов нет: скрипты агента видят только стандартную библиотеку Python. Агент попросит установить нужное — с вашего согласия."),
+    // Готовые заготовки из кода: скиллы, коннекторы, дополнения. «Включить» — и они в работе, дальше их можно править.
+    library: () => groups(Object.entries(ARCHIVE_GROUP).map(([kind, title]) => [title, data.library.filter((item) => item.kind === kind)]),
+      (item, lines, last) => capRow(item.id, item.description, [], [
+        link("включить", async () => {
+          try {
+            await api.enable(item.kind, item.id);
+            await reload();
+          } catch (error) {
+            toast(error);
+          }
+        }),
+      ], lines, last), "Все готовые заготовки уже включены."),
     archive: () => groups(Object.entries(ARCHIVE_GROUP).map(([kind, title]) => [title, data.archive.filter((item) => item.kind === kind)]),
       (item, lines, last) => capRow(item.id, item.name === item.id ? "" : item.name, [], [
         link("вернуть", async () => {
@@ -385,8 +397,7 @@ function renderCapabilities(toast) {
             toast(error);
           }
         }),
-        // Встроенное дополнение удалить нельзя — его можно только не включать.
-        !item.archive_id.startsWith("extra:") && link("удалить", async () => {
+        link("удалить", async () => {
           if (!window.confirm(`Удалить ${KIND[item.kind]} ${item.id} из архива навсегда? Вернуть его будет нельзя.`)) return;
           try {
             await api.purge(item.kind, item.archive_id);

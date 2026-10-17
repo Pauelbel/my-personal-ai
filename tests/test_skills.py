@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from local_agent.agent.loader import archive_skill, archived_skills, load_skills, restore_skill, write_skill
-from local_agent.agent.registry import SkillRegistry
-from local_agent.tools.skills import UseSkillTool
+from local_agent.core.toolbox import UseSkillTool
+from local_agent.skills.files import archive_skill, archived_skills, load_skills, restore_skill, write_skill
+from local_agent.skills.registry import SkillRegistry
 
 SKILL = "---\nname: Проверка\ndescription: проверить что-нибудь\n---\nШаг 1. Шаг 2.\n"
 
@@ -54,9 +54,9 @@ def test_use_skill_warns_about_missing_tools(tmp_path):
     partial = asyncio.run(UseSkillTool(registry, known, {"list_files"}).execute({"name": "overview"}, None))
     full = asyncio.run(UseSkillTool(registry, known, {"list_files", "read_file"}).execute({"name": "overview"}, None))
 
-    assert "недоступны инструменты, которые нужны навыку: list_files, read_file" in without.content
-    assert "нужны навыку: read_file." in partial.content
-    # write_file навыку не нужен, а нужные есть: предупреждения нет.
+    assert "недоступны инструменты, которые нужны скиллу: list_files, read_file" in without.content
+    assert "нужны скиллу: read_file." in partial.content
+    # write_file скиллу не нужен, а нужные есть: предупреждения нет.
     assert "ВНИМАНИЕ" not in full.content
 
 

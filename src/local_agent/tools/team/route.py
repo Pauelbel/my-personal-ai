@@ -8,11 +8,11 @@
 
 from pathlib import Path
 
-from local_agent.agent.main_agent import MAIN_AGENT_ID
-from local_agent.agent.registry import AgentRegistry
+from local_agent.agents.main import MAIN_AGENT_ID
+from local_agent.agents.registry import AgentRegistry
+from local_agent.core.tool import ToolResult
 from local_agent.projects.service import ProjectService, route_kind
 from local_agent.sessions.models import Session
-from local_agent.tools.base import ToolResult
 
 
 class ChooseRouteTool:

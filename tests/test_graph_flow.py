@@ -208,18 +208,45 @@ def test_attention_lists_pending_cards(tmp_path):
     assert card["session_id"] == session["id"] and card["pending"]["call"]["name"] == "write_file"
 
 
-def test_tool_round_limit_ends_the_turn_with_an_answer_not_an_error(tmp_path):
-    # Модель без конца зовёт инструменты: на лимите ход заканчивается ответом, работу можно продолжить.
-    provider = ScriptedProvider(*[call("list_files", path=".") for _ in range(5)])
+def run_to_limit(tmp_path, *steps):
+    """Лимит в 2 шага: модель зовёт инструменты дважды, и ход встаёт на карточке «продолжить или остановить»."""
+    provider = ScriptedProvider(call("list_files", path="."), call("list_files", path="."), *steps)
     configured = settings(tmp_path).model_copy(update={"max_tool_rounds": 2})
-    with TestClient(create_app(configured, llm_provider=provider)) as client:
-        session = post_session(client, {"model": "test"}).json()
-        events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Обойди всё"}))
+    client = TestClient(create_app(configured, llm_provider=provider))
+    client.__enter__()
+    session = post_session(client, {"model": "test"}).json()
+    events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Обойди всё"}))
+    return client, provider, f"/api/sessions/{session['id']}", events
 
-    assert events[-1]["type"] == "done"
-    assert "лимита в 2 шагов" in events[-1]["message"]["content"] and "продолжай" in events[-1]["message"]["content"]
-    # Третий запрос — последний: инструменты в нём уже не предлагались.
-    assert len(provider.requests) == 3 and not provider.requests[-1]["tools"]
+
+def test_step_limit_asks_to_continue_and_continue_extends_the_turn(tmp_path):
+    client, provider, url, events = run_to_limit(tmp_path, call("list_files", path="."), "Готово: обошёл всё")
+    try:
+        card = events[-1]
+        assert card["type"] == "interrupt" and card["pending"]["kind"] == "limit"
+        assert card["pending"]["title"] == "Сделано 2 шага — продолжить работу?"
+        # Карточка встала до запроса к модели: модель на лимите ещё не звали.
+        assert len(provider.requests) == 2
+        resumed = events_of(client.post(url + "/resume", json={"action": "approve"}))
+    finally:
+        client.__exit__(None, None, None)
+
+    assert resumed[-1]["type"] == "done" and resumed[-1]["message"]["content"] == "Готово: обошёл всё"
+    # «Продолжить» вернуло инструменты: третий шаг сделан вызовом, четвёртый запрос — итог.
+    assert len(provider.requests) == 4 and provider.requests[2]["tools"]
+
+
+def test_step_limit_stop_asks_for_summary_without_tools(tmp_path):
+    client, provider, url, events = run_to_limit(tmp_path, "Сделано: два обхода. Осталось: остальное")
+    try:
+        assert events[-1]["pending"]["kind"] == "limit"
+        resumed = events_of(client.post(url + "/resume", json={"action": "reject"}))
+    finally:
+        client.__exit__(None, None, None)
+
+    assert resumed[-1]["type"] == "done" and resumed[-1]["message"]["content"].startswith("Сделано: два обхода")
+    last = provider.requests[-1]
+    assert not last["tools"] and last["messages"][-1].role == "user" and "остановил работу" in last["messages"][-1].content
 
 
 def test_promised_step_without_tool_call_is_continued_in_the_same_turn(tmp_path):
@@ -245,7 +272,7 @@ def test_promised_step_without_tool_call_is_continued_in_the_same_turn(tmp_path)
 
 
 def test_promises_action_tells_a_promise_from_a_summary_or_question():
-    from local_agent.graph.agent_graph import promises_action
+    from local_agent.core.graph import promises_action
 
     for text in (
         "Заполняю данные.", "Проверяю сортировку Name (A to Z).", "Теперь открою корзину", "**Шаг 5**\n\nДалее:",
@@ -278,7 +305,7 @@ def test_answer_in_english_is_rewritten_in_russian_before_it_reaches_the_chat(tm
 
 
 def test_foreign_answer_is_kept_when_the_user_asked_for_it():
-    from local_agent.graph.agent_graph import foreign_allowed, is_foreign
+    from local_agent.core.graph import foreign_allowed, is_foreign
 
     assert not is_foreign("Готово: тест-кейсы в `test_cases.md`, сценарии Login, Cart и Checkout на https://www.saucedemo.com/.")
     assert foreign_allowed([{"role": "user", "content": "Напиши README на английском"}])
@@ -314,7 +341,7 @@ def test_reasoning_is_kept_for_display_but_not_sent_back_to_model(tmp_path):
 
 
 def test_fit_turn_shortens_oldest_tool_results_first():
-    from local_agent.agent.context import fit_turn
+    from local_agent.core.context import fit_turn
     from local_agent.llm.models import ChatMessage
 
     messages = [ChatMessage("system", "s"), ChatMessage("user", "u")]

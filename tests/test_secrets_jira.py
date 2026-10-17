@@ -13,8 +13,8 @@ from fastapi.testclient import TestClient
 from tests.test_graph_flow import settings
 
 from local_agent.api.app import create_app
-from local_agent.capabilities.scripts import read_script_tool, write_script_tool
-from local_agent.capabilities.secrets import SecretStore
+from local_agent.connectors.scripts import read_script_tool, write_script_tool
+from local_agent.connectors.secrets import SecretStore
 
 TOKEN = "s3cr3t-token-value"
 
@@ -34,16 +34,21 @@ def test_store_keeps_values_private_and_masks_them(tmp_path):
     assert store.names() == ["JIRA_TOKEN"]
 
 
+def enable_jira(client):
+    assert client.post("/api/capabilities/library/tool/jira").json() == {"id": "jira"}
+
+
 def test_api_writes_secrets_but_never_returns_values(tmp_path):
     with TestClient(create_app(settings(tmp_path))) as client:
+        enable_jira(client)
         assert client.put("/api/capabilities/secrets/JIRA_TOKEN", json={"value": TOKEN}).status_code == 204
         assert client.put("/api/capabilities/secrets/bad-name", json={"value": "x"}).status_code == 400
         response = client.get("/api/capabilities")
         assert TOKEN not in response.text
-        secrets = {item["name"]: item for item in response.json()["secrets"]}
-        # Jira объявляет свои секреты: незаданный JIRA_URL виден как нужный коннектору.
-        assert secrets["JIRA_TOKEN"] == {"name": "JIRA_TOKEN", "set": True, "tools": ["jira"]}
-        assert secrets["JIRA_URL"]["set"] is False and secrets["JIRA_EMAIL"]["tools"] == ["jira"]
+        jira = next(tool for tool in response.json()["tools"] if tool["id"] == "jira")
+        fields = {field["name"]: field for field in jira["fields"]}
+        # Форма коннектора видит, что токен задан, а адрес ещё нет.
+        assert fields["JIRA_TOKEN"]["set"] is True and fields["JIRA_URL"]["set"] is False
         check = client.post("/api/capabilities/connectors/jira/check")
         assert check.status_code == 400 and "JIRA_URL" in check.json()["detail"]
         assert client.delete("/api/capabilities/secrets/JIRA_TOKEN").status_code == 204
@@ -128,6 +133,7 @@ def jira(tmp_path):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     FakeJira.requests, FakeJira.cloud = [], False
     with TestClient(create_app(settings(tmp_path))) as client:
+        enable_jira(client)
         store = client.app.state.secrets
         store.set("JIRA_URL", f"http://127.0.0.1:{server.server_address[1]}/")
         store.set("JIRA_TOKEN", TOKEN)
@@ -136,8 +142,15 @@ def jira(tmp_path):
     server.shutdown()
 
 
-def test_jira_is_an_editable_script_tool_seeded_once(tmp_path):
+def test_jira_is_ready_to_enable_then_editable_and_archived_one_stays_archived(tmp_path):
     with TestClient(create_app(settings(tmp_path))) as client:
+        # Готовый коннектор не включается сам: он среди готовых, пока его не включат.
+        assert client.app.state.tool_registry.get("jira") is None
+        assert {"kind": "tool", "id": "jira"}.items() <= next(
+            item for item in client.get("/api/capabilities").json()["library"] if item["id"] == "jira"
+        ).items()
+        enable_jira(client)
+        assert client.post("/api/capabilities/library/tool/jira").status_code == 404
         source = client.get("/api/capabilities/tool/jira").json()
         assert set(source["files"]) == {"tool.md", "parameters.json", "script.py"}
         assert "secrets: JIRA_URL, JIRA_TOKEN, JIRA_EMAIL?, JIRA_VERIFY_SSL?" in source["files"]["tool.md"]
@@ -185,12 +198,14 @@ def test_issue_with_comments_and_jql_errors_reach_the_model(jira):
 
 def test_jira_without_secrets_asks_user_to_configure(tmp_path):
     with TestClient(create_app(settings(tmp_path))) as client:
+        enable_jira(client)
         result = asyncio.run(client.app.state.tool_registry.get("jira").execute({"action": "mine"}, None))
     assert result.is_error and "JIRA_URL" in result.content and "настроить" in result.content
 
 
 def test_jira_is_listed_as_connector_with_form_fields(tmp_path):
     with TestClient(create_app(settings(tmp_path))) as client:
+        enable_jira(client)
         jira = next(tool for tool in client.get("/api/capabilities").json()["tools"] if tool["id"] == "jira")
         assert jira["origin"] == "connector" and jira["configured"] is False and jira["checkable"] is True
         client.put("/api/capabilities/secrets/JIRA_URL", json={"value": "https://jira.company.ru"})

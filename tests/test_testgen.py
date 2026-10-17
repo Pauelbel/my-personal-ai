@@ -3,11 +3,11 @@
 import asyncio
 import json
 
-from local_agent.extras.testgen.pipeline import CaseGenerator, chunks, parse_page, system_prompt
-from local_agent.extras.testgen.style import lint
-from local_agent.extras.testgen.tool import GenerateTestCasesTool
 from local_agent.llm.base import LLMProviderError, LLMProviderUnavailable
 from local_agent.llm.models import ChatResult
+from local_agent.tools.testgen.pipeline import CaseGenerator, chunks, parse_page, system_prompt
+from local_agent.tools.testgen.style import lint
+from local_agent.tools.testgen.tool import GenerateTestCasesTool
 
 BODY = "## Настройка\n\n" + "Откройте меню «Сервер» и задайте адрес. " * 20
 
@@ -175,9 +175,9 @@ def test_tool_keeps_finished_pages_when_server_goes_down(tmp_path):
 
 
 def test_extra_runs_on_model_of_current_turn(tmp_path):
-    from local_agent.capabilities.extras import TestCasesExtra
-    from local_agent.graph.agent_graph import CURRENT_TURN
+    from local_agent.core.tool import CURRENT_TURN
     from local_agent.llm.registry import LLMRegistry
+    from local_agent.tools.testgen.tool import TestCasesExtra
 
     provider = FakeProvider({"test_cases": [CASE]})
     tool = TestCasesExtra(LLMRegistry({"p": provider}))

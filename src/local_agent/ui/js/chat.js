@@ -11,12 +11,17 @@ const STEP_ICON = { done: "✓", failed: "✕", pending: "◌" };
 const REPORT_FOLD_CHARS = 300;
 const REPORT_FOLD_LINES = 5;
 const unfolded = new Set();
-const folded = new Set();
 
 // greeting — заголовок и строка пустого разговора; по умолчанию здоровается основной агент.
-// Разговор идёт ходами: реплика пользователя (или отчёт саб-агента), под ней свёрнутый «ход работы» — инструменты
-// и промежуточные реплики модели, — видимые строки событий (кому поручено, кто что выбрал) и итоговый ответ.
-export function renderMessages(container, messages, greeting = ["Привет! Я Meepo.", "Расскажите, как вас зовут и чем займёмся."]) {
+// Разговор идёт ходами: реплика пользователя (или отчёт саб-агента), под ней свёрнутый «ход работы» — весь процесс:
+// рассуждения, инструменты, промежуточные реплики модели, — затем строки событий (кому поручено, кто что выбрал),
+// готовые результаты этапов и итоговый ответ.
+// Пока ход идёт (live — печатающийся ответ этой вкладки, busy — ход идёт на сервере, waiting — ход ждёт решения
+// по карточке), в чате только одна строка хода: результатов ещё нет, и наружу ничего не выходит.
+export function renderMessages(
+  container, messages, greeting = ["Привет! Я Meepo.", "Расскажите, как вас зовут и чем займёмся."],
+  { live = null, waiting = false, busy = false } = {},
+) {
   container.replaceChildren();
   if (!messages.length) {
     const empty = el("div", "empty");
@@ -29,7 +34,8 @@ export function renderMessages(container, messages, greeting = ["Привет! �
   }
   const results = new Map(messages.filter((item) => item.role === "tool").map((item) => [item.tool_call_id, item]));
   const all = turns(messages, results);
-  all.forEach((turn, index) => renderTurn(container, turn, results, index === all.length - 1));
+  const ongoing = { live, active: Boolean(live) || busy || waiting, label: waiting ? "ждёт решения" : "идёт" };
+  all.forEach((turn, index) => renderTurn(container, turn, results, index === all.length - 1, ongoing));
 }
 
 // Имена агентов для строк «Поручено …»: в вызове инструмента — только id.
@@ -69,20 +75,33 @@ function turns(messages, results) {
   return list;
 }
 
-function renderTurn(container, turn, results, last) {
+function planDone(message) {
+  return message?.tool_calls?.find((call) => call.name === "plan" && parse(call.arguments).action === "done") ?? null;
+}
+
+// Реплика модели без вызовов инструментов — кандидат в результат: итог хода или итог этапа.
+function isAnswer(item) {
+  return item?.role === "assistant" && !item.tool_calls?.length && Boolean(item.content?.trim());
+}
+
+function renderTurn(container, turn, results, last, ongoing) {
   if (turn.head) container.append(turn.head.sender ? reportNode(turn.head) : userNode(turn.head));
-  // Итог хода — последняя реплика модели без вызовов; если после неё снова вызовы, ход ещё идёт.
-  let final = null;
-  for (const item of [...turn.items].reverse()) {
-    if (item.role === "team") continue;
-    if (item.role === "assistant" && !item.tool_calls?.length && item.content?.trim()) final = item;
-    break;
-  }
+  // Ход идёт — итогов нет: всё, что модель пишет по дороге, остаётся внутри строки хода.
+  const running = last && ongoing.active;
+  // Итог хода — последняя реплика модели без вызовов; итоги этапов — реплики, после которых модель
+  // отметила пункт плана сделанным.
+  const tail = [...turn.items].reverse().find((item) => item.role !== "team");
+  const final = !running && isAnswer(tail) ? tail : null;
+  const stages = running ? new Map() : stageResults(turn.items, results);
   const work = [];
   const events = [];
   const answered = new Set();
   for (const [index, item] of turn.items.entries()) {
-    if (item === final) continue;
+    if (item === final) {
+      // Итог — в чат, а рассуждения перед ним — в ход работы, на своё место.
+      if (item.reasoning) work.push({ thought: item });
+      continue;
+    }
     if (item.role === "team") {
       events.push(teamNode(item));
       continue;
@@ -93,7 +112,8 @@ function renderTurn(container, turn, results, last) {
       continue;
     }
     if (item.reasoning) work.push({ thought: item });
-    if (item.content?.trim()) work.push({ note: item });
+    // Текст итога этапа — в чат результатом; его вызовы (отметка этапа и что ещё было) остаются шагами хода.
+    if (item.content?.trim() && !stages.has(item)) work.push({ note: item });
     const calls = (item.tool_calls ?? []).filter((call) => !EVENT_TOOLS.has(call.name));
     if (calls.length) work.push({ calls, message: item });
     for (const call of item.tool_calls ?? []) {
@@ -105,51 +125,229 @@ function renderTurn(container, turn, results, last) {
       }
     }
   }
-  if (final?.reasoning) work.push({ thought: final });
-  if (work.length) container.append(workNode(work, results, !final && last));
+  // Идущий ход этой вкладки — одна строка печатающегося ответа: шаги из истории уходят в неё.
+  if (running && ongoing.live) ongoing.live.adopt(work, results);
+  else if (work.length) {
+    // Ход без итога, который не идёт и не ждёт решения, оборвался: ошибка модели или «Стоп».
+    const label = running ? ongoing.label : last && !final ? "прервано" : "";
+    container.append(workNode(work, results, label));
+  }
   container.append(...events);
+  for (const [message, title] of stages) if (message !== final) container.append(assistantNode(message, false, title));
   if (final) container.append(assistantNode(final, last));
+  if (!running) {
+    const files = filesNode(turn.items, results);
+    if (files) container.append(files);
+  }
 }
 
-// «Ход работы» одной строкой: сколько шагов и сколько заняли. Свёрнут, пока его не раскроют;
-// раскрытое пользователем остаётся раскрытым после перерисовки.
-function workNode(work, results, running) {
+// Файлы, которые агент создал или изменил за ход, — в конце хода одной строкой; щелчок открывает файл.
+const FILE_TOOLS = new Set(["write_file", "edit_file"]);
+function filesNode(items, results) {
+  const paths = [...new Set(items.flatMap((item) => (item.tool_calls ?? [])
+    .filter((call) => FILE_TOOLS.has(call.name) && results.get(call.id) && !results.get(call.id).is_error)
+    .map((call) => String(parse(call.arguments).path ?? "")).filter(Boolean)))];
+  if (!paths.length) return null;
+  const line = el("div", "turn-files");
+  line.append(el("span", "turn-files-label", "Файлы:"));
+  for (const path of paths) {
+    const chip = el("code", "", path);
+    markPath(chip, path);
+    line.append(chip);
+  }
+  return line;
+}
+
+// Итоги этапов. Какой текст — итог этапа, решает сервер, когда модель отмечает этап сделанным (plan с action done):
+// выбор лежит в meta результата этого вызова. Догадка по тексту ниже — только для ходов до этой записи.
+function stageResults(items, results) {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const decided = new Map();
+  let recorded = false;
+  for (const item of items) {
+    for (const call of item.tool_calls ?? []) {
+      const meta = call.name === "plan" ? results.get(call.id)?.meta : null;
+      if (!meta) continue;
+      recorded = true;
+      const message = meta.result ? byId.get(meta.result) : null;
+      if (message && !decided.has(message)) decided.set(message, `Этап ${meta.stage} · ${meta.title}`);
+    }
+  }
+  return recorded ? decided : guessedStages(items, results);
+}
+
+// Старые ходы: текст модели, в том же ответе которого этап отмечен сделанным, или реплика без вызовов,
+// за которой такая отметка идёт следующим ответом. Название — из плана в результате вызова.
+function guessedStages(items, results) {
+  const stages = new Map();
+  items.forEach((item, index) => {
+    if (item.role !== "assistant" || !item.content?.trim()) return;
+    const next = item.tool_calls?.length ? null : items.slice(index + 1).find((later) => later.role === "assistant");
+    const call = planDone(item) ?? planDone(next);
+    if (!call) return;
+    const step = Number(parse(call.arguments).step);
+    const line = (results.get(call.id)?.content ?? "").split("\n").find((text) => text.startsWith(`${step}. [x] `));
+    const name = line ? line.slice(`${step}. [x] `.length).split(" — ")[0] : "";
+    stages.set(item, `Этап ${step}${name ? ` · ${name}` : ""}`);
+  });
+  return stages;
+}
+
+// Шаги хода человеческими словами: что сделано. group — чем модель занята, для заголовка строки хода
+// («Работал в браузере», «Искал в интернете»); null — служебный шаг (план, подключение), заголовок по нему не строится.
+const TOOL_STEPS = {
+  list_files: ["Список файлов", "files"], read_file: ["Прочитан файл", "files"], search_files: ["Поиск по файлам", "files"],
+  write_file: ["Записан файл", "files"], edit_file: ["Изменён файл", "files"], search_docs: ["Поиск по документации", "docs"],
+  generate_test_cases: ["Генерация тест-кейсов", "files"], git: ["История git", "git"], fetch_url: ["Прочитана страница", "web"],
+  jira: ["Запрос в Jira", "jira"], wiki_read: ["Прочитана заметка", "wiki"], wiki_search: ["Поиск по вики", "wiki"],
+  wiki_match: ["Сверка с вики", "wiki"], wiki_save_note: ["Заметка сохранена", "wiki"], wiki_lint: ["Проверка вики", "wiki"],
+  wiki_propose_edits: ["Правки вики", "wiki"], memory_search: ["Поиск в памяти", "memory"], remember: ["Запомнено", "memory"],
+  delegate: ["Поручено агенту", "team"], ask_agent: ["Вопрос агенту", "team"], handoff: ["Передано основному", "team"],
+  ask_user: ["Вопрос вам", null], request_tools: ["Запрос инструментов", null], choose_route: ["Выбор исполнителя", null],
+  plan: ["План задачи", null], activate: ["Подключены инструменты", null], use_skill: ["Скилл", null],
+  propose: ["Предложение возможности", null], archive: ["Архив возможностей", null], install_packages: ["Установка пакетов", null],
+  learn: ["Урок записан", null],
+};
+const BROWSER_STEPS = {
+  navigate: "Открыта страница", navigate_back: "Назад", click: "Нажатие", type: "Ввод текста", fill_form: "Заполнение формы",
+  select_option: "Выбор в списке", snapshot: "Снимок страницы", take_screenshot: "Скриншот", hover: "Наведение",
+  press_key: "Нажата клавиша", wait_for: "Ожидание", tabs: "Вкладки", drag: "Перетаскивание", file_upload: "Загрузка файла",
+  handle_dialog: "Диалог на странице", console_messages: "Консоль страницы", network_requests: "Сетевые запросы",
+};
+const SEARCH_STEPS = { search: "Поиск в интернете", fetch_content: "Прочитана страница", expand_link: "Раскрыта ссылка" };
+// Чем занят: [сейчас, итог хода].
+const ACTIVITY = {
+  browser: ["Работаю в браузере", "Работал в браузере"], web: ["Ищу в интернете", "Искал в интернете"],
+  files: ["Работаю с файлами", "Работал с файлами"], docs: ["Ищу в документации", "Искал в документации"],
+  git: ["Смотрю историю git", "Смотрел историю git"], jira: ["Смотрю Jira", "Смотрел Jira"],
+  wiki: ["Работаю с вики", "Работал с вики"], memory: ["Вспоминаю", "Обращался к памяти"],
+  team: ["Работаю с агентами", "Работал с агентами"], other: ["Выполняю шаги", "Выполнил шаги"],
+};
+
+// [что сделано, группа] по id инструмента; инструменты MCP — «браузер_действие» и «search_действие».
+function describe(name) {
+  if (TOOL_STEPS[name]) return TOOL_STEPS[name];
+  if (name.startsWith("browser_")) return [BROWSER_STEPS[name.replace(/^browser_(browser_)?/, "")] ?? "Действие в браузере", "browser"];
+  const search = /^search_(.+)$/.exec(name);
+  if (search && SEARCH_STEPS[search[1]]) return [SEARCH_STEPS[search[1]], "web"];
+  return [name, "other"];
+}
+
+// Заголовок строки хода по вызовам: чем модель была занята больше всего. Без вызовов — «Думал».
+function activityOf(names, now) {
+  const counts = new Map();
+  for (const name of names) {
+    const group = describe(name)[1];
+    if (group) counts.set(group, (counts.get(group) ?? 0) + 1);
+  }
+  if (!counts.size) return names.length ? ACTIVITY.other[now ? 0 : 1] : now ? "Думаю" : "Думал";
+  const [top] = [...counts].sort((a, b) => b[1] - a[1])[0];
+  return ACTIVITY[top][now ? 0 : 1];
+}
+
+// Ход работы одной строкой: «◇ Работал в браузере · 18 шагов · 3 мин 5 с ›». Свёрнут, пока его не раскроют;
+// раскрытое остаётся раскрытым после перерисовки. state — «идёт», «ждёт решения», «прервано» или пусто.
+function workNode(work, results, state) {
   const key = (work[0].thought ?? work[0].note ?? work[0].message).id;
   const node = el("details", "work");
   node.open = openedWork.get(key) ?? false;
   node.addEventListener("toggle", () => openedWork.set(key, node.open));
+  const { steps, first, last } = workStats(work, results);
+  const span = first != null && last > first ? (last - first) / 1000 : null;
+  const names = work.flatMap((part) => (part.calls ?? []).map((call) => call.name));
+  const head = el("summary", "work-head");
+  head.append(
+    el("span", "work-icon", "◇"),
+    el("span", "work-title", activityOf(names, false)),
+    el("span", "work-meta", meta([steps && `${steps} ${plural(steps, "шаг", "шага", "шагов")}`,
+      span != null && span >= 1 && duration(round(span)), state])),
+    el("span", "work-caret", "▾"),
+  );
+  node.append(head, workBody(work, results));
+  return node;
+}
+
+// Сколько шагов в ходе и когда он начался и закончился (по времени сообщений и результатов).
+function workStats(work, results) {
   const steps = work.reduce((sum, part) => sum + (part.calls?.length ?? 0), 0);
   const times = work.flatMap((part) => [
     Date.parse((part.thought ?? part.note ?? part.message).created_at),
     ...(part.calls ?? []).map((call) => results.get(call.id)).filter(Boolean).map((result) => Date.parse(result.created_at)),
   ]).filter(Number.isFinite);
-  const span = times.length > 1 ? (Math.max(...times) - Math.min(...times)) / 1000 : null;
-  const head = el("summary", "work-head");
-  head.append(
-    el("span", "work-title", steps ? `◇ ход работы · ${steps} ${plural(steps, "шаг", "шага", "шагов")}` : "◇ рассуждения"),
-    el("span", "work-meta", [span != null && span >= 1 && duration(round(span)), running && "идёт"].filter(Boolean).join(" · ")),
-    el("span", "work-caret", "▾"),
-  );
+  return { steps, first: times.length ? Math.min(...times) : null, last: times.length ? Math.max(...times) : null };
+}
+
+// Тело хода — одна рамка со строками по порядку: размышления, промежуточные реплики, шаги с инструментами.
+// Каждая строка — одна фраза; раскрыть — подробности.
+function workBody(work, results) {
   const body = el("div", "work-body");
-  let box = null;
+  const steps = el("div", "steps");
   for (const part of work) {
-    if (part.thought) {
-      box = null;
-      body.append(el("pre", "work-thought", part.thought.reasoning));
-      continue;
+    if (part.thought) steps.append(thoughtNode(part.thought));
+    else if (part.note) steps.append(noteNode(part.note));
+    else {
+      // Шаги одного ответа модели идут друг за другом: время шага — от конца предыдущего до его результата.
+      let previous = Date.parse(part.message.created_at);
+      for (const call of part.calls) {
+        const result = results.get(call.id);
+        const finished = result && Date.parse(result.created_at);
+        const seconds = finished && previous ? Math.max(finished - previous, 0) / 1000 : null;
+        if (finished) previous = finished;
+        steps.append(stepNode(call, result, seconds));
+      }
     }
-    if (part.note) {
-      box = null;
-      const note = el("div", "work-note text");
-      renderMarkdown(note, part.note.content);
-      body.append(note);
-      continue;
-    }
-    if (!box) body.append((box = new ToolBox()).node);
-    box.add(part.message, results, part.calls);
   }
-  node.append(head, body);
+  if (steps.childElementCount) body.append(steps);
+  return body;
+}
+
+// Строка подписи: «2 мин 18 с · идёт» → «· 2 мин 18 с · идёт», чтобы она читалась продолжением заголовка.
+function meta(parts) {
+  const text = parts.filter(Boolean).join(" · ");
+  return text ? `· ${text}` : "";
+}
+
+function preview(text, limit = 110) {
+  // Разметка в одну строку не нужна: заголовки, выделение, таблицы («|---|») и цитаты убираются.
+  const line = text.replace(/[#*_`>|]|-{3,}|:-+:?/g, " ").replace(/\s+/g, " ").trim();
+  return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
+}
+
+// Размышление модели одной строкой: «∴ Размышление · начало текста…»; раскрыть — целиком.
+function thoughtNode(message) {
+  const text = message.reasoning.trim();
+  const node = el("details", "step thought");
+  remembered(node, `thought:${message.id}`);
+  const summary = el("summary");
+  summary.append(
+    el("span", "step-icon", "∴"), el("span", "step-name", "Размышление"),
+    el("span", "step-target", preview(text)), el("span", "step-meta", `${compact(text.length)} симв.`),
+  );
+  node.append(summary, el("pre", "", text));
   return node;
+}
+
+// Промежуточная реплика модели (что делает, что нашла) — строкой; раскрыть — текст целиком.
+function noteNode(message) {
+  const node = el("details", "step note");
+  remembered(node, `note:${message.id}`);
+  const summary = el("summary");
+  summary.append(el("span", "step-icon", "›"), el("span", "step-name", "Заметка"), el("span", "step-target", preview(message.content)),
+    el("span", "step-meta", ""));
+  const body = el("div", "text step-text");
+  renderMarkdown(body, message.content);
+  node.append(summary, body);
+  return node;
+}
+
+// Раскрытые строки шагов остаются раскрытыми, когда ход перерисовывается на каждом событии.
+const openedRows = new Set();
+function remembered(node, key) {
+  node.open = openedRows.has(key);
+  node.addEventListener("toggle", () => {
+    if (node.open) openedRows.add(key);
+    else openedRows.delete(key);
+  });
 }
 
 // «→ Поручено Тестировщику: задача» — кому и что ушло; щелчок по строке показывает задачу целиком.
@@ -188,115 +386,93 @@ function routeLine(call, reply) {
   return line;
 }
 
-// Рамка вызовов инструментов: в заголовке на кромке — сколько вызовов, сколько заняли и за сколько запросов к модели.
-// Свёрнутые рамки остаются свёрнутыми после перерисовки.
-class ToolBox {
-  constructor() {
-    this.node = el("details", "tools");
-    this.node.open = true;
-    this.head = el("summary", "tools-head");
-    this.title = el("span", "tools-title");
-    this.meta = el("span", "tools-meta");
-    this.head.append(this.title, this.meta);
-    this.rows = el("div", "tools-rows");
-    this.node.append(this.head, this.rows);
-    this.key = null;
-    this.calls = 0;
-    this.requests = 0;
-    this.widest = 0;
-    this.first = null;
-    this.last = null;
-    this.node.addEventListener("toggle", () => {
-      if (this.node.open) folded.delete(this.key);
-      else folded.add(this.key);
-    });
-  }
-
-  add(message, results, calls = message.tool_calls) {
-    // Шаги одного сообщения идут друг за другом: время шага — от конца предыдущего до его результата.
-    let previous = Date.parse(message.created_at);
-    this.first ??= previous;
-    this.key ??= message.id;
-    this.node.open = !folded.has(this.key);
-    this.requests += 1;
-    for (const call of calls) {
-      const result = results.get(call.id);
-      const finished = result && Date.parse(result.created_at);
-      const seconds = finished && previous ? Math.max(finished - previous, 0) / 1000 : null;
-      if (finished) previous = this.last = finished;
-      this.rows.append(stepNode(call, result, seconds));
-      this.calls += 1;
-      this.widest = Math.max(this.widest, call.name.length);
-    }
-    // Колонка имён — по самому длинному имени в рамке: шрифт моноширинный, ширина в символах точная.
-    this.node.style.setProperty("--name-ch", String(this.widest));
-    this.title.textContent = `◇ инструменты · ${this.calls} `;
-    this.title.append(el("span", "tools-caret", "▾"));
-    const span = this.first && this.last ? (this.last - this.first) / 1000 : null;
-    this.meta.textContent = [span != null && duration(round(span)), `${this.requests} ${plural(this.requests, "запрос", "запроса", "запросов")}`]
-      .filter(Boolean).join(" · ");
-  }
-}
-
 // Раскрыл пользователь строку хода — следующие ходы тоже показываются раскрытыми.
 let liveOpen = false;
 
+// Идущий ход — одна строка «◌ Ищу в интернете · этап 2/3: Баг-репорты · 4 шага · 1 мин 17 с ›». Весь процесс внутри
+// неё: шаги из истории, размышление и текст текущего запроса, журнал. В чат попадает только итог — когда ход закончится.
 export class StreamingMessage {
   constructor(container) {
     this.container = container;
     this.node = el("article", "msg assistant streaming");
-    this.textNode = el("div", "text");
-    // Одна строка «◌ Думает · 12 с ▸»: развернуть — рассуждения и лог хода вживую; свёрнутой остаётся, пока не раскроют.
-    this.live = el("details", "live");
+    this.live = el("details", "work live");
     this.live.open = liveOpen;
     this.live.addEventListener("toggle", () => { liveOpen = this.live.open; });
-    this.status = el("summary", "live-head");
-    this.reasoningText = el("pre", "live-reasoning");
+    this.status = el("summary", "work-head live-head");
+    // Части строки создаются один раз: пересоздание каждую секунду перезапускало бы вращение колеса.
+    this.statusTitle = el("span", "work-title");
+    this.statusMeta = el("span", "work-meta");
+    this.status.append(el("span", "spinner"), this.statusTitle, this.statusMeta, el("span", "work-caret", "▾"));
+    this.stage = "";
+    // Чем модель занята сейчас: thinking, reasoning, writing, retry или tool (с именами вызванных инструментов).
+    this.activity = "thinking";
+    this.tools = [];
+    this.history = el("div", "live-history");
+    this.reasoningText = el("pre", "work-thought live-reasoning");
     this.reasoningText.hidden = true;
-    this.traceText = el("pre", "live-log");
-    this.live.append(this.status, this.reasoningText, this.traceText);
+    this.textNode = el("div", "work-note text live-text");
+    this.textNode.hidden = true;
+    this.log = el("details", "live-log");
+    this.logText = el("pre");
+    this.log.append(el("summary", "", "журнал"), this.logText);
+    const body = el("div", "work-body");
+    body.append(this.history, this.reasoningText, this.textNode, this.log);
+    this.live.append(this.status, body);
+    this.node.append(this.live);
     this.text = "";
     this.timer = null;
-    // Сколько секунд идёт ход: рядом со статусом, чтобы долгий ответ не выглядел зависшим.
+    this.steps = 0;
+    // С какого момента идёт ход: время на строке, чтобы долгая работа не выглядела зависшей.
     this.started = Date.now();
-    this.statusText = "Модель думает";
     this.ticker = setInterval(() => this.#showStatus(), 1000);
     this.#showStatus();
-    // Статус над текстом ответа: ход работы в истории тоже стоит перед ответом.
-    this.node.append(this.live, this.textNode);
     container.append(this.node);
     scrollDown(container);
   }
 
+  // Шаги хода из истории: перерисовка чата отдаёт их сюда, а не отдельным блоком «ход работы».
+  adopt(work, results) {
+    this.history.replaceChildren(...(work.length ? [...workBody(work, results).childNodes] : []));
+    const { steps, first } = workStats(work, results);
+    this.steps = steps;
+    if (first != null && first < this.started) this.started = first;
+    this.#showStatus();
+  }
+
   append(text) {
     this.text += text;
-    if (this.statusText !== "Пишет ответ") this.setStatus("Пишет ответ");
+    if (this.activity !== "writing") this.setStatus("writing");
     this.timer ??= setTimeout(() => this.#flush(), FLUSH_MS);
   }
 
   addReasoning(text) {
-    if (this.statusText !== "Рассуждает") this.setStatus("Рассуждает");
+    if (this.activity !== "reasoning") this.setStatus("reasoning");
     this.reasoningText.hidden = false;
     this.reasoningText.textContent += text;
     if (this.live.open) this.reasoningText.scrollTop = this.reasoningText.scrollHeight;
   }
 
   addLog(text) {
-    this.traceText.textContent += `${text}\n`;
-    if (this.live.open) this.traceText.scrollTop = this.traceText.scrollHeight;
+    this.logText.textContent += `${text}\n`;
+    if (this.log.open) this.logText.scrollTop = this.logText.scrollHeight;
   }
 
-  // Модель позвала инструмент: напечатанное до вызова уже сохранено в истории.
-  reset(status) {
+  // Модель позвала инструмент или запрос повторяется: напечатанное и рассуждения этого запроса уже в истории
+  // (или выброшены при повторе) — здесь начинаем следующий запрос с чистого места.
+  reset(activity, tools = []) {
+    clearTimeout(this.timer);
+    this.timer = null;
     this.text = "";
     this.textNode.replaceChildren();
-    // Рассуждения прошлого раунда сохранены с вызовом инструмента; здесь — отбивка перед следующими.
-    if (this.reasoningText.textContent && !this.reasoningText.textContent.endsWith("\n\n")) this.reasoningText.textContent += "\n\n";
-    this.setStatus(status);
+    this.textNode.hidden = true;
+    this.reasoningText.textContent = "";
+    this.reasoningText.hidden = true;
+    this.setStatus(activity, tools);
   }
 
-  setStatus(text) {
-    this.statusText = text;
+  setStatus(activity, tools = []) {
+    this.activity = activity;
+    this.tools = tools;
     this.#showStatus();
   }
 
@@ -310,21 +486,31 @@ export class StreamingMessage {
     this.node.remove();
   }
 
+  // Текущий этап плана задачи («этап 2/3: Баг-репорты»), если агент ведёт план; пусто — без этапа.
+  setStage(text) {
+    if (text === this.stage) return;
+    this.stage = text;
+    this.#showStatus();
+  }
+
   #showStatus() {
     const seconds = Math.floor((Date.now() - this.started) / 1000);
-    this.status.replaceChildren(
-      el("span", "spinner"),
-      el("span", "live-text", seconds ? `${this.statusText} · ${duration(seconds)}` : this.statusText),
-      el("span", "work-caret", "▾"),
-    );
+    this.statusTitle.textContent = this.activity === "tool" ? activityOf(this.tools, true)
+      : { writing: "Пишу ответ", retry: "Повторяю запрос" }[this.activity] ?? "Думаю";
+    this.statusMeta.textContent = meta([
+      this.stage, this.steps && `${this.steps} ${plural(this.steps, "шаг", "шага", "шагов")}`, seconds && duration(seconds),
+    ]);
   }
 
   #flush() {
     this.timer = null;
-    const near = this.container.scrollHeight - this.container.scrollTop - this.container.clientHeight < 80;
+    this.textNode.hidden = !this.text.trim();
     this.textNode.replaceChildren();
     renderMarkdown(this.textNode, this.text, false);
-    if (near) scrollDown(this.container);
+    if (this.live.open) {
+      const near = this.container.scrollHeight - this.container.scrollTop - this.container.clientHeight < 80;
+      if (near) scrollDown(this.container);
+    }
   }
 }
 
@@ -414,11 +600,32 @@ function round(seconds) {
 }
 
 
+// Длинная реплика пользователя (задание целиком) свёрнута до нескольких строк, развернуть — кнопкой.
+const USER_FOLD_CHARS = 600;
+const USER_FOLD_LINES = 10;
+
 function userNode(message) {
   const node = el("article", "msg user");
-  const bubble = el("div", "bubble", message.content);
+  const bubble = el("div", "bubble");
+  const text = el("div", "bubble-text", message.content);
+  bubble.append(text);
   if (message.attachments?.length) bubble.prepend(imagesNode(message.attachments));
   node.append(bubble);
+  if (message.content.length > USER_FOLD_CHARS || message.content.split("\n").length > USER_FOLD_LINES) {
+    const fold = el("button", "msg-action fold");
+    fold.type = "button";
+    const sync = () => {
+      const open = unfolded.has(message.id);
+      node.classList.toggle("folded", !open);
+      fold.textContent = open ? "Свернуть" : "Показать полностью";
+    };
+    fold.addEventListener("click", () => {
+      if (!unfolded.delete(message.id)) unfolded.add(message.id);
+      sync();
+    });
+    sync();
+    bubble.append(fold);
+  }
   return node;
 }
 
@@ -437,11 +644,17 @@ function imagesNode(names) {
 }
 
 // Подвал (время, токены, «Копировать») виден у последнего ответа, у остальных — при наведении.
-function assistantNode(message, last = true) {
-  const node = el("article", "msg assistant");
+// Отметка «ход остановлен» — не ответ: копировать и считать в ней нечего.
+const STOPPED_TEXT = "_(ход остановлен)_";
+
+// stage — подпись итога этапа: «Этап 1 · Тест-кейсы».
+function assistantNode(message, last = true, stage = "") {
+  const node = el("article", `msg assistant${stage ? " stage" : ""}`);
+  if (stage) node.append(el("div", "stage-head", `✓ ${stage}`));
   const body = el("div", "text");
   renderMarkdown(body, message.content);
-  node.append(body, footNode(message, [], !last));
+  node.append(body);
+  if (message.content.trim() !== STOPPED_TEXT) node.append(footNode(message, [], !last));
   return node;
 }
 
@@ -523,19 +736,26 @@ function footNode(message, extra = [], quiet = false) {
 function stepNode(call, result, seconds) {
   const state = !result ? "pending" : result.is_error ? "failed" : "done";
   const node = el("details", `step ${state}`);
+  remembered(node, `call:${call.id}`);
   const args = parse(call.arguments);
   // Браузер: element — что за элемент, text — что ввели, target — ссылка на элемент из снимка.
-  const target = args.path || args.query || args.url || args.name || args.agent || (Array.isArray(args.names) ? args.names.join(", ") : "")
-    || [args.element, args.text && `«${args.text}»`].filter(Boolean).join(" ← ") || args.target || "";
+  const target = args.path || args.query || args.url || args.jql || args.key || args.name || args.agent
+    || (Array.isArray(args.names) ? args.names.join(", ") : "") || (Array.isArray(args.steps) ? args.steps.join(" · ") : "")
+    || [args.element, args.text && `«${args.text}»`].filter(Boolean).join(" ← ") || args.target || args.action || "";
   const summary = el("summary");
   const icon = el("span", "step-icon", STEP_ICON[state]);
   icon.title = { done: "Готово", failed: "Ошибка", pending: "Выполняется" }[state];
-  const label = el("span", "step-target", target ? String(target) : "—");
+  const label = el("span", "step-target", target ? String(target) : "");
   if (args.path) markPath(label, String(args.path));
-  const meta = state === "failed" ? "ошибка" : state === "pending" ? "…" : seconds != null ? duration(round(seconds)) : "";
-  summary.append(icon, el("span", "step-name", call.name), label, el("span", "step-meta", meta));
+  // План задачи: «План задачи · Тест-кейсы · Баг-репорты» и «Этап завершён · 1 — в чате».
+  const plan = call.name === "plan" && args.action === "done";
+  const name = el("span", "step-name", plan ? "Этап завершён" : describe(call.name)[0]);
+  if (plan) label.textContent = [args.step, args.note].filter(Boolean).join(" — ");
+  name.title = call.name;
+  const metaText = state === "failed" ? "ошибка" : state === "pending" ? "…" : seconds != null ? duration(round(seconds)) : "";
+  summary.append(icon, name, label, el("span", "step-meta", metaText));
   const body = el("pre");
-  body.textContent = `${JSON.stringify(args, null, 2)}\n\n→ ${result?.content ?? "—"}`;
+  body.textContent = `${call.name} ${JSON.stringify(args, null, 2)}\n\n→ ${result?.content ?? "—"}`;
   node.append(summary, body);
   return node;
 }

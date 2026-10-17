@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from local_agent.tools.base import ToolResult
+from local_agent.core.tool import ToolResult
 
 MAX_DOWNLOAD_BYTES = 3 * 1024 * 1024
 DEFAULT_MAX_CHARS = 12_000

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from local_agent.api.routes.projects import get_project_service
 from local_agent.projects.service import ProjectService
-from local_agent.tools.filesystem import _inside_workspace
+from local_agent.tools.files import _inside_workspace
 
 router = APIRouter(prefix="/projects/{project_id}/files", tags=["files"])
 

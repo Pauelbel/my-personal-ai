@@ -8,9 +8,9 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 
-from local_agent.agent.models import Agent
-from local_agent.capabilities.service import CapabilityService
-from local_agent.tools.base import ToolResult
+from local_agent.agents.models import Agent
+from local_agent.catalog.service import CapabilityService
+from local_agent.core.tool import ToolResult
 
 LESSONS_HEADER = "Уроки от пользователя (выполняй всегда):"
 MAX_RULE_CHARS = 300

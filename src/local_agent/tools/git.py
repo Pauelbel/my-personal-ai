@@ -6,8 +6,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from local_agent.tools.base import ToolResult
-from local_agent.tools.filesystem import _relative, _workspace_root
+from local_agent.core.tool import ToolResult
+from local_agent.tools.files import _relative, _workspace_root
 
 # ~6–8 тысяч токенов: больший дифф не поместится в окно небольшой локальной модели.
 MAX_OUTPUT_CHARS = 24 * 1024

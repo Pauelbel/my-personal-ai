@@ -6,24 +6,12 @@
 
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid4
 
 from local_agent.projects.models import Project
+from local_agent.projects.repository import ProjectRepository
 from local_agent.sessions.models import Session
 from local_agent.sessions.repository import SessionRepository
-from local_agent.storage.json.projects import JsonProjectRepository
-
-
-class InvalidWorkspaceError(ValueError):
-    """Рабочая папка сессии не существует или указана относительным путём."""
-
-
-def validate_workspace(workspace: str) -> str:
-    path = Path(workspace).expanduser()
-    if not path.is_absolute() or not path.is_dir():
-        raise InvalidWorkspaceError("Рабочая папка должна быть существующей папкой с абсолютным путём")
-    return str(path.resolve())
 
 
 class SessionService:
@@ -31,7 +19,7 @@ class SessionService:
         self,
         repository: SessionRepository,
         *,
-        projects: JsonProjectRepository | None = None,
+        projects: ProjectRepository | None = None,
         on_deleted: Iterable[Callable[[str], None]] = (),
     ) -> None:
         self._repository = repository

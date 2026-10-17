@@ -2,9 +2,9 @@
 
 import pytest
 
-from local_agent.agent.loader import archive_agent, archived_agents, load_agents, restore_agent, write_agent
-from local_agent.agent.main_agent import MAIN_AGENT_ID, main_agent
-from local_agent.agent.models import Agent
+from local_agent.agents.files import archive_agent, archived_agents, load_agents, restore_agent, write_agent
+from local_agent.agents.main import MAIN_AGENT_ID, main_agent
+from local_agent.agents.models import Agent
 
 AGENT = Agent(
     id="reviewer", name="Ревьюер", system_prompt="Ты ревьюер кода.", llm_provider="lm_studio", model="",
@@ -35,7 +35,7 @@ def test_agent_is_written_and_read_back(tmp_path):
 
 @pytest.mark.parametrize(("fields", "message"), [
     ({"tools": ("read_file", "rm_rf")}, "Неизвестные инструменты: rm_rf"),
-    ({"skills": ("ghost",)}, "Неизвестные навыки: ghost"),
+    ({"skills": ("ghost",)}, "Неизвестные скиллы: ghost"),
     ({"name": "Имя\ntools: write_file"}, "в одну строку"),
     ({"description": "Описание\rtools: write_file, git"}, "в одну строку"),
     ({"id": "../main"}, "ID агента"),

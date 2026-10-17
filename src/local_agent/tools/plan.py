@@ -1,41 +1,16 @@
-"""План задачи: агент записывает пункты и отмечает сделанные, а движок не даёт закончить ход с несделанными.
-
-Маленькая модель на длинной задаче забывает её части: исходное «что сдать» тонет в результатах инструментов.
-План хранится в сессии и подставляется в системный промпт перед каждым запросом, а ответ без вызова
-инструмента при несделанных пунктах не заканчивает ход: модель просят продолжить (см. agent_graph).
-"""
+"""Инструмент plan: агент записывает пункты задачи и отмечает сделанные (как это использует ядро — core/plan.py)."""
 
 from pathlib import Path
 
+from local_agent.core.plan import open_steps, plan_text, stage_messages, stage_result
+from local_agent.core.tool import CURRENT_TURN, ToolResult
+from local_agent.memory.conversation import ConversationService
 from local_agent.sessions.service import SessionService
-from local_agent.tools.base import ToolResult
 
 MAX_STEPS = 12
 MAX_STEP_CHARS = 200
-
-
-def plan_text(plan: list[dict]) -> str:
-    lines = []
-    for index, step in enumerate(plan, 1):
-        mark = "[x]" if step.get("done") else "[ ]"
-        note = f" — {step['note']}" if step.get("note") else ""
-        lines.append(f"{index}. {mark} {step['text']}{note}")
-    return "\n".join(lines)
-
-
-def open_steps(plan: list[dict]) -> list[tuple[int, str]]:
-    return [(index, step["text"]) for index, step in enumerate(plan, 1) if not step.get("done")]
-
-
-def plan_prompt(plan: list[dict]) -> str:
-    """Блок системного промпта: план перед глазами модели на каждом раунде."""
-    if not open_steps(plan):
-        return ""
-    return (
-        "План текущей задачи (после каждого пункта отмечай его через plan с action done; итог пиши, когда отмечены все). "
-        "Если пользователь дал новую задачу, а этот план уже не нужен, составь новый через plan с action set:\n"
-        + plan_text(plan)
-    )
+# Сколько последних сообщений сессии просматривать в поисках итога этапа.
+HISTORY_LOOKUP = 400
 
 
 class PlanTool:
@@ -60,14 +35,13 @@ class PlanTool:
         "additionalProperties": False,
     }
 
-    def __init__(self, sessions: SessionService, session_id: str) -> None:
+    def __init__(self, sessions: SessionService, session_id: str, conversation: ConversationService | None = None) -> None:
         self._sessions = sessions
         self._session_id = session_id
+        # По истории выбирается итог этапа, который чат покажет результатом (см. core/plan.py).
+        self._conversation = conversation
 
     async def execute(self, arguments: dict[str, object], workspace: Path | None) -> ToolResult:
-        # Импорт здесь: граф импортирует этот модуль, а номер хода берётся из графа.
-        from local_agent.graph.agent_graph import CURRENT_TURN
-
         session = self._sessions.get(self._session_id)
         if session is None:
             return ToolResult("Сессия не найдена", is_error=True)
@@ -97,5 +71,13 @@ class PlanTool:
             remaining = open_steps(plan)
             tail = (f"Следующий — пункт {remaining[0][0]}: {remaining[0][1]}. Делай его сразу вызовом инструмента."
                     if remaining else "Все пункты сделаны: напиши пользователю итог — что сделано и где лежит.")
-            return ToolResult(f"{plan_text(plan)}\n{tail}")
+            return ToolResult(f"{plan_text(plan)}\n{tail}", meta=self._stage_meta(step, plan[step - 1]["text"]))
         return ToolResult("action — set или done", is_error=True)
+
+    def _stage_meta(self, step: int, title: str) -> dict:
+        """Какой текст чат покажет итогом этапа: решается здесь один раз и сохраняется с результатом вызова."""
+        meta = {"stage": step, "title": title, "result": None}
+        if self._conversation is not None:
+            result = stage_result(stage_messages(self._conversation.recent(self._session_id, HISTORY_LOOKUP)))
+            meta["result"] = result.id if result else None
+        return meta

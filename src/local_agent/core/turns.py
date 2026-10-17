@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from uuid import uuid4
 
-from local_agent.agent.errors import AgentRuntimeError, SessionBusyError
+from local_agent.core.errors import AgentRuntimeError, SessionBusyError
 from local_agent.llm.base import LLMProviderError
 
 logger = logging.getLogger(__name__)
@@ -123,7 +123,10 @@ class TurnHub:
         except (AgentRuntimeError, LLMProviderError) as exc:
             turn.push({"type": "error", "message": str(exc), "user_message_saved": saved})
         except asyncio.CancelledError:
-            # «Стоп»: runtime уже сохранил то, что модель успела написать.
+            # «Стоп»: runtime уже сохранил то, что модель успела написать; если не успела — отметка в чате.
+            with contextlib.suppress(Exception):
+                await events.aclose()
+                await asyncio.to_thread(self._runtime.mark_stopped, turn.session_id)
             turn.push({"type": "stopped"})
         except Exception as exc:  # noqa: BLE001 — сбой хода должен дойти до вкладки, а не пропасть в логе
             logger.exception("Ход упал session_id=%s", turn.session_id)

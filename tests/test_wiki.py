@@ -266,7 +266,7 @@ def test_summary_put_into_description_is_kept_in_details(tmp_path):
 def test_tags_find_notes_and_variants_of_one_word_merge(tmp_path):
     import asyncio
 
-    from local_agent.wiki.tools import WikiLintTool, WikiMatchTool
+    from local_agent.tools.wiki import WikiLintTool, WikiMatchTool
 
     service = wiki(tmp_path)
     service.save_note(fields(tags=("тестирование", "методологии")))
