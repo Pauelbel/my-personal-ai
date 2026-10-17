@@ -10,7 +10,6 @@ from fastapi.staticfiles import StaticFiles
 
 from local_agent.api.events import EventBus
 from local_agent.api.middleware import LocalOriginMiddleware, RequestLoggingMiddleware
-from local_agent.api.routes.agents import router as agents_router
 from local_agent.api.routes.attachments import router as attachments_router
 from local_agent.api.routes.attention import router as attention_router
 from local_agent.api.routes.capabilities import router as capabilities_router
@@ -18,14 +17,13 @@ from local_agent.api.routes.events import router as events_router
 from local_agent.api.routes.files import router as files_router
 from local_agent.api.routes.folders import router as folders_router
 from local_agent.api.routes.health import router as health_router
+from local_agent.api.routes.instructions import router as instructions_router
 from local_agent.api.routes.memory import router as memory_router
 from local_agent.api.routes.messages import router as messages_router
 from local_agent.api.routes.models import router as models_router
 from local_agent.api.routes.projects import router as projects_router
 from local_agent.api.routes.providers import router as providers_router
 from local_agent.api.routes.sessions import router as sessions_router
-from local_agent.api.routes.team import links_router
-from local_agent.api.routes.team import router as team_router
 from local_agent.api.routes.turns import router as turns_router
 from local_agent.api.routes.wiki import router as wiki_router
 from local_agent.assembly import assemble
@@ -65,8 +63,8 @@ def create_app(
     app.add_middleware(RequestLoggingMiddleware)
     for router in (
         health_router, sessions_router, projects_router, folders_router, files_router, messages_router, attachments_router,
-        memory_router, models_router, turns_router, capabilities_router, attention_router, wiki_router, team_router,
-        events_router, links_router, agents_router, providers_router,
+        memory_router, models_router, turns_router, capabilities_router, attention_router, wiki_router,
+        events_router, instructions_router, providers_router,
     ):
         app.include_router(router, prefix="/api")
 

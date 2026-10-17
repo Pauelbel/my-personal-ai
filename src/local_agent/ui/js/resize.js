@@ -4,6 +4,9 @@
 import { forget, recall, remember } from "./util.js";
 
 const STEP = 16;
+// Что на время перетаскивания держит прежнюю ширину: перенос строк в больших таблицах файла на каждом кадре
+// делал перетаскивание рывками; текст перекладывается один раз, когда разделитель отпустили.
+const FROZEN = ".files-markdown";
 // Колонке справа всегда оставляем место, чтобы её нельзя было сжать в ноль.
 const KEEP_RIGHT = 240;
 
@@ -32,10 +35,13 @@ export function makeResizable(handle, { grid, variables, pick: variable = () => 
     const width = column()?.getBoundingClientRect().width ?? min;
     handle.setPointerCapture(event.pointerId);
     document.body.classList.add("resizing");
+    const frozen = [...grid.querySelectorAll(FROZEN)];
+    for (const node of frozen) Object.assign(node.style, { width: `${node.getBoundingClientRect().width}px`, flex: "none" });
     const move = (moved) => apply(clamp(width + moved.clientX - start));
     const end = () => {
       handle.removeEventListener("pointermove", move);
       document.body.classList.remove("resizing");
+      for (const node of frozen) Object.assign(node.style, { width: "", flex: "" });
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", end, { once: true });

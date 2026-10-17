@@ -1,14 +1,9 @@
-"""Markdown-файл с блоком параметров: «---», строки «ключ: значение», «---», затем текст.
-
-Так записаны агенты (data/agents) и скиллы (data/skills); архив — подпапка .deleted с файлами <id>.<uuid>.md.
-"""
+"""Markdown-файл с блоком параметров: «---», строки «ключ: значение», «---», затем текст. Так записан SKILL.md."""
 
 import re
 from pathlib import Path
-from uuid import uuid4
 
 ITEM_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-ARCHIVED_ID = re.compile(r"(?P<id>[a-z0-9][a-z0-9_-]*)\.[0-9a-f]{32}\.md")
 
 
 def split(path: Path) -> tuple[str, str]:
@@ -32,16 +27,3 @@ def fields(path: Path, header: str, known: set[str]) -> dict[str, str]:
             raise ValueError(f"{path}: неизвестный параметр «{line.strip()}»")
         values[key] = value.strip()
     return values
-
-
-def items(value: str) -> list[str]:
-    """Список через запятую: «read_file, git» → ["read_file", "git"]."""
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def archive(root: Path, item_id: str) -> None:
-    """Убирает <id>.md в .deleted под уникальным именем: вернуть можно, переложив файл обратно."""
-    path = root / f"{item_id}.md"
-    folder = root / ".deleted"
-    folder.mkdir(exist_ok=True)
-    path.rename(folder / f"{item_id}.{uuid4().hex}.md")

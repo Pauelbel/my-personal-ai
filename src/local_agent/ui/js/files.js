@@ -26,6 +26,12 @@ export function initFiles(showError) {
   toast = showError;
   acceptDrops($("#files-tree"), "");
   $("#files-edit").addEventListener("click", () => setEditing(!view.editing));
+  // Из шапки копируется сам путь: при выделении крошек браузер вставил бы перенос строки между папкой и именем.
+  $("#files-path").addEventListener("copy", (event) => {
+    if (!view.path) return;
+    event.preventDefault();
+    event.clipboardData.setData("text/plain", view.path);
+  });
   $("#files-save").addEventListener("click", () => void saveFile());
   $("#files-source").addEventListener("click", () => {
     view.source = !view.source;
@@ -299,7 +305,10 @@ function showPath() {
   if (!view.path) return target.replaceChildren();
   const parts = view.path.split("/");
   const name = el("strong", "", parts.pop());
-  target.replaceChildren(...(parts.length ? [el("span", "files-dir", `${parts.join(" / ")} /`)] : []), name);
+  // Отступы вокруг «/» — стилем, а не пробелами: выделенный и скопированный путь остаётся настоящим путём.
+  const dir = el("span", "files-dir");
+  for (const part of parts) dir.append(part, el("span", "files-sep", "/"));
+  target.replaceChildren(...(parts.length ? [dir] : []), name);
 }
 
 function renderBody() {
@@ -427,19 +436,39 @@ function markdownView(text) {
   const doc = el("article", "reader files-markdown");
   renderMarkdown(doc, text);
   wrap.append(gutter, doc);
+  // Номера ставятся по замерам блоков. Замеры дорогие (в таблице кейсов — каждая строка), поэтому пересчёт —
+  // когда ширина перестала меняться (пока тянут границу панели, номера ждут), сначала все замеры, затем запись;
+  // номера переиспользуются, стиль строки берётся по тегу.
+  let timer = 0;
   const place = () => {
+    const blocks = [...doc.querySelectorAll("[data-line]")];
+    const targets = blocks.map((block) => (block.tagName === "TR" ? block.cells[0] ?? block : block));
     const origin = wrap.getBoundingClientRect().top;
-    gutter.replaceChildren(...[...doc.querySelectorAll("[data-line]")].map((block) => {
-      // У строки таблицы и пункта списка число встаёт напротив первой строки текста.
-      const target = block.tagName === "TR" ? block.cells[0] ?? block : block;
-      const style = getComputedStyle(target);
-      const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.5;
-      const number = el("span", "", block.dataset.line);
-      number.style.top = `${target.getBoundingClientRect().top - origin + Number.parseFloat(style.paddingTop) + (lineHeight - 20) / 2}px`;
-      return number;
-    }));
+    const tops = targets.map((target) => target.getBoundingClientRect().top - origin);
+    const styles = new Map();
+    const offset = (target) => {
+      if (!styles.has(target.tagName)) {
+        const style = getComputedStyle(target);
+        const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.5;
+        styles.set(target.tagName, Number.parseFloat(style.paddingTop) + (lineHeight - 20) / 2);
+      }
+      return styles.get(target.tagName);
+    };
+    const numbers = [...gutter.children];
+    blocks.forEach((block, index) => {
+      const number = numbers[index] ?? gutter.appendChild(el("span"));
+      number.textContent = block.dataset.line;
+      number.style.top = `${tops[index] + offset(targets[index])}px`;
+    });
+    for (const extra of numbers.slice(blocks.length)) extra.remove();
   };
-  new ResizeObserver(place).observe(doc);
+  const schedule = () => {
+    clearTimeout(timer);
+    // Первый раз — сразу: файл только что открыт, номера нужны без задержки.
+    if (!gutter.childElementCount) place();
+    else timer = setTimeout(place, 120);
+  };
+  new ResizeObserver(schedule).observe(doc);
   return wrap;
 }
 

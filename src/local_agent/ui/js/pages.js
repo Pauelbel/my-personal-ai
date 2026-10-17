@@ -1,16 +1,16 @@
 // Страницы вне чата: вики, возможности агента, долговременная память.
 // Списки — деревья в стиле терминала (tree.js), возможности разложены по вкладкам.
-import { openAgentForm, openMainForm } from "./agents.js";
 import { api } from "./api.js";
 import { el, renderMarkdown } from "./chat.js";
 import { createGraph } from "./graph.js";
+import { stepList } from "./steps.js";
 import { guide, rowAction, stem, treeRow } from "./tree.js";
 import { recall, remember } from "./util.js";
 
 const $ = (selector) => document.querySelector(selector);
-const ORIGIN = { connector: "Коннекторы — доступ к рабочим системам", builtin: "Встроенные", agent: "Созданы агентом", extra: "Дополнения" };
-const KIND = { tool: "инструмент", skill: "скилл", agent: "агент" };
-const ARCHIVE_GROUP = { tool: "Инструменты", skill: "Скиллы", agent: "Агенты" };
+// Три группы инструментов; третья — серверы MCP — рисуется отдельно, с переключателями.
+const ORIGIN = { builtin: "Встроенные", connector: "Коннекторы — скрипты: рабочие системы и свои инструменты" };
+const KIND = { tool: "инструмент", skill: "скилл" };
 
 // Строки детей одной группы: ветки «├─», у последней — «└─».
 function branch(items, lines, build) {
@@ -303,9 +303,29 @@ function wikiPath(from, href) {
 
 // ---------- возможности ----------
 
-const CAP_TABS = [["tools", "Инструменты"], ["skills", "Скиллы"], ["agents", "Агенты"], ["mcp", "MCP"], ["python", "Пакеты"], ["library", "Готовые"], ["archive", "Архив"]];
-let capTab = recall("capabilities-tab") ?? "tools";
+// Два вида возможностей — по вкладке на вид. В каждой: что это и чем отличается от соседнего, ваши, заготовки Мипо
+// (идут вместе с приложением, включаются кнопкой) и архив этого вида.
+const CAP_KINDS = {
+  skills: {
+    kind: "skill", icon: "≡", label: "Скиллы", short: "как делать работу", folder: "data/skills", add: "＋ Новый скилл",
+    about: "Скилл — папка: SKILL.md с инструкцией для задач одного типа, а если работа идёт по шагам — ещё steps.md "
+      + "и scripts/. Шаги идут сами, по порядку, модель каждый раз делает только свой шаг. Агент выбирает скилл сам, "
+      + "а для шагов показывает карточку с данными — вы нажимаете «Запустить». Новый скилл агент может предложить сам.",
+    empty: "Скиллов пока нет. Включите заготовку ниже, создайте скилл или попросите агента: «сделай скилл для …».",
+  },
+  tools: {
+    kind: "tool", icon: "⚙\uFE0E", label: "Инструменты", short: "руки агента", folder: "data/tools",
+    about: "Что агент умеет делать руками: читать и писать файлы, открывать сайты, ходить в Jira. Встроенные идут "
+      + "с Мипо, коннекторы — скрипты на Python: подключение к рабочим системам и инструменты, которые агент написал "
+      + "сам; серверы MCP — внешние программы, их можно выключить. Всё, что меняет файлы или систему, — с вашим "
+      + "подтверждением.",
+    empty: "",
+  },
+};
+let capTab = recall("capabilities-tab");
+capTab = CAP_KINDS[capTab] ? capTab : "skills";
 let capData = null;
+let capPoll = null;
 
 export async function showCapabilities(toast) {
   try {
@@ -313,22 +333,29 @@ export async function showCapabilities(toast) {
     renderCapabilities(toast);
   } catch (error) {
     toast(error);
+    return;
+  }
+  // Сервер MCP запускается — состояние перечитывается раз в секунду, пока он не заработает или не упадёт.
+  clearTimeout(capPoll);
+  if (capData.mcp.servers.some((server) => server.status === "запускается")) {
+    capPoll = setTimeout(() => {
+      if (!$("#view-capabilities").hidden) void showCapabilities(toast);
+    }, 1000);
   }
 }
 
 function renderCapabilities(toast) {
   const data = capData;
   const reload = () => showCapabilities(toast);
-  const counts = {
-    tools: data.tools.filter((tool) => tool.origin !== "mcp").length, skills: data.skills.length,
-    agents: data.agents.length + 1, mcp: data.mcp.length, python: data.python.packages.length,
-    library: data.library.length, archive: data.archive.length,
-  };
-  $("#cap-tabs").replaceChildren(...CAP_TABS.map(([id, label]) => {
-    const tab = el("button", "", label);
+  const counts = { skills: data.skills.length, tools: data.tools.filter((tool) => tool.origin !== "mcp").length };
+  $("#cap-tabs").replaceChildren(...Object.entries(CAP_KINDS).map(([id, info]) => {
+    const tab = el("button", "kind-tab");
     tab.type = "button";
     tab.setAttribute("aria-pressed", String(id === capTab));
-    tab.append(el("span", "count", String(counts[id])));
+    const head = el("span", "kind-tab-head");
+    head.append(el("span", `kind-tab-icon kind-${info.kind}`, info.icon), el("span", "kind-tab-label", info.label),
+      el("span", "count", String(counts[id])));
+    tab.append(head, el("span", "kind-tab-short", info.short));
     tab.addEventListener("click", () => {
       capTab = id;
       remember("capabilities-tab", id);
@@ -336,79 +363,204 @@ function renderCapabilities(toast) {
     });
     return tab;
   }));
-  const views = {
-    tools: () => groups(Object.entries(ORIGIN).map(([origin, title]) => [title, data.tools.filter((tool) => tool.origin === origin)]),
-      (tool, lines, last) => capRow(tool.id, tool.description, [
-        tool.origin === "connector" ? (tool.configured ? "настроен" : "нужно настроить")
+  const info = CAP_KINDS[capTab];
+  const own = {
+    skills: () => grid(data.skills.map((skill) => skillCard(skill, reload, toast)), info.empty),
+    tools: () => toolRows(data, reload, toast),
+  }[capTab];
+  $("#capabilities").replaceChildren(
+    intro(info, data, reload, toast),
+    ...own(),
+    ...librarySection(info, data, reload, toast),
+    ...archiveSection(data, reload, toast),
+  );
+}
+
+// Шапка вида: что это — двумя-тремя фразами, где лежат файлы, и «＋ Новый».
+function intro(info, data, reload, toast) {
+  const box = el("div", "cap-intro");
+  const text = el("div", "cap-intro-text");
+  text.append(el("p", "", info.about));
+  const folder = el("p", "cap-intro-folder");
+  folder.append("Файлы — ", el("code", "", info.folder), ": их можно править и руками, затем «↻ Перечитать с диска».");
+  text.append(folder);
+  box.append(el("span", `cap-intro-icon kind-${info.kind}`, info.icon), text);
+  if (info.add) {
+    const add = el("button", "primary", info.add);
+    add.type = "button";
+    add.addEventListener("click", () => openNew(info.kind, data.templates?.[info.kind] ?? "", reload, toast));
+    box.append(add);
+  }
+  return box;
+}
+
+function grid(cards, empty) {
+  if (!cards.length) return [el("p", "hint cap-empty", empty)];
+  const box = el("div", "cap-grid");
+  box.append(...cards);
+  return [box];
+}
+
+function sectionHead(title, note = "") {
+  const head = el("div", "cap-section");
+  head.append(el("h3", "", title));
+  if (note) head.append(el("p", "hint", note));
+  return head;
+}
+
+// Карточка возможности: заголовок с id, описание, метки и действия внизу.
+function capCard({ title, id = "", description = "", className = "", body = [], actions = [] }) {
+  const card = el("article", `cap-card ${className}`.trim());
+  const head = el("header", "cap-card-head");
+  head.append(el("h4", "", title));
+  if (id && id !== title) head.append(el("code", "cap-card-id", id));
+  card.append(head);
+  if (description) card.append(el("p", "cap-card-about", description));
+  card.append(...body.filter(Boolean));
+  const row = el("div", "cap-card-actions");
+  row.append(...actions.filter(Boolean));
+  if (row.childElementCount) card.append(row);
+  return card;
+}
+
+function action(label, handler, className = "") {
+  const button = el("button", `small ${className}`.trim(), label);
+  button.type = "button";
+  button.addEventListener("click", handler);
+  return button;
+}
+
+// Карточка скилла: описание и файлы папки, а если есть шаги — что они делают, что им нужно и сами шаги.
+function skillCard(skill, reload, toast, { ready = false } = {}) {
+  const plan = skill.steps;
+  const body = [filesNote(skill.files ?? [])];
+  if (plan) {
+    if (plan.about) body.push(el("p", "cap-card-note", plan.about));
+    if (plan.inputs.length) {
+      const needs = el("div", "cap-needs");
+      needs.append(el("span", "cap-needs-label", "нужно"));
+      for (const input of plan.inputs) {
+        const chip = el("span", `cap-need${input.optional ? " optional" : ""}`, input.name);
+        chip.title = input.hint + (input.optional ? " (необязательно)" : "");
+        needs.append(chip);
+      }
+      body.push(needs);
+    }
+    body.push(stepList(plan));
+    if (skill.problems?.length) {
+      const list = el("ul", "steps-problems");
+      for (const problem of skill.problems) list.append(el("li", "", problem));
+      body.push(list);
+    }
+  }
+  const actions = ready
+    ? [action("＋ Включить", () => enable("skill", skill.id, reload, toast), "primary")]
+    : [
+      plan && action("▶ Запустить по шагам",
+        () => document.dispatchEvent(new CustomEvent("meepo:run-skill", { detail: { id: skill.id } })), "primary"),
+      action("✎ Править", () => showSource("skill", skill.id, reload, toast)),
+      action("В архив", () => archive("skill", skill.id, reload, toast), "danger"),
+    ];
+  return capCard({
+    title: skill.name ?? skill.id, id: skill.id, description: skill.description, body, actions,
+    className: `${plan ? "steps-card" : ""}${ready ? " ready" : ""}`.trim(),
+  });
+}
+
+// Из чего состоит папка скилла: SKILL.md, steps.md, scripts/… — одной строкой.
+function filesNote(files) {
+  const box = el("div", "cap-needs");
+  box.append(el("span", "cap-needs-label", "файлы"));
+  for (const file of files) box.append(el("span", "cap-need optional", file));
+  return box;
+}
+
+// Инструменты — списком: их много, и у каждого одна строка. Встроенные и коннекторы — группами, серверы MCP —
+// с переключателями, пакеты Python — разделом здесь же.
+function toolRows(data, reload, toast) {
+  const rows = groups(Object.entries(ORIGIN).map(([origin, title]) => [title, data.tools.filter((tool) => tool.origin === origin)]),
+    (tool, lines, last) => capRow(tool.id, tool.description, [
+      tool.missing?.length ? "нужны пакеты"
+        : tool.fields?.length ? (tool.configured ? "настроен" : "нужно настроить")
           : tool.requires_approval ? "с подтверждением" : "без подтверждения",
-      ], [
-        tool.origin === "connector" && link("настроить", () => openConnector(tool, reload, toast)),
-        ["agent", "connector"].includes(tool.origin) && link("код", () => showSource("tool", tool.id, reload, toast)),
-        ["agent", "connector", "extra"].includes(tool.origin) && link("в архив", () => archive("tool", tool.id, reload, toast)),
-      ], lines, last)),
-    skills: () => groups([["data/skills", data.skills]], (skill, lines, last) => capRow(skill.id, skill.description, [], [
-      link("текст", () => showSource("skill", skill.id, reload, toast)),
-      link("в архив", () => archive("skill", skill.id, reload, toast)),
-    ], lines, last), "Скиллов пока нет — агент предложит их, когда задачи начнут повторяться."),
-    // Основной агент — первым и отдельно: его промпт встроен, смотреть можно, править — только свои правила.
-    agents: () => [
-      ...groups([["Основной агент · встроен", [{ id: "main", name: "Основной агент" }]]], (agent, lines, last) => {
-        const row = capRow(agent.name, "Общается с вами, распределяет задачи между агентами, помнит вас и наращивает возможности",
-          ["руководитель"], [
-            link("промпт", () => showSource("agent", "main", reload, toast)),
-            link("правила", () => editAgent("main", reload, toast)),
-          ], lines, last);
-        row.classList.add("main-agent");
-        return row;
-      }),
-      ...groups([["data/agents", data.agents]], (agent, lines, last) => capRow(agent.name, agent.description, [
-      agent.tools.length ? agent.tools.join(", ") : "без инструментов",
     ], [
-      link("править", () => editAgent(agent.id, reload, toast)),
-      link("промпт", () => showSource("agent", agent.id, reload, toast)),
-      link("в архив", () => archive("agent", agent.id, reload, toast)),
-    ], lines, last), "Других агентов пока нет — основной предложит их для повторяющихся направлений."),
-    ],
-    mcp: () => mcpRows(data),
-    python: () => groups([[data.python.path ?? "песочница", data.python.packages]], (item, lines, last) => capRow(
-      `${item.name} ${item.version}`, "", [item.tools.length ? `нужен: ${item.tools.join(", ")}` : "не используется"], [
-        link("удалить", () => uninstall(item, reload, toast)),
-      ], lines, last),
-    "Пакетов нет: скрипты агента видят только стандартную библиотеку Python. Агент попросит установить нужное — с вашего согласия."),
-    // Готовые заготовки из кода: скиллы, коннекторы, дополнения. «Включить» — и они в работе, дальше их можно править.
-    library: () => groups(Object.entries(ARCHIVE_GROUP).map(([kind, title]) => [title, data.library.filter((item) => item.kind === kind)]),
-      (item, lines, last) => capRow(item.id, item.description, [], [
-        link("включить", async () => {
-          try {
-            await api.enable(item.kind, item.id);
-            await reload();
-          } catch (error) {
-            toast(error);
-          }
-        }),
-      ], lines, last), "Все готовые заготовки уже включены."),
-    archive: () => groups(Object.entries(ARCHIVE_GROUP).map(([kind, title]) => [title, data.archive.filter((item) => item.kind === kind)]),
-      (item, lines, last) => capRow(item.id, item.name === item.id ? "" : item.name, [], [
-        link("вернуть", async () => {
-          try {
-            await api.restore(item.kind, item.archive_id);
-            await reload();
-          } catch (error) {
-            toast(error);
-          }
-        }),
-        link("удалить", async () => {
-          if (!window.confirm(`Удалить ${KIND[item.kind]} ${item.id} из архива навсегда? Вернуть его будет нельзя.`)) return;
-          try {
-            await api.purge(item.kind, item.archive_id);
-            await reload();
-          } catch (error) {
-            toast(error);
-          }
-        }),
-      ], lines, last), "Архив пуст."),
-  };
-  $("#capabilities").replaceChildren(...(views[capTab] ?? views.tools)());
+      tool.missing?.length && installLink(tool, reload, toast),
+      tool.fields?.length && link("настроить", () => openConnector(tool, reload, toast)),
+      tool.origin === "connector" && link("файлы", () => showSource("tool", tool.id, reload, toast)),
+      tool.origin === "connector" && link("в архив", () => archive("tool", tool.id, reload, toast)),
+    ], lines, last));
+  const list = el("div", "tree-list");
+  list.append(...rows);
+  const mcp = el("div", "tree-list");
+  mcp.append(...mcpRows(data, reload, toast));
+  const python = el("div", "tree-list");
+  python.append(...groups([[data.python.path ?? "песочница", data.python.packages]], (item, lines, last) => capRow(
+    `${item.name} ${item.version}`, "", [item.tools.length ? `нужен: ${item.tools.join(", ")}` : "не используется"], [
+      link("удалить", () => uninstall(item, reload, toast)),
+    ], lines, last),
+  "Пакетов нет: скрипты видят только стандартную библиотеку Python. Агент попросит установить нужное — с вашего согласия."));
+  return [
+    list,
+    sectionHead("Серверы MCP", "Браузер и поиск в интернете — внешние программы. Выключенный сервер не запускается, "
+      + "а выключенного инструмента нет ни у агента, ни у шагов скиллов. Переключатели сохраняются в data/mcp.json."),
+    mcp,
+    sectionHead("Пакеты Python", "Окружение песочницы: в нём работают скрипты коннекторов и скиллов."),
+    python,
+  ];
+}
+
+// Заготовки этого вида, которые ещё не включены. Когда всё включено, раздела нет совсем.
+function librarySection(info, data, reload, toast) {
+  const items = data.library.filter((item) => item.kind === info.kind);
+  if (!items.length) return [];
+  const note = "Идут вместе с Мипо. «Включить» кладёт копию в " + info.folder + " — дальше это ваша возможность: её можно править и убрать в архив.";
+  if (info.kind === "skill") {
+    return [sectionHead("Заготовки Мипо", note), ...grid(items.map((item) => skillCard(item, reload, toast, { ready: true })), "")];
+  }
+  const list = el("div", "tree-list");
+  list.append(...branch(items, [], (item, lines, last) => capRow(item.id, item.description, [], [
+    link("включить", () => enable(item.kind, item.id, reload, toast)),
+  ], lines, last)));
+  return [sectionHead("Заготовки Мипо", note), list];
+}
+
+// Архив — один на обе вкладки, свёрнут: скиллы и инструменты вместе; вернуть или удалить навсегда.
+function archiveSection(data, reload, toast) {
+  const items = data.archive;
+  if (!items.length) return [];
+  const box = el("details", "cap-archive");
+  box.append(el("summary", "", `Архив · ${items.length}`));
+  const list = el("div", "tree-list");
+  list.append(...branch(items, [], (item, lines, last) => capRow(item.id, item.name === item.id ? "" : item.name, [KIND[item.kind]], [
+    link("вернуть", async () => {
+      try {
+        await api.restore(item.kind, item.archive_id);
+        await reload();
+      } catch (error) {
+        toast(error);
+      }
+    }),
+    link("удалить", async () => {
+      if (!window.confirm(`Удалить ${KIND[item.kind]} ${item.id} из архива навсегда? Вернуть его будет нельзя.`)) return;
+      try {
+        await api.purge(item.kind, item.archive_id);
+        await reload();
+      } catch (error) {
+        toast(error);
+      }
+    }),
+  ], lines, last)));
+  box.append(list);
+  return [box];
+}
+
+async function enable(kind, id, reload, toast) {
+  try {
+    await api.enable(kind, id);
+    await reload();
+  } catch (error) {
+    toast(error);
+  }
 }
 
 // Непустые группы: заголовок «◆ группа», под ним ветки.
@@ -421,19 +573,49 @@ function groups(list, build, empty = "Пусто.") {
   ]);
 }
 
-function mcpRows(data) {
-  if (!data.mcp.length) return [el("p", "hint", "MCP выключен (MCP_ENABLED=false) или серверов нет в data/mcp.json.")];
-  const described = new Map(data.tools.map((tool) => [tool.id, tool.description]));
-  return data.mcp.flatMap((server) => {
-    const head = treeRow({ label: server.name, group: true, note: server.status, title: server.description });
-    head.classList.toggle("failed", server.status !== "работает");
-    const tools = server.tools ?? [];
-    return [
-      head,
-      ...(tools.length ? branch(tools, [], (id, lines, last) => capRow(id, described.get(id) ?? "", [], [], lines, last))
-        : [treeRow({ prefix: guide([], true), label: server.description })]),
-    ];
+// Серверы MCP: переключатель у сервера и у каждого инструмента работающего сервера.
+function mcpRows(data, reload, toast) {
+  if (!data.mcp.started) return [el("p", "hint", "MCP выключен в .env (MCP_ENABLED=false): серверы не запускаются.")];
+  if (!data.mcp.servers.length) return [el("p", "hint", "Серверов нет в data/mcp.json.")];
+  return data.mcp.servers.flatMap((server) => {
+    const head = treeRow({
+      label: server.name, group: true, note: server.status, title: server.description,
+      extra: [toggle(server.enabled, `Сервер ${server.name}`, (on) => api.switchServer(server.name, on), reload, toast)],
+    });
+    head.classList.toggle("failed", server.enabled && !["работает", "запускается"].includes(server.status));
+    head.classList.toggle("off", !server.enabled);
+    if (!server.tools.length) {
+      return [head, treeRow({ prefix: guide([], true), label: server.enabled ? server.description : "выключен: его инструментов нет у агента" })];
+    }
+    return [head, ...branch(server.tools, [], (tool, lines, last) => {
+      const row = capRow(tool.id, tool.description, [], [
+        toggle(tool.enabled, tool.id, (on) => api.switchTool(server.name, tool.id, on), reload, toast),
+      ], lines, last);
+      (row.matches(".trow") ? row : row.querySelector(".trow")).classList.toggle("off", !tool.enabled);
+      return row;
+    })];
   });
+}
+
+// Переключатель вкл/выкл в строке дерева: новое состояние сохраняется сразу.
+function toggle(on, label, change, reload, toast) {
+  const button = el("button", `switch${on ? " on" : ""}`);
+  button.type = "button";
+  button.setAttribute("role", "switch");
+  button.setAttribute("aria-checked", String(on));
+  button.setAttribute("aria-label", label);
+  button.title = on ? "Включён — выключить" : "Выключен — включить";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await change(!on);
+      await reload();
+    } catch (error) {
+      toast(error);
+      button.disabled = false;
+    }
+  });
+  return button;
 }
 
 function capRow(name, description, badges, actions, lines, last) {
@@ -461,7 +643,7 @@ export async function reloadCapabilities(toast) {
 }
 
 async function archive(kind, id, reload, toast) {
-  if (!window.confirm(`Убрать ${KIND[kind]} ${id} в архив? Файлы останутся, вернуть можно во вкладке «Архив».`)) return;
+  if (!window.confirm(`Убрать ${KIND[kind]} ${id} в архив? Файлы останутся, вернуть можно в разделе «Архив» внизу вкладки.`)) return;
   try {
     await api.archive(kind, id);
     await reload();
@@ -608,6 +790,24 @@ function openConnector(tool, reload, toast) {
   dialog.showModal();
 }
 
+// Коннектору не хватает пакетов (requires в tool.md): ставит их пользователь — нажатие и есть согласие.
+function installLink(tool, reload, toast) {
+  const button = link("установить пакеты", async () => {
+    button.disabled = true;
+    button.textContent = "ставлю…";
+    try {
+      await api.installPackages(tool.missing);
+      await reload();
+    } catch (error) {
+      toast(error);
+      button.disabled = false;
+      button.textContent = "установить пакеты";
+    }
+  });
+  button.title = `Поставить в песочницу: ${tool.missing.join(", ")}`;
+  return button;
+}
+
 async function uninstall(item, reload, toast) {
   const users = item.tools.length ? ` Он нужен инструментам: ${item.tools.join(", ")} — они перестанут работать.` : "";
   if (!window.confirm(`Удалить пакет ${item.name} из песочницы?${users}`)) return;
@@ -619,75 +819,197 @@ async function uninstall(item, reload, toast) {
   }
 }
 
-// Форме нужен агент целиком (промпт и скиллы), а в обзоре возможностей — только строка списка.
-async function editAgent(id, reload, toast) {
-  try {
-    const agent = (await api.agents()).find((item) => item.id === id);
-    if (agent?.builtin) openMainForm(agent, reload);
-    else if (agent) await openAgentForm(agent, reload);
-  } catch (error) {
-    toast(error);
-  }
-}
+// ---------- окно папки ----------
 
-// Поле — во весь текст вместе с рамкой: иначе оно на пару пикселей ниже текста и прокручивается внутри себя.
-function fitEditor(editor) {
-  // Сброс высоты на миг укорачивает список файлов — прокрутку списка возвращаем, чтобы он не прыгал при наборе.
-  const list = $("#source-files");
-  const scrolled = list.scrollTop;
-  editor.style.height = "auto";
-  editor.style.height = `${editor.scrollHeight + editor.offsetHeight - editor.clientHeight}px`;
-  editor.scrollTop = 0;
-  list.scrollTop = scrolled;
-}
+// Возможность открывается папкой: слева дерево файлов, справа — открытый файл. У скилла файлы можно добавить
+// (steps.md из шаблона, скрипт) и удалить, у коннектора — только править. «Сохранить» отправляет все правки разом:
+// сервер проверяет папку копией и записывает её, только если она рабочая.
+let folder = null;
+const SCRIPT_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.py$/;
+const SCRIPT_TEMPLATE = `"""Что делает скрипт. Аргументы — JSON в stdin, итог — в stdout, ход работы — строками в stderr."""
 
-// Файлы возможности — прямо в окне: строки переносятся, окно не выходит за экран, «Сохранить» проверяет файл
-// и записывает его, только если он рабочий.
+import json
+import sys
+
+args = json.load(sys.stdin)
+print(args)
+`;
+
 async function showSource(kind, id, reload, toast) {
   try {
     const source = await api.capabilitySource(kind, id);
-    $("#source-title").textContent = `${KIND[kind]} ${id}`;
-    $("#source-path").textContent = source.path;
-    const editors = Object.entries(source.files).map(([name, text]) => {
-      const editor = el("textarea", "source-editor");
-      Object.assign(editor, { value: text, spellcheck: false });
-      editor.setAttribute("aria-label", name);
-      editor.dataset.name = name;
-      editor.dataset.original = text;
-      editor.readOnly = Boolean(source.readonly);
-      editor.addEventListener("input", () => {
-        fitEditor(editor);
-        sync();
-      });
-      return editor;
-    });
-    const save = $("#source-save");
-    const sync = () => { save.disabled = !editors.some((editor) => editor.value !== editor.dataset.original); };
-    $("#source-files").replaceChildren(...editors.flatMap((editor) => [el("h4", "", editor.dataset.name), editor]));
-    $("#source-status").textContent = source.readonly ? "Только просмотр" : "";
-    save.hidden = Boolean(source.readonly);
-    sync();
-    save.onclick = async () => {
-      const files = Object.fromEntries(editors.filter((editor) => editor.value !== editor.dataset.original)
-        .map((editor) => [editor.dataset.name, editor.value]));
-      save.disabled = true;
-      try {
-        await api.saveSource(kind, id, files);
-        for (const editor of editors) editor.dataset.original = editor.value;
-        $("#source-status").textContent = "Сохранено";
-        await reload();
-      } catch (error) {
-        $("#source-status").textContent = error.message;
-      }
-      sync();
-    };
-    $("#source-dialog").showModal();
-    for (const editor of editors) fitEditor(editor);
+    openFolder({ kind, id, path: source.path, files: source.files, reload });
   } catch (error) {
     toast(error);
   }
 }
 
+function openFolder({ kind, id, path, files, reload, create = false }) {
+  folder = {
+    kind, id, reload, create, deleted: new Set(), current: Object.keys(files)[0],
+    files: new Map(Object.entries(files).map(([name, text]) => [name, { text, original: create ? null : text }])),
+  };
+  $("#source-title").textContent = create ? "Новый скилл" : `${KIND[kind][0].toUpperCase()}${KIND[kind].slice(1)} ${id}`;
+  $("#source-path").textContent = path;
+  $("#source-id-label").hidden = !create;
+  $("#source-id").value = "";
+  $("#source-status").textContent = "";
+  renderFolder();
+  $("#source-dialog").showModal();
+  if (create) $("#source-id").focus();
+}
+
+// Правки окна: изменённые и новые файлы — текстом, удалённые — null.
+function changes() {
+  const result = {};
+  for (const [name, file] of folder.files) if (file.text !== file.original) result[name] = file.text;
+  for (const name of folder.deleted) result[name] = null;
+  return result;
+}
+
+function fileState(name) {
+  const file = folder.files.get(name);
+  return file.original === null ? "новый" : file.text !== file.original ? "изменён" : "";
+}
+
+// SKILL.md первым, затем steps.md, затем папка scripts.
+function fileOrder(a, b) {
+  const rank = (name) => (name === "SKILL.md" ? 0 : name === "steps.md" ? 1 : name.includes("/") ? 3 : 2);
+  return rank(a) - rank(b) || a.localeCompare(b);
+}
+
+function renderFolder() {
+  // У скилла — SKILL.md, steps.md, scripts/…; у коннектора — в порядке, как их отдал сервер.
+  const names = folder.kind === "skill" ? [...folder.files.keys()].sort(fileOrder) : [...folder.files.keys()];
+  const row = (name, label, prefix = "") => treeRow({
+    prefix, label, note: fileState(name), current: name === folder.current, onClick: () => {
+      folder.current = name;
+      renderFolder();
+    },
+  });
+  const top = names.filter((name) => !name.includes("/"));
+  const nested = names.filter((name) => name.includes("/"));
+  const folders = [...new Set(nested.map((name) => name.split("/")[0]))];
+  $("#source-tree").replaceChildren(
+    ...top.map((name) => row(name, name)),
+    ...folders.flatMap((group) => {
+      const items = nested.filter((name) => name.startsWith(`${group}/`));
+      return [treeRow({ label: `${group}/`, group: true }),
+        ...items.map((name, index) => row(name, name.slice(group.length + 1), guide([], index === items.length - 1)))];
+    }),
+  );
+  const file = folder.files.get(folder.current);
+  const editor = el("textarea", "source-editor");
+  Object.assign(editor, { value: file.text, spellcheck: false });
+  editor.setAttribute("aria-label", folder.current);
+  editor.addEventListener("input", () => {
+    file.text = editor.value;
+    $("#source-status").textContent = "";
+    for (const note of $("#source-tree").querySelectorAll(".trow.current .trow-note")) note.textContent = fileState(folder.current);
+    sync();
+  });
+  $("#source-files").replaceChildren(
+    el("div", "source-file-name", folder.current),
+    ...(folder.current === "steps.md" ? [stepsHelp()] : []),
+    editor,
+  );
+  const skill = folder.kind === "skill" && !folder.create;
+  $("#source-add-steps").hidden = !skill || folder.files.has("steps.md");
+  $("#source-add-script").hidden = !skill;
+  $("#source-delete").hidden = !skill || folder.current === "SKILL.md";
+  sync();
+}
+
+function sync() {
+  $("#source-save").disabled = !folder.create && !Object.keys(changes()).length;
+}
+
+function addFile(name, text) {
+  if (!folder.files.has(name)) {
+    folder.files.set(name, { text, original: null });
+    folder.deleted.delete(name);
+  }
+  folder.current = name;
+  renderFolder();
+}
+
+export function initFolder() {
+  $("#source-add-steps").addEventListener("click", () => addFile("steps.md", capData?.templates?.steps ?? ""));
+  $("#source-add-script").addEventListener("click", () => {
+    const name = window.prompt("Имя скрипта — файл .py в папке scripts, например report.py", "script.py")?.trim();
+    if (!name) return;
+    if (!SCRIPT_NAME.test(name)) {
+      $("#source-status").textContent = "Имя скрипта — латиница, цифры, _ . -, на конце .py";
+      return;
+    }
+    addFile(`scripts/${name}`, SCRIPT_TEMPLATE);
+  });
+  $("#source-delete").addEventListener("click", () => {
+    const name = folder.current;
+    if (name === "SKILL.md" || !window.confirm(`Удалить ${name}? Файл исчезнет после «Сохранить».`)) return;
+    if (folder.files.get(name).original !== null) folder.deleted.add(name);
+    folder.files.delete(name);
+    folder.current = "SKILL.md";
+    renderFolder();
+  });
+  $("#source-close").addEventListener("click", () => {
+    if (Object.keys(changes()).length && !folder.create && !window.confirm("Закрыть без сохранения? Правки пропадут.")) return;
+    $("#source-dialog").close();
+  });
+  $("#source-save").addEventListener("click", saveFolder);
+}
+
+async function saveFolder() {
+  const save = $("#source-save");
+  save.disabled = true;
+  $("#source-status").textContent = "Сохраняю…";
+  try {
+    if (folder.create) {
+      await api.createCapability(folder.kind, $("#source-id").value.trim(), folder.files.get("SKILL.md").text);
+      $("#source-dialog").close();
+    } else {
+      await api.saveSource(folder.kind, folder.id, changes());
+      for (const file of folder.files.values()) file.original = file.text;
+      folder.deleted.clear();
+      $("#source-status").textContent = "Сохранено";
+      renderFolder();
+    }
+    await folder.reload();
+  } catch (error) {
+    $("#source-status").textContent = error.message;
+    sync();
+  }
+}
+
+// Шпаргалка по формату steps.md — над редактором, свёрнута: её раскрывают, когда пишут шаги.
+const STEPS_HELP = [
+  ["## Нужно от вас", "что спросить у пользователя: строки «- имя — подсказка»; «(необязательно)» — поле можно не заполнять"],
+  ["## Название шага", "каждый шаг — раздел; в нём одна из строк ниже"],
+  ["модель: задание", "один ответ модели, без инструментов"],
+  ["агент: задание", "модель с инструментами; ниже — «инструменты: браузер, файлы, чтение, интернет» или их id"],
+  ["команда: pytest -q", "команда в папке проекта; длинная — блоком ``` под строкой «команда:»"],
+  ["инструмент: id", "один вызов инструмента; ниже — «параметры: {\"path\": \"{папка}\"}»"],
+  ["скрипт: имя.py", "скрипт из папки scripts скилла в песочнице; ниже — «параметры: {json}», он получит их в stdin"],
+  ["файлы: пути", "что шаг прочитает перед работой: файлы и папки проекта"],
+  ["сохранить: путь", "куда записать итог шага — так его получит следующий шаг"],
+  ["при ошибке: …", "«стоп» (по умолчанию), «дальше» или «Название шага, 3» — вернуться и повторить до 3 раз"],
+  ["таймаут: 600 · шагов: 30", "сколько секунд ждать команду или скрипт и сколько действий у агента"],
+  ["{имя}", "подставляет значение из «Нужно от вас»"],
+];
+
+function stepsHelp() {
+  const box = el("details", "source-help");
+  box.append(el("summary", "", "Как устроены шаги (steps.md)"));
+  const list = el("dl");
+  for (const [line, about] of STEPS_HELP) list.append(el("dt", "", line), el("dd", "", about));
+  box.append(list);
+  return box;
+}
+
+// «＋ Новый скилл»: то же окно с полем id и шаблоном SKILL.md. Шаги и скрипты добавляются потом — в окне скилла.
+function openNew(kind, template, reload) {
+  openFolder({ kind, id: "", path: "Папка появится в data/skills/<id>/", files: { "SKILL.md": template }, reload, create: true });
+}
 
 // ---------- память ----------
 

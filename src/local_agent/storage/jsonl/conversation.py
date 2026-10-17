@@ -117,8 +117,6 @@ class JsonlConversationStore:
             data["tool_name"] = message.tool_name
         if message.is_error:
             data["is_error"] = True
-        if message.sender:
-            data["sender"] = message.sender
         if message.stats:
             data["stats"] = message.stats.model_dump(exclude_none=True)
         if message.attachments:

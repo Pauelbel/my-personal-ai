@@ -31,6 +31,8 @@ class OpenAICompatibleProvider:
     ) -> None:
         self.name = name
         base = base_url.rstrip("/")
+        # Адрес, ключ и проверка сертификата нужны и скриптам шагов скилла: они ходят к той же модели сами.
+        self.base_url, self.api_key, self.verify_ssl = base, api_key, verify_ssl
         # Нативный API LM Studio (/api/v0) живёт рядом с /v1 и сообщает размер окна модели.
         self._native_root = base.removesuffix("/v1") + "/"
         self._client = httpx.AsyncClient(

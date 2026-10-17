@@ -1,5 +1,6 @@
 """Сборщик контекста укладывает историю в окно модели по бюджету токенов."""
 
+import hashlib
 import json
 import math
 import re
@@ -36,6 +37,16 @@ STALE_SNAPSHOT = SNAPSHOT_SECTION + "(снимок устарел: страни�
 # пока запрос не поместится в окно.
 KEEP_RECENT_RESULTS = 2
 COMPACT_STEPS = (OLD_TOOL_RESULT_CHARS, 500, 150)
+# Последняя мера перед запросом: если он всё ещё больше окна, самые большие сообщения (свежий результат
+# инструмента, огромная реплика) сокращаются серединой — но не короче этого.
+SHRINK_MIN_CHARS = 1000
+SHRINK_NOTE_TOKENS = 60
+# Огромная вставка в чат сохраняется файлом в проекте, а в разговоре остаются её начало, конец и путь к файлу:
+# иначе она занимала бы окно модели на каждом ходе. Порог — доля окна, но не больше PASTE_TOKENS.
+INBOX = ".meepo/inbox"
+PASTE_TOKENS = 8000
+PASTE_HEAD_CHARS = 1500
+PASTE_TAIL_CHARS = 500
 
 
 def estimate_tokens(text: str | None) -> int:
@@ -125,8 +136,9 @@ def drop_stale_snapshots(messages: list[ChatMessage]) -> list[ChatMessage]:
 
 
 def fit_turn(messages: list[ChatMessage], budget: int, extra_tokens: int = 0) -> tuple[list[ChatMessage], int]:
-    """Укладывает запрос хода в окно: сокращает давние результаты инструментов, начиная с самых старых.
-    extra_tokens — схемы инструментов, которые уйдут рядом с сообщениями. Возвращает сообщения и сколько сокращено."""
+    """Укладывает запрос хода в окно: сокращает давние результаты инструментов, начиная с самых старых, а если
+    и этого мало — середину самых больших сообщений. extra_tokens — схемы инструментов, которые уйдут рядом
+    с сообщениями. Возвращает сообщения и сколько сокращено."""
     total = extra_tokens + sum(estimate_message_tokens(message) for message in messages)
     if total <= budget:
         return messages, 0
@@ -147,7 +159,42 @@ def fit_turn(messages: list[ChatMessage], budget: int, extra_tokens: int = 0) ->
             compacted.add(index)
             if total <= budget:
                 return result, len(compacted)
+    # Системный промпт не трогаем: на нём держатся правила и реестр. Каждое сообщение сокращается не больше раза.
+    for index in sorted(range(1, len(result)), key=lambda position: -len(result[position].content or "")):
+        content = result[index].content or ""
+        if total <= budget or len(content) <= SHRINK_MIN_CHARS:
+            break
+        before = estimate_message_tokens(result[index])
+        keep = max(int(len(content) * (before - (total - budget) - SHRINK_NOTE_TOKENS) / before), SHRINK_MIN_CHARS)
+        if keep >= len(content):
+            break
+        note = (f"\n\n… (середина сокращена: {len(content) - keep} из {len(content)} символов не поместились "
+                "в окно модели; нужное место прочитай отдельно, кусками) …\n\n")
+        result[index] = replace(result[index], content=content[:keep * 2 // 3] + note + content[-(keep // 3):])
+        total -= before - estimate_message_tokens(result[index])
+        compacted.add(index)
     return result, len(compacted)
+
+
+def stash_paste(workspace: Path, content: str, budget: int) -> tuple[str, str] | None:
+    """Реплика больше доли окна → файл .meepo/inbox/<дата>-<хэш>.md в проекте. Возвращает (что сохранить в разговоре,
+    путь к файлу) или None, если реплика обычная. Тот же текст в тот же день попадает в тот же файл."""
+    if estimate_tokens(content) <= min(PASTE_TOKENS, budget // 4):
+        return None
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
+    relative = f"{INBOX}/{date.today().isoformat()}-{digest}.md"
+    target = workspace / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        target.write_text(content, encoding="utf-8")
+    lines = content.count("\n") + 1
+    note = (
+        f"[Вставлен большой текст: {len(content)} символов, {lines} строк. Целиком он сохранён в файл проекта "
+        f"{relative}, здесь — только начало и конец. Читай файл через read_file (сначала оглавление, затем куски "
+        "по offset); работу по всему тексту (тест-кейсы, выписка требований, конспект) делай через process_document.]"
+    )
+    shown = f"{content[:PASTE_HEAD_CHARS].rstrip()}\n\n…\n\n{content[-PASTE_TAIL_CHARS:].lstrip()}\n\n{note}"
+    return shown, relative
 
 
 def build_context(

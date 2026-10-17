@@ -29,8 +29,6 @@ class Toolbox:
     active: list[str]
     # Сохраняет новый список подключённых инструментов сессии.
     on_active_change: Callable[[list[str]], None] = lambda active: None
-    # Саб-агенту подключены сразу все его инструменты: их немного, а activate ему не нужен.
-    all_active: bool = False
     _by_id: dict[str, Tool] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -42,11 +40,9 @@ class Toolbox:
         return self._by_id.get(name)
 
     def is_active(self, name: str) -> bool:
-        return self.all_active or name in self._with_kits() or any(tool.id == name for tool in self.core)
+        return name in self._with_kits() or any(tool.id == name for tool in self.core)
 
     def bound(self) -> list[Tool]:
-        if self.all_active:
-            return [*self.core, *self.catalog]
         active = self._with_kits()
         return [*self.core, *(tool for tool in self.catalog if tool.id in active)]
 
@@ -73,8 +69,7 @@ class Toolbox:
         active = [name for name in self.active if name not in added] + added
         evicted = active[:-MAX_ACTIVE_TOOLS] if len(active) > MAX_ACTIVE_TOOLS else []
         self.active = active[-MAX_ACTIVE_TOOLS:]
-        if not self.all_active:
-            self.on_active_change(self.active)
+        self.on_active_change(self.active)
         return added, evicted
 
     def catalog_lines(self) -> list[str]:
@@ -153,7 +148,7 @@ class UseSkillTool:
         # Все инструменты приложения и те, что доступны в этом ходе: по ним видно, чего скиллу не хватит.
         self._known_tools = set(known_tools)
         self._available_tools = set(available_tools)
-        # None — агенту доступен весь каталог.
+        # None — агенту доступен весь каталог, пустой список — ни одного скилла (у агента вики).
         self._allowed_skills = None if allowed_skills is None else set(allowed_skills)
 
     def skills(self) -> list[Skill]:
@@ -184,6 +179,12 @@ class UseSkillTool:
         if skill is None:
             return ToolResult(f"Такого скилла нет. Доступные: {', '.join(skills)}", is_error=True)
         content = f"Скилл «{skill.name}». Выполни задачу по этим инструкциям:\n\n{skill.instructions}"
+        if skill.steps is not None:
+            needs = ", ".join(item.name for item in skill.steps.inputs)
+            content += (
+                f"\n\nУ скилла есть шаги (▶ по шагам): работу, которая под них подходит, не делай сам — запусти "
+                f"run_skill со skill {skill.id}" + (f" и inputs: {needs}" if needs else "") + "."
+            )
         # Без нужных инструментов скилл не выполнить: пусть модель скажет об этом, а не ответит «нет данных».
         missing = sorted(
             tool for tool in self._known_tools - self._available_tools if tool in skill.instructions

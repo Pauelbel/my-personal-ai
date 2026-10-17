@@ -133,7 +133,7 @@ class MemoryService:
         except ValueError as exc:
             raise MemoryServiceError("Checkpoint памяти не соответствует истории сессии") from exc
         source = next(
-            (message for message in reversed(messages) if message.role == "user" and message.sender is None), None,
+            (message for message in reversed(messages) if message.role == "user"), None,
         )
         if source is None:
             raise MemoryServiceError("Нет новой реплики пользователя, на которую можно сослаться")
@@ -157,9 +157,6 @@ class MemoryService:
         return sum(1 for message in messages if message.from_user and message.is_dialogue)
 
     async def update_session(self, session: Session) -> MemoryUpdateResult:
-        if session.parent_id:
-            # Реплики «user» в сессии саб-агента пишет основной агент, а не пользователь.
-            raise MemoryServiceError("Память не обновляется из переписки агентов между собой")
         async with self._update_lock:
             checkpoint = self._store.checkpoint(session.id)
             try:
@@ -175,8 +172,7 @@ class MemoryService:
                     applied_operations=0,
                     last_processed_message_id=checkpoint,
                 )
-            # Результаты саб-агентов приходят репликами «user», но пользователь их не писал.
-            dialogue = [message for message in messages if message.is_dialogue and message.sender is None]
+            dialogue = [message for message in messages if message.is_dialogue]
             if not dialogue:
                 # Только служебные сообщения инструментов: разбирать нечего, просто сдвигаем checkpoint.
                 self._store.apply(

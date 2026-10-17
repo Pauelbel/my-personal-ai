@@ -5,7 +5,6 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from local_agent.api.routes.sessions import require_agent
 from local_agent.projects.models import Project
 from local_agent.projects.service import ProjectError, ProjectService
 
@@ -18,7 +17,6 @@ class ProjectCreate(BaseModel):
     # Пусто — имя папки.
     name: str = Field(default="", max_length=100)
     workspace: str = Field(min_length=1)
-    agent_id: str = Field(default="main", min_length=1)
     # Пусто — провайдер по умолчанию из настроек моделей.
     provider: str | None = None
     model: str | None = None
@@ -47,12 +45,10 @@ def create_project(
     request: Request,
     service: Annotated[ProjectService, Depends(get_project_service)],
 ) -> Project:
-    require_agent(request, payload.agent_id)
     try:
         return service.create(
             name=payload.name,
             workspace=payload.workspace,
-            agent_id=payload.agent_id,
             provider=payload.provider or request.app.state.default_provider,
             model=payload.model if payload.model is not None else request.app.state.settings.default_model,
         )
@@ -70,17 +66,6 @@ def update_project(
         project = service.update(project_id, name=payload.name, workspace=payload.workspace, mode=payload.mode)
     except ProjectError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if project is None:
-        raise HTTPException(status_code=404, detail="Проект не найден")
-    return project
-
-
-@router.delete("/{project_id}/routes", response_model=Project)
-def forget_route(
-    project_id: str, kind: str, service: Annotated[ProjectService, Depends(get_project_service)],
-) -> Project:
-    """Забыть маршрут: в следующий раз основной агент снова спросит, кто делает такие задачи."""
-    project = service.forget_route(project_id, kind)
     if project is None:
         raise HTTPException(status_code=404, detail="Проект не найден")
     return project

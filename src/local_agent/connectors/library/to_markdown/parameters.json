@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {"type": "string", "description": "Документ или папка проекта, например docs/spec.pdf или docs"},
+    "save": {"type": "string", "description": "Куда записать: файл .md для документа, папка для папки; по умолчанию — рядом с документом"}
+  },
+  "required": ["path"],
+  "additionalProperties": false
+}

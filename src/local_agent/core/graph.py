@@ -1,6 +1,6 @@
 """Граф хода агента на LangGraph: модель → подтверждения → инструменты → модель … → ответ.
 
-Один и тот же граф ведёт основного агента и саб-агентов: различаются только набор инструментов
+Один и тот же граф ведёт основного агента и агента вики: различаются только набор инструментов
 и контекст, которые собирает runtime. Состояние — простые словари, чтобы чекпоинт в SQLite
 переживал перезапуск сервера. Подтверждения — interrupt в отдельном узле approve, в котором
 нет побочных эффектов: при resume LangGraph выполняет узел заново, и инструменты не вызываются дважды.
@@ -68,7 +68,7 @@ LEAD_WORDS = {"для", "начала", "сначала", "итак", "хоро�
 NOT_ACTIONS = {
     "жду", "могу", "предлагаю", "рекомендую", "надеюсь", "прошу", "благодарю", "хочу", "думаю", "считаю",
     "вижу", "советую", "напомню", "готову", "остаюсь", "уточню", "подытожу", "резюмирую",
-    # Ждёт саб-агента: «Я сообщу, когда будет готово», «Вернусь с результатом».
+    # Ждёт ответа: «Сообщу, когда будет готово», «Дождусь вашего ответа».
     "сообщу", "доложу", "отвечу", "вернусь", "дождусь", "подожду", "оповещу", "уведомлю",
 }
 # Место реестра возможностей в системном промпте, который хранится в состоянии хода.
@@ -128,11 +128,18 @@ def build_agent_graph(deps: GraphDeps, checkpointer=None):
     graph.add_node("call_model", _call_model(deps))
     graph.add_node("approve", _approve(deps))
     graph.add_node("run_tools", _run_tools(deps))
-    graph.add_edge(START, "call_model")
+    graph.add_conditional_edges(START, _entry, ["call_model", "approve"])
     graph.add_conditional_edges("call_model", _route, ["approve", "call_model", END])
     graph.add_edge("approve", "run_tools")
     graph.add_edge("run_tools", "call_model")
     return graph.compile(checkpointer=checkpointer)
+
+
+def _entry(state: TurnState) -> str:
+    """Ход обычно начинается запросом к модели. Шаги скилла, запущенные кнопкой, приходят уже готовым вызовом
+    инструмента — тогда сразу к подтверждению: модель не решает, запускать ли то, что пользователь выбрал сам."""
+    last = state["messages"][-1] if state.get("messages") else {}
+    return "approve" if last.get("role") == "assistant" and last.get("tool_calls") else "call_model"
 
 
 def _route(state: TurnState) -> str:
@@ -199,7 +206,7 @@ def _call_model(deps: GraphDeps):
         schemas = estimate_tokens(json.dumps(offered, ensure_ascii=False)) if offered else 0
         messages, compacted = fit_turn(messages, budget, schemas)
         if compacted:
-            write(log(f"Контекст хода не помещался в окно: сокращены давние результаты инструментов ({compacted})"))
+            write(log(f"Контекст хода не помещался в окно: сокращено сообщений — {compacted}"))
         partial: list[str] = []
         thoughts: list[str] = []
         result: ChatResult | None = None
@@ -434,9 +441,6 @@ async def _execute(box: Toolbox, call: dict, decision: dict, workspace: Path | N
     action = decision["action"]
     if action == "invalid":
         return ToolResult(f"Вызов не показан пользователю: {decision['text']}. Исправь и вызови снова.", is_error=True)
-    if getattr(tool, "takes_reply", False):
-        # Вопрос пользователю: его ответ — результат инструмента, а «отклонить» — значит «решай сам».
-        return tool.reply(decision, parse_arguments(call.get("arguments", "")) or {})
     if action == "reject":
         return ToolResult("Пользователь отклонил этот вызов", is_error=True)
     if action == "reply":
@@ -459,6 +463,9 @@ async def _execute(box: Toolbox, call: dict, decision: dict, workspace: Path | N
     if "selected" in decision:
         # Схема инструмента это поле запрещает, так что модель подставить его не может — только пользователь.
         arguments = {**arguments, "selected": decision["selected"]}
+    if "inputs" in decision:
+        # Карточка шагов скилла: поля, которые пользователь заполнил или поправил, важнее того, что подставила модель.
+        arguments = {**arguments, "inputs": {**(arguments.get("inputs") or {}), **decision["inputs"]}}
     token = CURRENT_TURN.set(turn)
     try:
         return await tool.execute(arguments, workspace)
@@ -572,9 +579,11 @@ def normalize_decision(value: object) -> dict:
         # Карточка со списком (правки вики после lint): номера пунктов, которые пользователь отметил.
         if value["action"] == "approve" and isinstance(value.get("selected"), list):
             decision["selected"] = [item for item in value["selected"] if isinstance(item, int) and not isinstance(item, bool)]
-        # Выбор в карточке-вопросе («Кто сделает»: id агента или main) — вместе с подписью кнопки.
-        if value["action"] == "reply" and isinstance(value.get("choice"), str):
-            decision["choice"] = value["choice"]
+        # Карточка шагов скилла: значения полей «Нужно от вас».
+        if value["action"] == "approve" and isinstance(value.get("inputs"), dict):
+            decision["inputs"] = {
+                str(key): str(item) for key, item in value["inputs"].items() if isinstance(item, str | int | float)
+            }
         # «Утвердить все такие действия в сессии»: это вызов и дальше вся его группа без карточек.
         if value["action"] == "approve" and value.get("trust") is True:
             decision["trust"] = True

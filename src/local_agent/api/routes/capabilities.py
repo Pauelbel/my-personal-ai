@@ -1,10 +1,8 @@
-"""Возможности агента для UI: активные и архив, просмотр файла, архивирование, восстановление, перечитывание с диска."""
+"""Возможности агента для UI: скиллы и инструменты, архив, файлы, создание, архивирование, восстановление, перечитывание с диска."""
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from local_agent.agents.files import load_agents
-from local_agent.agents.main import MAIN_AGENT_ID, MAIN_PROMPT
 from local_agent.skills.files import load_skills
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
@@ -15,41 +13,38 @@ class CapabilitySource(BaseModel):
     id: str
     path: str
     files: dict[str, str]
-    # Встроенное (промпт основного агента) только показывается: на нём держатся карточки, propose и вики.
-    readonly: bool = False
 
 
 @router.get("")
 def overview(request: Request) -> dict:
     state = request.app.state
     data = state.capabilities.overview()
-    data["mcp"] = [
-        {"name": server.name, "description": server.description, "status": server.status, "tools": server.tools}
-        for server in state.mcp.servers.values()
-    ]
+    # Шаблоны для «＋ Новый скилл» и шагов скилла: открываются в редакторе вместо пустого поля.
+    data["templates"] = state.capabilities.templates()
+    # Серверы MCP с переключателями: у работающего — все его инструменты, выключенные тоже.
+    data["mcp"] = {"started": state.mcp.started, "servers": [_server(server) for server in state.mcp.servers.values()]}
     return data
+
+
+def _server(server) -> dict:
+    return {
+        "name": server.name, "description": server.description, "status": server.status, "enabled": server.enabled,
+        "tools": [
+            {"id": tool.id, "name": tool.remote_name, "description": tool.description,
+             "enabled": tool.remote_name not in server.disabled}
+            for tool in server.known.values()
+        ],
+    }
 
 
 @router.get("/{kind}/{item_id}", response_model=CapabilitySource)
 def source(kind: str, item_id: str, request: Request) -> CapabilitySource:
     """Файлы возможности как есть: их можно открыть в редакторе и поправить руками."""
-    capabilities = request.app.state.capabilities
-    if kind == "agent" and item_id == MAIN_AGENT_ID:
-        rules = request.app.state.main_instructions.read()
-        return CapabilitySource(
-            kind=kind, id=item_id, readonly=True,
-            path="встроен в приложение (src/local_agent/agents/main.py); свои правила — кнопкой «правила»",
-            files={"Встроенный промпт": MAIN_PROMPT, "Ваши правила — добавляются в конец промпта": rules or "(нет)"},
-        )
-    if kind == "tool" and capabilities.is_script_tool(item_id):
-        folder = capabilities.paths.tools / item_id
-        files = {name: (folder / name).read_text(encoding="utf-8") for name in ("tool.md", "parameters.json", "script.py")}
-        return CapabilitySource(kind=kind, id=item_id, path=str(folder), files=files)
-    if kind in {"skill", "agent"} and capabilities.exists(kind, item_id):
-        root = capabilities.paths.skills if kind == "skill" else capabilities.paths.agents
-        path = root / f"{item_id}.md"
-        return CapabilitySource(kind=kind, id=item_id, path=str(path), files={path.name: path.read_text(encoding="utf-8")})
-    raise HTTPException(status_code=404, detail="Возможность не найдена или встроена в приложение")
+    try:
+        folder, files = request.app.state.capabilities.source(kind, item_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return CapabilitySource(kind=kind, id=item_id, path=str(folder), files=files)
 
 
 @router.post("/{kind}/{item_id}/archive", status_code=204)
@@ -105,6 +100,22 @@ async def check_connector(tool_id: str, request: Request) -> dict:
     return {"message": result.content}
 
 
+class Packages(BaseModel):
+    requirements: list[str]
+
+
+@router.post("/packages")
+async def install_packages(body: Packages, request: Request) -> dict:
+    """Пакеты для коннектора ставит пользователь кнопкой «установить» — это и есть его согласие."""
+    env = request.app.state.capabilities.env
+    if env is None:
+        raise HTTPException(status_code=404, detail="Окружение песочницы не настроено")
+    result = await env.install(body.requirements)
+    if result.is_error:
+        raise HTTPException(status_code=400, detail=result.content)
+    return {"message": result.content}
+
+
 @router.delete("/packages/{name}", status_code=204)
 async def uninstall_package(name: str, request: Request) -> None:
     """Пакет из окружения песочницы удаляет только пользователь, из интерфейса."""
@@ -114,6 +125,31 @@ async def uninstall_package(name: str, request: Request) -> None:
     result = await env.uninstall(name)
     if result.is_error:
         raise HTTPException(status_code=400, detail=result.content)
+
+
+class Switch(BaseModel):
+    enabled: bool
+
+
+@router.put("/mcp/{server}")
+async def switch_server(server: str, body: Switch, request: Request) -> dict:
+    """Сервер MCP выключен — не запущен, его инструментов нет ни у агента, ни у шагов скиллов. Сохраняется в mcp.json."""
+    manager = request.app.state.mcp
+    if not manager.started:
+        raise HTTPException(status_code=409, detail="MCP выключен в .env (MCP_ENABLED=false)")
+    if server not in manager.servers:
+        raise HTTPException(status_code=404, detail="Такого сервера MCP нет")
+    return _server(await manager.set_server(server, body.enabled))
+
+
+@router.put("/mcp/{server}/tools/{tool_id}")
+async def switch_tool(server: str, tool_id: str, body: Switch, request: Request) -> dict:
+    """Выключенный инструмент MCP уходит из реестра сразу; включённый возвращается."""
+    manager = request.app.state.mcp
+    state = manager.servers.get(server)
+    if state is None or tool_id not in state.known:
+        raise HTTPException(status_code=404, detail="Такого инструмента у работающего сервера нет")
+    return _server(manager.set_tool(server, tool_id, body.enabled))
 
 
 @router.post("/library/{kind}/{item_id}")
@@ -133,14 +169,9 @@ def reload(request: Request) -> dict:
     state = request.app.state
     settings = state.settings
     try:
-        agents = load_agents(settings.agents_path)
         skills = load_skills(settings.skills_path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    for agent in state.agent_registry.all():
-        state.agent_registry.remove(agent.id)
-    for agent in agents:
-        state.agent_registry.replace(agent)
     for skill in state.skill_registry.all():
         state.skill_registry.remove(skill.id)
     for skill in skills:
@@ -154,7 +185,24 @@ def reload(request: Request) -> dict:
 
 # Общие маршруты /{kind}/… — последними: иначе они перехватили бы /secrets/… и /packages/….
 class SourceUpdate(BaseModel):
-    files: dict[str, str]
+    # Путь файла в папке возможности → новый текст; None — удалить файл (например, steps.md или скрипт скилла).
+    files: dict[str, str | None]
+
+
+class NewCapability(BaseModel):
+    id: str
+    text: str
+
+
+@router.post("/{kind}", status_code=201)
+def create(kind: str, body: NewCapability, request: Request) -> dict:
+    """«＋ Новый скилл»: SKILL.md проверяется и записывается, только если он рабочий."""
+    try:
+        return {"id": request.app.state.capabilities.create(kind, body.id.strip(), body.text)}
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/{kind}/{item_id}", status_code=204)
@@ -164,13 +212,13 @@ def save_source(kind: str, item_id: str, body: SourceUpdate, request: Request) -
         request.app.state.capabilities.save_source(kind, item_id, body.files)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
+    except (FileExistsError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/{kind}/archive/{archive_id}", status_code=204)
 def purge(kind: str, archive_id: str, request: Request) -> None:
-    if kind not in {"tool", "skill", "agent"}:
+    if kind not in {"tool", "skill"}:
         raise HTTPException(status_code=404, detail="Нет такого вида возможностей")
     try:
         request.app.state.capabilities.purge(kind, archive_id)

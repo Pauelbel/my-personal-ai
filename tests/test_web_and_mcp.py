@@ -1,6 +1,8 @@
 """Чтение страниц по ссылке и подключение MCP-серверов."""
 
 import asyncio
+import json
+import sys
 
 import pytest
 
@@ -215,3 +217,79 @@ def test_only_latest_page_snapshot_stays_in_turn_context():
     assert "11 книг" not in result[1].content and "page.goto('https://a.example/')" in result[1].content
     assert "Page URL: https://a.example/\n### Snapshot\n(снимок устарел" in result[1].content
     assert result[2:] == messages[2:] and messages[1].content.endswith("```")
+
+
+MCP_SERVER = """
+from mcp.server.mcpserver import MCPServer
+
+app = MCPServer("demo")
+
+
+@app.tool()
+def ping(text: str) -> str:
+    return "pong " + text
+
+
+@app.tool()
+def echo(text: str) -> str:
+    return text
+
+
+app.run()
+"""
+
+
+def test_mcp_server_and_its_tools_are_switched_without_restart(tmp_path):
+    script = tmp_path / "server.py"
+    script.write_text(MCP_SERVER, encoding="utf-8")
+    config = tmp_path / "mcp.json"
+    config.write_text(json.dumps({"servers": {"Demo": {
+        "command": sys.executable, "args": [str(script)], "disabled_tools": ["echo"], "note": "моя заметка",
+    }}}), encoding="utf-8")
+    registry = ToolRegistry()
+
+    async def running(manager):
+        for _ in range(300):
+            if manager.servers["demo"].status == "работает":
+                return
+            await asyncio.sleep(0.1)
+        raise AssertionError(manager.servers["demo"].status)
+
+    async def scenario():
+        manager = MCPManager(config, registry, tmp_path / "logs")
+        manager.start()
+        await running(manager)
+        first = sorted(tool.id for tool in registry.all())
+        manager.set_tool("demo", "demo_echo", True)
+        manager.set_tool("demo", "demo_ping", False)
+        second = sorted(tool.id for tool in registry.all())
+        await manager.set_server("demo", False)
+        off = ([tool.id for tool in registry.all()], manager.servers["demo"].status)
+        await manager.set_server("demo", True)
+        await running(manager)
+        back = sorted(tool.id for tool in registry.all())
+        await manager.close()
+        return first, second, off, back
+
+    first, second, off, back = asyncio.run(scenario())
+
+    # Выключенного инструмента нет в реестре — ни модель, ни шаги скиллов его не видят.
+    assert first == ["demo_ping"] and second == ["demo_echo"]
+    assert off == ([], "выключен") and back == ["demo_echo"]
+    saved = json.loads(config.read_text(encoding="utf-8"))["servers"]["Demo"]
+    assert saved["enabled"] is True and saved["disabled_tools"] == ["ping"] and saved["note"] == "моя заметка"
+
+
+def test_mcp_switches_need_mcp_enabled_in_env(tmp_path):
+    from fastapi.testclient import TestClient
+    from tests.test_graph_flow import settings
+
+    from local_agent.api.app import create_app
+
+    with TestClient(create_app(settings(tmp_path))) as client:
+        overview = client.get("/api/capabilities").json()
+        switched = client.put("/api/capabilities/mcp/browser", json={"enabled": False})
+        tool = client.put("/api/capabilities/mcp/browser/tools/browser_browser_click", json={"enabled": False})
+
+    assert overview["mcp"] == {"started": False, "servers": []}
+    assert switched.status_code == 409 and "MCP_ENABLED" in switched.json()["detail"] and tool.status_code == 404

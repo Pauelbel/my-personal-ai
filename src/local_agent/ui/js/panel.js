@@ -1,72 +1,38 @@
-// Внимание пользователя: карточки, которые ждут решения, — в чате над полем ввода;
-// задачи саб-агентов открытой сессии — в доке там же.
-import { el, parse, renderMarkdown } from "./chat.js";
+// Внимание пользователя: карточки, которые ждут решения, — в чате над полем ввода.
+import { el, parse } from "./chat.js";
 import { lineDiff, renderDiff } from "./diff.js";
-import { initial, tone } from "./marks.js";
+import { effectsList, stepList } from "./steps.js";
 
-const STATUS = { queued: "в очереди", running: "работает", waiting: "ждёт решения", done: "готово", failed: "ошибка" };
-const KIND = { tool: "Инструмент", skill: "Скилл", agent: "Саб-агент" };
-const ACTIVE = new Set(["queued", "running", "waiting"]);
+const KIND = { tool: "Инструмент", skill: "Скилл" };
 const EDIT_KIND = { merge: "слить дубли", contradiction: "противоречие", outdated: "устарело", fix: "исправить" };
-const DOCK_ROWS = 5;
-// Столько агентов в карточке «Кто сделает» — строками, остальные — в списке «Другому агенту…».
-const ROUTE_ROWS = 4;
 // Группа доверия карточки (MCP-сервер) — как её назвать на кнопке «утвердить все … в этой сессии».
 const TRUST = { browser: "действия браузера", search: "запросы поиска" };
 
 // onDecision(card, {action, text}) отправляет решение; onOpen(sessionId) открывает сессию;
 // readFile(card, path) — текущий текст файла в проекте карточки или null: по нему считается разница правки.
-// inChat — карточка стоит в чате своей сессии: строка «где» нужна, только если просит саб-агент.
+// inChat — карточка стоит в чате своей сессии: строка «где» не нужна.
 export function renderCards(root, cards, { onDecision, onOpen, readFile, busy, inChat = false }) {
   root.replaceChildren(...cards.map((card) => cardNode(card, onDecision, onOpen, readFile, busy, inChat)));
-}
-
-// Задачи — деревом «кто кому поручил»: задача агента, которую поручил другой агент, стоит под задачей поручившего.
-// Сначала ветки, где работа ещё идёт, затем остальные по свежести; лишние — ссылкой на «Команду».
-export function renderDock({ count, summary, list }, tasks, { onOpen, onMore }) {
-  const ordered = taskTree(tasks);
-  count.textContent = `· ${tasks.length}`;
-  const totals = Object.keys(STATUS)
-    .map((status) => [status, tasks.filter((task) => task.status === status).length])
-    .filter(([, number]) => number);
-  summary.textContent = totals.map(([status, number]) => `${number} ${STATUS[status]}`).join(" · ");
-  const rows = ordered.slice(0, DOCK_ROWS).map(([task, depth]) => taskNode(task, depth, onOpen));
-  if (ordered.length > DOCK_ROWS) {
-    const more = el("li", "more", `+${ordered.length - DOCK_ROWS} ещё — все задачи на вкладке «Команда»`);
-    more.addEventListener("click", onMore);
-    rows.push(more);
-  }
-  list.replaceChildren(...rows);
 }
 
 function cardNode(card, onDecision, onOpen, readFile, busy, inChat) {
   const pending = card.pending;
   const node = el("div", "card");
   if (!inChat) {
-    const where = el("div", "where", card.agent ? `${card.agent} · ${card.session_title}` : card.session_title);
+    const where = el("div", "where", card.session_title);
     where.title = "Открыть сессию";
     where.style.cursor = "pointer";
     where.addEventListener("click", () => onOpen(card.owner_id));
     node.append(where);
-  } else if (card.agent) {
-    // Просит саб-агент этой сессии: щелчок открывает его разговор.
-    const where = el("div", "where", pending.kind === "question" ? "вопрос от агента · открыть разговор" : `${card.agent} просит подтвердить`);
-    where.title = "Открыть разговор с агентом";
-    where.style.cursor = "pointer";
-    where.addEventListener("click", () => onOpen(card.session_id));
-    node.append(where);
   }
   node.append(el("div", "title", pending.title || titleOf(pending)));
-  // Вопрос агента пользователю: текст вопроса, сразу поле ответа; «Пусть решает сам» — без ответа.
-  if (pending.kind === "question") return questionNode(node, pending, card, onDecision, busy);
-  // Кто сделает задачу: предложенный агент, сам основной или другой агент. Выбор запомнится для таких задач.
-  if (pending.kind === "route") return routeNode(node, pending, card, onDecision, busy);
   // Лимит шагов за ход: продолжить работу или остановить и получить итог.
   if (pending.kind === "limit") return limitNode(node, pending, card, onDecision, busy);
+  // Запуск шагов скилла: поля «Нужно от вас», шаги и что они будут делать — затем «Запустить».
+  if (pending.kind === "steps") return stepsNode(node, pending.run || {}, card, onDecision, busy);
   // Правки вики после lint — список с галочками: применятся только отмеченные.
   const checks = pending.kind === "wiki_lint" ? editsBody(node, pending.edits || []) : null;
   if (pending.kind === "proposal") proposalBody(node, pending.proposal || {});
-  else if (pending.kind === "tools_request") toolsBody(node, pending);
   else if (!checks) callBody(node, pending, (path) => readFile(card, path));
 
   const actions = el("div", "actions");
@@ -108,6 +74,96 @@ function cardNode(card, onDecision, onOpen, readFile, busy, inChat) {
   return node;
 }
 
+// Значения полей живут, пока карточка на экране: перерисовка панели не стирает то, что пользователь уже ввёл.
+const drafts = new Map();
+
+function stepsNode(node, run, card, onDecision, busy) {
+  node.classList.add("steps-start");
+  const key = card.pending.interrupt_id ?? card.session_id;
+  const values = drafts.get(key) ?? { ...(run.values ?? {}) };
+  drafts.set(key, values);
+  if (run.description) node.append(el("p", "reason", run.description));
+  const effects = effectsList(run.effects ?? [], values);
+  const inputs = run.inputs ?? [];
+  const fields = inputs.map((input) => {
+    const label = el("label", "steps-input");
+    const name = el("span", "steps-input-name", input.name);
+    if (input.optional) name.append(el("span", "steps-input-optional", "необязательно"));
+    const field = el("textarea");
+    Object.assign(field, { rows: 1, value: values[input.name] ?? "", placeholder: input.hint || "", spellcheck: false });
+    const grow = () => {
+      field.style.height = "auto";
+      field.style.height = `${field.scrollHeight + 2}px`;
+    };
+    field.addEventListener("input", () => {
+      values[input.name] = field.value;
+      grow();
+      effects.refresh(values);
+      sync();
+    });
+    field.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !go.disabled) go.click();
+    });
+    requestAnimationFrame(grow);
+    field.title = input.hint || "";
+    label.append(name, field);
+    return label;
+  });
+  if (fields.length) {
+    const form = el("div", "steps-inputs");
+    form.append(...fields);
+    node.append(section("Нужно от вас"), form);
+  }
+  node.append(section(`Шаги · ${run.steps?.length ?? 0}`), stepList(run));
+  if (run.effects?.length) node.append(section("Что шаги будут делать — без отдельных подтверждений на каждом шаге"), effects);
+  const problems = run.problems ?? [];
+  if (problems.length) {
+    const list = el("ul", "steps-problems");
+    for (const problem of problems) list.append(el("li", "", problem));
+    node.append(section("Не запустится"), list);
+  }
+  const go = button("▶ Запустить", "primary");
+  const reject = button("Отклонить");
+  const reply = button("Ответить");
+  const status = el("span", "steps-start-status");
+  const text = el("textarea");
+  text.placeholder = "Что поправить или уточнить";
+  text.hidden = true;
+  const send = button("Отправить ответ", "primary");
+  send.hidden = true;
+  const all = [go, reject, reply, send];
+  const sync = () => {
+    const missing = inputs.filter((input) => !input.optional && !String(values[input.name] ?? "").trim()).map((input) => input.name);
+    go.disabled = busy || problems.length > 0 || missing.length > 0;
+    status.textContent = missing.length ? `Заполните: ${missing.join(", ")}` : "";
+  };
+  const decide = async (decision) => {
+    for (const item of all) item.disabled = true;
+    drafts.delete(key);
+    await onDecision(card, decision);
+  };
+  go.addEventListener("click", () => decide({ action: "approve", inputs: { ...values } }));
+  reject.addEventListener("click", () => decide({ action: "reject" }));
+  reply.addEventListener("click", () => {
+    text.hidden = send.hidden = false;
+    reply.hidden = true;
+    text.focus();
+  });
+  send.addEventListener("click", () => {
+    if (text.value.trim()) decide({ action: "reply", text: text.value.trim() });
+  });
+  for (const item of [reject, reply, send]) item.disabled = busy;
+  sync();
+  const actions = el("div", "actions");
+  actions.append(go, reject, reply, status);
+  node.append(actions, text, send);
+  return node;
+}
+
+function section(title) {
+  return el("div", "steps-section", title);
+}
+
 function limitNode(node, pending, card, onDecision, busy) {
   const go = button("Продолжить", "primary");
   const stop = button("Остановить");
@@ -125,100 +181,6 @@ function limitNode(node, pending, card, onDecision, busy) {
   return node;
 }
 
-function questionNode(node, pending, card, onDecision, busy) {
-  const text = el("div", "question text");
-  renderMarkdown(text, pending.question || "");
-  const answer = el("textarea");
-  answer.placeholder = "Ваш ответ";
-  const send = button("Ответить", "primary");
-  const skip = button("Пусть решает сам");
-  const all = [send, skip];
-  for (const item of all) item.disabled = busy;
-  const decide = async (decision) => {
-    for (const item of all) item.disabled = true;
-    await onDecision(card, decision);
-  };
-  send.addEventListener("click", () => {
-    if (answer.value.trim()) decide({ action: "reply", text: answer.value.trim() });
-  });
-  answer.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && answer.value.trim()) decide({ action: "reply", text: answer.value.trim() });
-  });
-  skip.addEventListener("click", () => decide({ action: "reject" }));
-  const actions = el("div", "actions");
-  actions.append(send, skip);
-  node.classList.add("question-card");
-  node.append(text, answer, actions);
-  return node;
-}
-
-// Варианты — строками со значком агента, как в сайдбаре: предложенный Основным первым и с пометкой,
-// дальше остальные агенты команды и «сделает сам». Большая команда — лишние уходят в список.
-function routeNode(node, pending, card, onDecision, busy) {
-  const agents = [...(pending.agents || [])].sort((a, b) => (b.id === pending.suggested) - (a.id === pending.suggested));
-  const shown = agents.slice(0, ROUTE_ROWS);
-  const rest = agents.slice(ROUTE_ROWS);
-  const rows = [...shown.map((agent) => routeOption(agent, agent.id === pending.suggested)), routeOption(null, !pending.suggested)];
-  const other = el("select");
-  if (rest.length) {
-    other.append(el("option", "", "Другому агенту…"), ...rest.map((agent) => {
-      const option = el("option", "", agent.name);
-      option.value = agent.id;
-      option.title = agent.description || "";
-      return option;
-    }));
-    other.firstChild.value = "";
-    other.addEventListener("change", () => {
-      if (other.value) decide(other.value, `Поручить: ${other.selectedOptions[0].textContent}`);
-    });
-  }
-  const all = [...rows, other];
-  for (const item of all) item.disabled = busy;
-  for (const [index, row] of rows.entries()) {
-    const agent = shown[index];
-    row.addEventListener("click", () => (agent ? decide(agent.id, `Поручить: ${agent.name}`) : decide("main", "Сделай сам")));
-  }
-  async function decide(choice, label) {
-    for (const item of all) item.disabled = true;
-    await onDecision(card, { action: "reply", text: label, choice });
-  }
-  const options = el("div", "route-options");
-  options.append(...rows, ...(rest.length ? [other] : []));
-  node.classList.add("question-card");
-  node.append(options);
-  if (pending.task_kind) node.append(el("p", "hint", `Выбор запомнится для задач «${pending.task_kind}» в этом проекте — изменить можно в настройках проекта.`));
-  return node;
-}
-
-// agent — саб-агент; null — сам Основной.
-function routeOption(agent, suggested) {
-  const row = button("", `route-option${suggested ? " suggested" : ""}`);
-  const mark = el("span", "route-mark");
-  if (agent) {
-    mark.textContent = initial(agent.name);
-    mark.style.setProperty("--tone", tone(agent.id));
-  } else {
-    const mascot = el("img");
-    mascot.src = "/ui/assets/meepo-mascot.png";
-    mascot.alt = "";
-    mark.append(mascot);
-  }
-  const text = el("span", "route-text");
-  text.append(
-    el("span", "route-name", agent ? `Поручить: ${agent.name}` : "Сделай сам"),
-    el("span", "route-about", agent ? agent.description || agent.id : "Основной агент сделает задачу без саб-агентов"),
-  );
-  row.append(mark, text);
-  if (suggested) row.append(el("span", "route-tag", "предлагает Основной"));
-  return row;
-}
-
-// Агент просит подключить ему инструменты: какие и зачем. После «Утвердить» они записываются в его файл.
-function toolsBody(node, pending) {
-  if (pending.reason) node.append(el("p", "reason", pending.reason));
-  node.append(el("p", "hint", `Инструменты: ${(pending.tools || []).join(", ")} — появятся у агента сразу и останутся у него.`));
-}
-
 function titleOf(pending) {
   const args = parse(pending.call?.arguments);
   if (pending.call?.name === "write_file") return `Записать файл ${args.path} (${(args.content || "").length} символов)`;
@@ -228,8 +190,7 @@ function titleOf(pending) {
 
 function callBody(node, pending, readFile) {
   const args = parse(pending.call?.arguments);
-  if (pending.preview) node.append(block("Что будет записано", pending.preview, true));
-  else if (["write_file", "edit_file"].includes(pending.call?.name)) {
+  if (["write_file", "edit_file"].includes(pending.call?.name)) {
     const slot = el("div", "hint", "Сравниваю с файлом…");
     node.append(slot);
     void fileChange(pending.call.name, args, readFile).then((change) => slot.replaceWith(change));
@@ -300,13 +261,23 @@ function proposalBody(node, proposal) {
     node.append(block("Параметры", JSON.stringify(proposal.parameters, null, 2)));
     node.append(block("Код script.py", proposal.content, true));
     if (proposal.previous) node.append(block("Сейчас", proposal.previous));
-  } else if (proposal.kind === "agent") {
-    node.append(el("p", "hint", `Инструменты: ${(proposal.tools || []).join(", ") || "нет"} · Скиллы: ${(proposal.skills || []).join(", ") || "нет"}`));
-    node.append(block("Системный промпт", proposal.content, true));
-    if (proposal.previous) node.append(block("Сейчас", proposal.previous));
   } else {
-    node.append(block("Инструкции", proposal.content, true));
+    // Скилл: инструкции SKILL.md, затем шаги и скрипты — только если их меняют; рядом — то, что сейчас.
+    node.append(block("Инструкции (SKILL.md)", proposal.content, true));
     if (proposal.previous) node.append(block("Сейчас", proposal.previous));
+    if (proposal.plan) {
+      node.append(section(`Шаги · ${proposal.plan.steps.length}`), stepList(proposal.plan));
+      if (proposal.plan.inputs.length) {
+        node.append(el("p", "hint", `Нужно от вас: ${proposal.plan.inputs.map((input) => input.name).join(", ")}`));
+      }
+      if (proposal.effects?.length) node.append(section("Что шаги будут делать"), effectsList(proposal.effects, {}));
+      node.append(block("steps.md", proposal.steps));
+      if (proposal.previous_steps) node.append(block("steps.md сейчас", proposal.previous_steps));
+    }
+    for (const [name, code] of Object.entries(proposal.scripts ?? {})) {
+      node.append(block(`scripts/${name}`, code, true));
+      if (proposal.previous_scripts?.[name]) node.append(block(`scripts/${name} сейчас`, proposal.previous_scripts[name]));
+    }
   }
 }
 
@@ -317,45 +288,6 @@ function block(label, text, open = false) {
   pre.textContent = text;
   details.append(el("summary", "", label), pre);
   return details;
-}
-
-// [задача, глубина] в порядке показа. Корни — поручения основного агента; поручивший, которого среди задач нет,
-// или задачи, поручившие друг другу по кругу, тоже становятся корнями — ничего не теряется.
-function taskTree(tasks) {
-  const byAgent = new Map(tasks.map((task) => [task.agent, task]));
-  const children = new Map();
-  const roots = [];
-  for (const task of tasks) {
-    const parent = task.from && task.from !== task.agent ? byAgent.get(task.from) : null;
-    if (parent) children.set(parent, [...(children.get(parent) ?? []), task]);
-    else roots.push(task);
-  }
-  const active = (task) => ACTIVE.has(task.status) || (children.get(task) ?? []).some(active);
-  const order = (items) => [...items.filter(active), ...items.filter((task) => !active(task))];
-  const rows = [];
-  const seen = new Set();
-  const walk = (task, depth) => {
-    if (seen.has(task)) return;
-    seen.add(task);
-    rows.push([task, depth]);
-    for (const child of order(children.get(task) ?? [])) walk(child, depth + 1);
-  };
-  for (const task of order(roots)) walk(task, 0);
-  for (const task of tasks) walk(task, 0);
-  return rows;
-}
-
-function taskNode(task, depth, onOpen) {
-  const item = el("li");
-  const title = el("span", "task-title", task.error ? `${task.title} — ${task.error}` : task.title);
-  const agent = el("span", "task-agent");
-  if (depth) agent.append(el("span", "task-guide", `${"   ".repeat(depth - 1)}└─ `));
-  agent.append(task.agent);
-  item.append(el("span", `status-dot ${task.status}`), agent, title,
-    el("span", `task-state ${task.status}`, STATUS[task.status] || task.status));
-  item.title = `${task.from || "Основной"} → ${task.agent}: ${task.title} · открыть разговор`;
-  item.addEventListener("click", () => onOpen(task.session_id));
-  return item;
 }
 
 function button(label, className = "") {

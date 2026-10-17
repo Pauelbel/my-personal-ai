@@ -1,24 +1,21 @@
-"""Сборка приложения: сервисы, реестры, ядро агента и какие инструменты получает каждый агент.
+"""Сборка приложения: сервисы, реестры, ядро агента и какие инструменты получают основной агент и агент вики.
 
 Единственный модуль, который знает обо всех пакетах сразу. Остальные зависят только от слоёв ниже:
-agents, skills → core → connectors, mcp, catalog → tools → assembly → api.
+agents, steps, skills → core → connectors, mcp → steps/engine → catalog → tools → assembly → api.
 """
 
 from collections.abc import Callable
 from contextlib import AsyncExitStack
+from pathlib import Path
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from local_agent.agents.files import load_agents, warn_unknown_references
-from local_agent.agents.main import MAIN_AGENT_ID, MainInstructions
+from local_agent.agents.main import MainInstructions
 from local_agent.agents.models import Agent
-from local_agent.agents.registry import AgentRegistry
-from local_agent.agents.team import reachable
 from local_agent.catalog.service import CapabilityPaths, CapabilityService
 from local_agent.config.settings import Settings
 from local_agent.connectors.pyenv import PythonEnv
 from local_agent.connectors.secrets import SecretStore
-from local_agent.core.delegation import DelegationManager
 from local_agent.core.registry import ToolRegistry
 from local_agent.core.runtime import AgentRuntime, RuntimeLimits
 from local_agent.core.summary import ConversationSummarizer
@@ -43,16 +40,13 @@ from local_agent.storage.json.projects import JsonProjectRepository
 from local_agent.storage.json.sessions import JsonSessionRepository
 from local_agent.storage.jsonl.conversation import JsonlConversationStore
 from local_agent.tools.docs import SearchDocsTool
+from local_agent.tools.documents import ProcessDocumentTool
 from local_agent.tools.files import EditFileTool, ListFilesTool, ReadFileTool, SearchFilesTool, WriteFileTool
 from local_agent.tools.git import GitTool
-from local_agent.tools.growth.learn import LearnTool
-from local_agent.tools.growth.propose import ArchiveTool, InstallPackagesTool, ProposeTool
+from local_agent.tools.growth.propose import ArchiveTool, InstallPackagesTool, ProposeTool, ReadCapabilityTool
 from local_agent.tools.memory import MemorySearchTool, RememberTool
 from local_agent.tools.plan import PlanTool
-from local_agent.tools.team.ask import AskUserTool, RequestToolsTool
-from local_agent.tools.team.delegate import AskAgentTool, DelegateTool
-from local_agent.tools.team.route import ChooseRouteTool, HandoffTool
-from local_agent.tools.testgen.tool import GenerateTestCasesTool, TestCasesExtra
+from local_agent.tools.skills import RunSkillTool
 from local_agent.tools.web import FetchUrlTool
 from local_agent.tools.wiki import (
     WikiLintTool,
@@ -90,16 +84,6 @@ def apply_default(state, provider: str, model: str) -> None:
         state.settings.default_model = model
 
 
-def extra_factories(providers: LLMRegistry) -> dict[str, tuple[str, Callable[[], Tool]]]:
-    """Встроенные дополнения, выключенные по умолчанию: id → (описание, фабрика)."""
-    return {
-        GenerateTestCasesTool.id: (
-            "Генерация ручных тест-кейсов по Markdown-документации раздела постранично",
-            lambda: TestCasesExtra(providers),
-        ),
-    }
-
-
 class CatalogTool:
     """Обёртка помечает инструмент как редкий: модель видит его в реестре и подключает через activate."""
 
@@ -113,7 +97,7 @@ class CatalogTool:
 
 
 def agent_tools(state) -> Callable[[Session, Agent, Toolbox], list[Tool]]:
-    """Какие инструменты агент получает всегда, помимо реестра: у основного, у саб-агента и в чате вики — свои."""
+    """Какие инструменты агент получает всегда, помимо реестра: у основного агента и в чате вики — свои."""
 
     def tools_for(session: Session, agent: Agent, box: Toolbox) -> list[Tool]:
         if session.kind == "wiki":
@@ -124,29 +108,28 @@ def agent_tools(state) -> Callable[[Session, Agent, Toolbox], list[Tool]]:
                 WikiLintTool(state.wiki_service), WikiProposeEditsTool(state.wiki_service),
                 FetchUrlTool(),
             ]
-        if agent.id != MAIN_AGENT_ID:
-            # Саб-агентам — вики, но не личная память пользователя.
-            tools: list[Tool] = [WikiSearchTool(state.wiki_service)]
-            if "wiki_read" not in agent.tools:
-                tools.append(WikiReadTool(state.wiki_service))
-            # Команда: саб-агент может обратиться к любому агенту (или к тем, кем ограничен в файле).
-            # В личном чате вне проектов обращаться некуда: разговоры агентов живут в сессиях проекта.
-            if session.project_id and (targets := reachable(agent, state.agent_registry)):
-                tools.append(AskAgentTool(state.delegation, state.agent_registry, session, targets))
-            if session.project_id:
-                # Не получается или не хватает данных — спросить пользователя; не хватает инструмента — попросить.
-                tools += [AskUserTool(agent.name), RequestToolsTool(state.capabilities, state.tool_registry, agent)]
-            # Задачу не по профилю саб-агент не делает сам, а передаёт основному агенту.
-            tools.append(HandoffTool(state.delegation, session))
-            tools.append(PlanTool(state.session_service, session.id, state.conversation_service))
-            # «Запомни, делай так впредь» — агент дописывает правило в свой промпт после подтверждения.
-            if state.agent_registry.get(agent.id) is not None:
-                tools.append(LearnTool(state.capabilities, agent))
-            return tools
-        tools = [
+        tools: list[Tool] = []
+        if session.workspace and any(skill.steps for skill in state.skill_registry.all()):
+            # Шаги скилла работают в папке проекта.
+            project = state.session_service.project_of(session)
+            tools.append(RunSkillTool(
+                state.skill_registry, state.llm_registry,
+                state.capabilities.toolkit(read_only=project is not None and project.mode == "read"),
+                state.settings.default_context_tokens,
+            ))
+        if session.workspace:
+            # Большой документ целиком — по частям; редкая работа, поэтому в реестре одной строкой.
+            project = state.session_service.project_of(session)
+            tools.append(CatalogTool(ProcessDocumentTool(
+                state.llm_registry,
+                state.capabilities.toolkit(read_only=project is not None and project.mode == "read"),
+                session.context_window or state.settings.default_context_tokens, Path(session.workspace),
+            )))
+        tools += [
             RememberTool(state.memory_service, session.id),
             PlanTool(state.session_service, session.id, state.conversation_service),
             ProposeTool(state.capabilities),
+            ReadCapabilityTool(state.capabilities),
             CatalogTool(MemorySearchTool(state.memory_service)),
             CatalogTool(WikiSearchTool(state.wiki_service)),
             # Шаги добавления заметки и список правок lint всегда со схемой: без неё модель пишет
@@ -158,13 +141,6 @@ def agent_tools(state) -> Callable[[Session, Agent, Toolbox], list[Tool]]:
             CatalogTool(ArchiveTool(state.capabilities)),
             CatalogTool(InstallPackagesTool(state.capabilities)),
         ]
-        # Поручение идёт в разговор агента внутри сессии проекта: в общем чате вне проектов поручать некуда.
-        if state.agent_registry.all() and session.project_id:
-            tools += [
-                DelegateTool(state.delegation, state.agent_registry, session),
-                # Кто сделает — сам или саб-агент — решает пользователь, выбор запоминается в проекте.
-                ChooseRouteTool(state.project_service, state.agent_registry, session),
-            ]
         return tools
 
     return tools_for
@@ -230,12 +206,9 @@ async def assemble(state, settings: Settings, stack: AsyncExitStack, llm_provide
         GitTool(), SearchDocsTool(index_path / "docs"), FetchUrlTool(),
         WikiReadTool(state.wiki_service),
     ])
-    state.agent_registry = AgentRegistry(load_agents(settings.agents_path))
     state.skill_registry = SkillRegistry(load_skills(settings.skills_path))
     state.capabilities = CapabilityService(
-        state.tool_registry, state.skill_registry, state.agent_registry,
-        CapabilityPaths(data("tools_path", "tools"), settings.skills_path, settings.agents_path),
-        extras=extra_factories(state.llm_registry),
+        state.tool_registry, state.skill_registry, CapabilityPaths(data("tools_path", "tools"), settings.skills_path),
         env=PythonEnv(data("sandbox_env_path", "sandbox-env")), secrets=state.secrets,
     )
     state.capabilities.load()
@@ -246,7 +219,6 @@ async def assemble(state, settings: Settings, stack: AsyncExitStack, llm_provide
     state.agent_runtime = AgentRuntime(
         state.session_service,
         state.conversation_service,
-        state.agent_registry,
         state.llm_registry,
         state.memory_service,
         state.tool_registry,
@@ -265,13 +237,6 @@ async def assemble(state, settings: Settings, stack: AsyncExitStack, llm_provide
     stack.push_async_callback(state.agent_runtime.close)
     state.turn_hub = TurnHub(state.agent_runtime, state.session_service, state.events.publish)
     stack.push_async_callback(state.turn_hub.close)
-    state.delegation = DelegationManager(
-        state.agent_runtime, state.session_service, state.conversation_service, state.agent_registry,
-        max_parallel=settings.max_parallel_tasks,
-        provider=settings.subagent_provider, model=settings.subagent_model,
-        turns=state.turn_hub,
-    )
-    stack.push_async_callback(state.delegation.close)
 
     state.agent_runtime.core_tools.append(agent_tools(state))
     state.agent_runtime.archive_lines = state.capabilities.archive_lines
@@ -279,11 +244,6 @@ async def assemble(state, settings: Settings, stack: AsyncExitStack, llm_provide
     state.main_instructions = MainInstructions(settings.data_dir / "main-instructions.md")
     state.agent_runtime.main_instructions = state.main_instructions.read
     state.agent_runtime.attachment_path = state.attachments.path
-    warn_unknown_references(
-        state.agent_registry.all(),
-        {tool.id for tool in state.tool_registry.all()},
-        {skill.id for skill in state.skill_registry.all()},
-    )
     state.mcp = MCPManager(data("mcp_config_path", "mcp.json"), state.tool_registry, data("logs_path", "logs"))
     if settings.mcp_enabled:
         state.mcp.start()

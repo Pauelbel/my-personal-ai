@@ -69,39 +69,18 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .layout { display: flex; flex: 1; min-height: 0; }
 .view { flex: 1; min-width: 0; min-height: 0; }
 /* Рабочее место: чат слева, файлы проекта справа; граница тянется, файлы можно скрыть. */
+/* Ширины колонок, которые тянут разделителем, нужны только самой сетке. Ненаследуемые: иначе каждый кадр
+   перетаскивания пересчитывал бы стили всего внутри — сотен ячеек таблиц в чате и в открытом файле. */
+@property --chat-w { syntax: "*"; inherits: false; }
+@property --tree-w { syntax: "*"; inherits: false; }
 #view-chat { display: grid; grid-template-columns: var(--chat-w, minmax(0, 45fr)) 0 minmax(0, 55fr); min-height: 0; }
 #view-chat.files-hidden { grid-template-columns: minmax(0, 1fr); }
 #view-chat.files-hidden > .resizer, #view-chat.files-hidden > .files-panel { display: none; }
 .chat-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
-/* Агенты сессии — кружки над чатом; обводка — работает или ждёт решения, выбранный — с кольцом акцента. */
+/* Полоса над чатом проекта: кнопка «Файлы» справа. */
 .chat-bar { display: flex; align-items: center; gap: 10px; flex: none; padding: 8px 16px; border-bottom: 1px solid var(--line); }
-.agent-circles { display: flex; align-items: center; gap: 8px; }
-.agent-circle {
-  width: 30px; height: 30px; flex: none; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%;
-  background: var(--tone, var(--surface-2)); color: var(--surface); font: 700 13px/1 var(--sans);
-}
-.agent-circle:hover:not(:disabled) { background: var(--tone, var(--surface-2)); filter: brightness(1.08); }
-.agent-circle.main { background: transparent; }
-.agent-circle.main:hover:not(:disabled) { background: transparent; }
-.agent-circle.main img { width: 28px; height: 28px; display: block; }
-.agent-circle[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-2); }
-.agent-circle:is(.running, .queued) { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); animation: pulse 1s infinite alternate; }
-.agent-circle.waiting { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--warn); }
-.agent-circle.add { background: transparent; color: var(--muted); border: 1px dashed var(--line-strong); font-size: 16px; font-weight: 400; }
-.agent-circle.add:hover:not(:disabled) { background: var(--surface-2); color: var(--fg); filter: none; }
-.agent-current { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.files-toggle { flex: none; color: var(--muted); }
-/* Кто из агентов сейчас занят — строки под кружками. */
-.chat-activity { display: flex; flex-direction: column; gap: 1px; flex: none; padding: 4px 12px 6px; border-bottom: 1px solid var(--line); }
-.activity-row {
-  display: grid; grid-template-columns: auto max-content minmax(0, 1fr) auto; align-items: center; gap: 8px;
-  padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; text-align: left;
-}
-.activity-route { font: 600 12.5px var(--mono); color: var(--accent-2); white-space: nowrap; }
-.activity-task { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
-.activity-state { font: 12px var(--mono); color: var(--accent); white-space: nowrap; }
-.activity-row.waiting .activity-state { color: var(--warn); }
+.files-toggle { flex: none; margin-left: auto; color: var(--muted); }
 
 /* Проекты и сессии — навигация, а не дерево терминала: крупные строки, цветной значок проекта,
    открытая сессия — плашкой. Сессии выровнены по названию проекта. */
@@ -110,7 +89,6 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
   border-right: 1px solid var(--line); background: var(--surface); overflow: auto; font: 14px/1.4 var(--sans);
 }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 2px 4px 10px; }
-.sidebar-head.next { margin-top: 14px; }
 .sidebar .sidebar-head h3 { font: 500 13px/1.4 var(--sans); text-transform: none; letter-spacing: 0; }
 .sidebar-head button.icon { width: 32px; height: 32px; color: var(--muted); font-size: 20px; }
 .sidebar-head button.icon:hover:not(:disabled) { color: var(--fg); }
@@ -141,17 +119,6 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .nav-tree .trow.current:not(.group) { background: var(--surface-2); }
 .nav-tree .trow.current:not(.group) .trow-label { color: var(--fg); font-weight: 500; }
 .nav-tree .trow.marked .trow-label { color: var(--fg); font-weight: 500; }
-/* Агент — круглый значок (у проекта квадратный): в блоке «Агенты» во всю строку, в сессии — веткой под ней. */
-.nav-tree .trow.agent:not(.group) .trow-main { padding-left: 10px; }
-.nav-tree .trow.agent:not(.group) .trow-mark {
-  width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%;
-  background: var(--tone); color: var(--surface); font: 700 11px/1 var(--sans);
-}
-.nav-tree .trow.agent.main:not(.group) .trow-mark { background: transparent; }
-.nav-tree .trow.agent.main .trow-mark img { width: 22px; height: 22px; display: block; }
-.nav-tree .trow.agent:not(.group) .trow-label { color: var(--fg); }
-.nav-tree .trow.agent:not(.group) .trow-mark:is(.running, .queued) { color: var(--surface); box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--accent); }
-.nav-tree .trow.agent:not(.group) .trow-mark.waiting { color: var(--surface); box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--warn); }
 .nav-tree .trow-note { flex-shrink: 0; font: 12px/1 var(--sans); }
 /* Кнопки строки в сайдбаре не занимают места, пока не нужны: без наведения название идёт на всю ширину. */
 .nav-tree .trow-action {
@@ -170,36 +137,9 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .nav-tree .trow:has(.editing) .trow-action { display: none; }
 
 /* Значок состояния — те же ○ и ●, что в деревьях: пустой — свободен, закрашенный — занят, цвет — чем */
-.status-dot { flex: none; width: 1.4ch; text-align: center; font: 12px/1 var(--mono); color: var(--muted); }
-.status-dot::before { content: "○"; }
-.status-dot:is(.running, .queued, .waiting, .failed, .done)::before { content: "●"; }
-:is(.status-dot, .trow-mark):is(.running, .queued) { color: var(--accent); animation: pulse 1s infinite alternate; }
-:is(.status-dot, .trow-mark).waiting, .trow-note.waiting { color: var(--warn); }
-.status-dot.failed { color: var(--danger); }
-.status-dot.done { color: var(--ok); }
+.trow-mark:is(.running, .queued) { color: var(--accent); animation: pulse 1s infinite alternate; }
+.trow-mark.waiting, .trow-note.waiting { color: var(--warn); }
 @keyframes pulse { from { opacity: .3; } to { opacity: 1; } }
-
-/* Над разговором с агентом: с кем и где разговор, «Очистить», «к основному», «убрать из сессии» */
-.chat-head {
-  display: flex; align-items: center; gap: 6px; flex: none; padding: 6px var(--gutter);
-  border-bottom: 1px solid var(--line); font-size: 13px;
-}
-.chat-head-title { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat-head button { color: var(--muted); }
-.chat-head button:hover:not(:disabled) { color: var(--fg); }
-
-/* Меню «добавить агента в сессию» */
-.menu {
-  position: fixed; z-index: 25; min-width: 200px; max-width: 280px; max-height: 50vh; overflow: auto; padding: 4px;
-  display: flex; flex-direction: column; gap: 1px; background: var(--surface); border: 1px solid var(--line-strong);
-  border-radius: var(--radius); box-shadow: 0 12px 32px var(--shadow); font: 14px/1.4 var(--sans);
-}
-.menu .hint { padding: 6px 8px; }
-.menu-item { display: flex; align-items: center; gap: 10px; border: 0; background: transparent; padding: 6px 8px; text-align: left; }
-.menu-mark {
-  width: 20px; height: 20px; flex: none; display: grid; place-items: center; border-radius: 50%;
-  background: var(--tone); color: var(--surface); font: 700 11px/1 var(--sans);
-}
 
 /* Сообщения */
 /* Лента и поле ввода — в моноширинном шрифте, как в терминале; рамки с подписями на кромке.
@@ -207,7 +147,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .messages { flex: 1; overflow: auto; padding: 20px var(--gutter) 8px; font: 14px/1.6 var(--mono); }
 .messages code, .messages pre { font-size: 13px; }
 /* Ответы и ходы за пределами экрана не раскладываются и не рисуются: длинная лента не тормозит ввод.
-   Только у них: content-visibility обрезает всё, что выходит за край, а у отчёта агента подпись сидит на рамке. */
+   Только у них: content-visibility обрезает всё, что выходит за край. */
 .messages > :is(.msg.assistant, .work) { content-visibility: auto; contain-intrinsic-size: auto 120px; }
 .msg { margin: 0 0 18px; }
 .msg.user { display: flex; justify-content: flex-end; }
@@ -221,23 +161,6 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .msg.assistant .text { overflow-wrap: anywhere; line-height: 1.6; }
 .msg .text > :first-child { margin-top: 0; }
 .msg .text > :last-child { margin-bottom: 0; }
-/* Отчёт агента — в рамке, как вызовы инструментов: имя агента на верхней кромке. */
-.msg.report {
-  position: relative; margin: 24px 0 18px; padding: 14px 12px 6px; border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--accent-2) 55%, transparent);
-}
-.report-head { position: absolute; top: -0.8em; left: 10px; font: 600 12px/1.6 var(--mono); color: var(--accent-2); }
-.report-head { right: 10px; overflow: hidden; }
-.report-head span { background: var(--frame-bg); padding: 0 6px; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
-/* Лента команды: переписка саб-агентов между собой — тихие строки, раскрываются по щелчку. */
-.team-line { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 2px dashed var(--accent-2); font-size: 13px; }
-.team-line summary { display: flex; gap: 8px; min-width: 0; cursor: pointer; list-style: none; color: var(--muted); }
-.team-line summary::-webkit-details-marker { display: none; }
-.team-line .team-route { flex: none; color: var(--accent-2); font-weight: 600; }
-.team-line .team-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.team-line[open] .team-preview { display: none; }
-.team-line .text { margin: 6px 0 2px; }
-.team-line .team-open { padding: 0; color: var(--accent-2); }
 /* Ход работы: инструменты и промежуточные реплики модели свёрнуты в одну строку над итогом. */
 .work { margin: 0 0 14px; font-size: 13px; }
 .work-head {
@@ -264,7 +187,6 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .event-route { flex: none; font-weight: 600; color: var(--accent-2); }
 .event-line.failed .event-route { color: var(--danger); }
 .event-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.msg.report.folded .text { max-height: 6.4em; overflow: hidden; mask-image: linear-gradient(to bottom, black 55%, transparent); }
 .msg-foot { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; margin-top: 6px; font: 12px/1.5 var(--mono); color: var(--muted); }
 .msg-foot .stats::before { content: "■ "; }
 .msg-action.push::before { content: "⧉ "; }
@@ -341,6 +263,7 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 
 /* Идущий ход — та же строка «ход работы», только с колесом: внутри шаги, рассуждения, текст и журнал. */
 .live-head { align-items: center; }
+.live-head .work-title { flex: none; white-space: nowrap; }
 /* Строка хода всегда в одну строку: длинное название этапа обрезается многоточием. */
 .live-head .work-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Файлы, созданные и изменённые за ход, — строкой в конце хода; щелчок открывает файл во вкладке «Файлы». */
@@ -367,36 +290,8 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 .empty strong { font-size: 22px; color: var(--fg); }
 .empty button { margin-top: 14px; }
 
-/* Низ чата: задачи саб-агентов и поле ввода */
+/* Низ чата: карточки и поле ввода */
 .chat-bottom { flex: none; padding: 14px var(--gutter) 16px; }
-.dock { position: relative; margin: 12px 0 10px; padding: 12px 6px 6px; border: 1px solid var(--line-strong); border-radius: 10px; }
-.dock.collapsed { padding: 6px 6px 0; }
-.dock.collapsed .tasks { display: none; }
-.dock-head {
-  position: absolute; top: -0.8em; left: 10px; right: 10px; display: flex; justify-content: space-between; gap: 8px;
-  border: 0; background: transparent; padding: 0; font: 12px/1.6 var(--mono); color: var(--muted);
-}
-.dock-head:hover:not(:disabled) { background: transparent; color: var(--fg); }
-.dock-title, .dock-summary { background: var(--frame-bg); padding: 0 6px; white-space: nowrap; }
-.dock-title { font-weight: 600; color: var(--accent-2); }
-.dock-caret { display: inline-block; transition: transform .15s; }
-.dock.collapsed .dock-caret { transform: rotate(-90deg); }
-.tasks { list-style: none; margin: 0; padding: 0; }
-.tasks li {
-  display: grid; grid-template-columns: auto minmax(60px, max-content) minmax(0, 1fr) auto; align-items: center; gap: 10px;
-  padding: 3px 6px; border-radius: 6px; font-size: 13px; cursor: pointer;
-}
-.tasks li:hover { background: var(--surface-2); }
-.task-agent { font: 600 12.5px var(--mono); white-space: pre; }
-.task-guide { font-weight: 400; color: var(--line-strong); }
-.task-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
-.task-state { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
-.task-state.running, .task-state.queued { color: var(--accent); }
-.task-state.waiting { color: var(--warn); }
-.task-state.done { color: var(--ok); }
-.task-state.failed { color: var(--danger); }
-.tasks li.more { display: block; font: 12px var(--mono); color: var(--muted); }
-
 /* Поле ввода в рамке: модель, права и контекст — на верхней кромке, подсказки — на нижней */
 .frame { position: relative; border: 1px solid var(--line-strong); border-radius: 6px; transition: border-color .15s; }
 .frame:focus-within { border-color: var(--accent-2); }
@@ -504,27 +399,7 @@ pre:hover > .copy, .copy:focus-visible { opacity: 1; }
 .card pre { white-space: pre-wrap; max-height: 260px; overflow: auto; font-size: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px; margin: 4px 0; }
 .card .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .card .actions button, .card > button { font-size: 13px; padding: 3px 10px; }
-.card .actions select, .route-options select { font-size: 13px; padding: 3px 6px; width: auto; }
-.route-options { display: grid; gap: 6px; margin-top: 4px; }
-.route-option {
-  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
-  padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg);
-}
-.route-option:hover:not(:disabled) { border-color: var(--accent); }
-.route-option.suggested { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
-.route-mark {
-  flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; overflow: hidden;
-  background: var(--tone, var(--surface)); color: var(--surface); font: 700 12px/1 var(--sans);
-}
-.route-mark img { width: 100%; height: 100%; object-fit: cover; }
-.route-text { display: grid; min-width: 0; flex: 1; }
-.route-name { font-weight: 600; font-size: 13px; }
-.route-about { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-.route-tag { flex: none; font-size: 11px; color: var(--accent); }
-.routes { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.routes li { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.routes li span { flex: 1; overflow-wrap: anywhere; }
-.routes li button { font-size: 12px; padding: 1px 8px; }
+.card .actions select { font-size: 13px; padding: 3px 6px; width: auto; }
 .diff { margin: 4px 0; max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font: 12px/1.5 var(--mono); }
 .diff-summary { position: sticky; top: 0; padding: 2px 8px; background: var(--surface-2); color: var(--muted); }
 .diff-line { display: flex; min-width: max-content; }
@@ -731,6 +606,12 @@ dialog.wide { width: min(680px, calc(100vw - 32px)); }
 .provider-probe { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .provider-models { display: flex; flex-wrap: wrap; gap: 4px; max-height: 120px; overflow: auto; }
 .provider-model { font: 12px var(--mono); padding: 1px 6px; border-radius: 4px; background: var(--surface-2); }
+/* Правила агента: поле во всю ширину, встроенный промпт — свёрнут и прокручивается внутри. */
+#rules-text { font: 13px/1.5 var(--mono); resize: vertical; }
+.rules-actions { display: flex; align-items: center; gap: 8px; }
+.rules-actions span { flex: 1; }
+.rules-builtin summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.rules-builtin pre { max-height: 260px; overflow: auto; white-space: pre-wrap; font: 12px/1.45 var(--mono); color: var(--muted); }
 /* Значок в строке модели — размером с текст строки, иначе его срезает рамка поля ввода. */
 .providers-open { flex: none; border: 0; background: transparent; padding: 0 4px; font: 13px/1 var(--mono); color: var(--muted); }
 .providers-open:hover:not(:disabled) { background: var(--surface-2); color: var(--fg); }
@@ -738,11 +619,6 @@ dialog.wide { width: min(680px, calc(100vw - 32px)); }
 .settings-open:hover:not(:disabled) { color: var(--fg); }
 dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .dialog-actions { display: flex; gap: 8px; }
-#agent-dialog { width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
-#agent-prompt { font: 13px/1.5 var(--mono); resize: vertical; }
-.checks { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px 8px; margin: 0; }
-.checks legend { font-size: 13px; padding: 0 4px; }
-.checks > div { display: flex; flex-wrap: wrap; gap: 2px 14px; max-height: 140px; overflow: auto; }
 dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 12px var(--mono); }
 .dialog-actions span { flex: 1; }
 .folders { border: 1px solid var(--line); border-radius: var(--radius); max-height: 220px; overflow: auto; }
@@ -753,63 +629,42 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 #source-dialog { width: min(1200px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; overflow: hidden; }
 #source-dialog .source { max-height: calc(100vh - 34px); padding: 16px; box-sizing: border-box; }
 #source-path { margin: 0; font: 12px var(--mono); overflow-wrap: anywhere; }
-#source-files { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 6px; }
-#source-files h4 { margin: 6px 0 0; font: 600 12px var(--mono); color: var(--muted); }
-/* Поля не сжимаются под высоту окна: каждое — во весь свой текст, прокручивается список файлов. */
-#source-files > * { flex: none; }
+/* Окно папки: слева дерево файлов, справа открытый файл — его поле занимает всю высоту и прокручивается само. */
+#source-dialog .source { height: calc(100vh - 34px); }
+.source-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); gap: 12px; }
+.source-tree { overflow: auto; border-right: 1px solid var(--line); padding-right: 8px; }
+.source-pane { min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+.source-file-name { font: 600 12px var(--mono); color: var(--muted); }
 .source-editor {
-  width: 100%; box-sizing: border-box; min-height: 120px; resize: vertical; overflow: hidden;
+  flex: 1; min-height: 0; width: 100%; box-sizing: border-box; resize: none; overflow: auto;
   white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(--mono);
   background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px;
 }
-#source-status { overflow-wrap: anywhere; }
-/* Просмотр: поле ровно по тексту и чуть мельче — длинный промпт помещается целиком без прокрутки. */
-.source-editor:read-only { color: var(--muted); min-height: 0; resize: none; font-size: 12px; line-height: 1.45; padding: 8px 10px; }
-/* Основной агент в списке агентов — выделен: он руководитель, остальные ниже. */
-.main-agent .trow-label { font-weight: 600; color: var(--accent); }
+#source-dialog .dialog-actions { align-items: center; flex-wrap: wrap; }
+#source-status { flex: 1; overflow-wrap: anywhere; }
+#source-delete { color: var(--muted); }
+#source-delete:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); background: transparent; }
+@media (max-width: 900px) {
+  .source-body { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .source-tree { border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 6px; max-height: 120px; }
+}
+/* Переключатель вкл/выкл в строке дерева (серверы и инструменты MCP). */
+.switch {
+  flex: none; position: relative; width: 30px; height: 16px; padding: 0; margin: 0 6px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: var(--surface-2);
+}
+.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--muted); transition: transform .15s;
+}
+.switch.on { background: color-mix(in srgb, var(--ok) 25%, transparent); border-color: var(--ok); }
+.switch.on::after { transform: translateX(14px); background: var(--ok); }
+.switch:hover:not(:disabled) { border-color: var(--accent-2); }
+.trow.off .trow-label { color: var(--muted); text-decoration: line-through; }
 .toast {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 30; max-width: min(560px, calc(100vw - 32px));
   background: var(--danger); color: var(--accent-fg); padding: 8px 14px; border-radius: var(--radius); box-shadow: 0 8px 24px var(--shadow);
 }
-
-/* Холст команды: точечная сетка едет вместе с панорамой, карточки двигаются мышью. */
-#view-team { display: flex; flex-direction: column; }
-.team-canvas {
-  position: relative; flex: 1; min-height: 360px; margin-top: 12px; overflow: hidden; cursor: grab; touch-action: none;
-  border: 1px solid var(--line); border-radius: var(--radius);
-  background-color: var(--bg); background-image: radial-gradient(var(--line-strong) 1px, transparent 1.2px); background-size: 20px 20px;
-}
-.team-canvas.panning { cursor: grabbing; }
-.team-stage { position: absolute; left: 0; top: 0; width: 1px; height: 1px; transform-origin: 0 0; }
-.team-edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; color: var(--muted); pointer-events: none; }
-/* Связи справочника: между саб-агентами — тонкие линии, у основного (руководителя) — акцентные;
-   во время работы агентов их линии бегут. Подсказка с тем, кто к кому обращается, — при наведении. */
-.team-edges .edge { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; pointer-events: stroke; }
-.team-edges .edge-group.lead { color: var(--accent-2); }
-.team-edges .edge-group.lead .edge { stroke-width: 2; }
-.team-edges .edge-group:not(.lead) .edge { stroke-dasharray: 2 5; }
-.team-edges .edge-group.active { color: var(--accent); }
-.team-edges .edge-group.active .edge { stroke-dasharray: 6 6; animation: edge-flow .8s linear infinite; }
-.team-node.main { border-color: var(--accent-2); }
-@keyframes edge-flow { to { stroke-dashoffset: -14; } }
-@media (prefers-reduced-motion: reduce) { .team-edges .edge-group.active .edge { animation: none; } }
-.team-node {
-  position: absolute; width: 240px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius);
-  background: var(--surface); cursor: grab; text-align: left; display: flex; flex-direction: column; gap: 2px;
-  user-select: none; touch-action: none; box-shadow: 0 4px 14px var(--shadow);
-}
-.team-node:hover { border-color: var(--accent); }
-.team-node.dragging { cursor: grabbing; z-index: 1; box-shadow: 0 10px 28px var(--shadow); }
-.team-node.current { outline: 2px solid var(--accent); outline-offset: 2px; }
-.team-node .node-head { display: flex; align-items: center; gap: 6px; font-weight: 600; }
-.team-node .node-state { font: 12px var(--mono); color: var(--muted); }
-.team-node .node-task { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.zoom-controls {
-  position: absolute; right: 12px; bottom: 12px; display: flex; overflow: hidden; cursor: default;
-  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface);
-}
-.zoom-controls button { min-width: 32px; padding: 3px 9px; border: 0; border-radius: 0; background: transparent; font: 12px var(--mono); }
-.zoom-controls button + button { border-left: 1px solid var(--line); }
 
 /* Файлы — панель справа от чата: дерево | файл, граница между ними тоже тянется. */
 .files-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
@@ -824,7 +679,8 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 .files-pane { min-width: 0; min-height: 0; }
 .files-path { display: flex; min-width: 0; font-size: 13px; white-space: nowrap; }
 .files-dir { color: var(--muted); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.files-path strong { flex: none; margin-left: .3em; }
+.files-path strong { flex: none; }
+.files-sep { margin: 0 .3em; }
 .files-actions { display: flex; gap: 6px; align-items: center; flex: none; }
 .files-body { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .files-body.editing { overflow: hidden; }
@@ -838,6 +694,9 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 .code-mark { position: absolute; left: 0; right: 0; pointer-events: none; background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 3px 0 var(--accent); }
 .code-mark:not([style]) { display: none; }
 .files-markdown { padding: 8px 20px 20px; max-width: 980px; min-width: 0; flex: 1; }
+/* Широкая таблица в файле прокручивается всей панелью: у своей прокрутки полоса стояла бы под последней строкой,
+   за краем экрана, и правые колонки казались бы обрезанными. */
+.reader.files-markdown .markdown-table-container { overflow: visible; }
 .md-lines { position: relative; display: flex; min-height: 100%; }
 .md-gutter {
   position: relative; flex: none; width: 3.6em; user-select: none; border-right: 1px solid var(--line); background: var(--surface);
@@ -864,7 +723,6 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
   .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 20; width: min(320px, 88vw); box-shadow: 4px 0 24px var(--shadow); }
   .messages { padding: 14px 12px 6px; }
   .chat-bottom { padding: 14px 10px 10px; }
-  .chat-head { padding: 6px 8px; }
   #model-select { max-width: 130px; }
   .meter-text, .usage .speed, .stop-hint, .frame-foot { display: none; }
   .split { grid-template-columns: 1fr; }
@@ -883,4 +741,174 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
   .trow-action { visibility: visible; }
   .nav-tree .trow-action { display: inline-grid; }
   .page { padding: 12px 16px; }
+}
+
+/* ---------- Возможности: четыре вида, карточки, заготовки и архив ---------- */
+.kind-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 14px 0 12px; }
+.kind-tab {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; text-align: left;
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.kind-tab:hover:not(:disabled) { border-color: var(--line-strong); }
+.kind-tab[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--surface); }
+.kind-tab-head { display: flex; align-items: center; gap: 8px; width: 100%; }
+.kind-tab-icon { width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: 6px; font-size: 13px; flex: none;
+  background: color-mix(in srgb, var(--kind) 14%, transparent); color: var(--kind); }
+.kind-tab[aria-pressed="true"] .kind-tab-icon { background: var(--accent); color: var(--accent-fg); }
+.kind-tab-label { font-weight: 600; }
+.kind-tab .count { margin-left: auto; font: 11px var(--mono); color: var(--muted); }
+.kind-tab-short { font-size: 12px; color: var(--muted); padding-left: 30px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+.capabilities { max-width: 1180px; }
+.cap-intro {
+  display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; margin-bottom: 14px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.cap-intro-icon {
+  flex: none; width: 34px; height: 34px; display: inline-grid; place-items: center; border-radius: 9px; font-size: 16px;
+  background: color-mix(in srgb, var(--kind, var(--accent)) 16%, transparent); color: var(--kind, var(--accent));
+}
+.cap-intro-text { flex: 1; min-width: 0; }
+.cap-intro-text p { margin: 0; font-size: 14px; line-height: 1.55; }
+.cap-intro-text .cap-intro-folder { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.cap-intro > button { flex: none; white-space: nowrap; }
+.cap-empty { margin: 4px 0 18px; }
+.cap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; margin-bottom: 8px; align-items: start; }
+.cap-card {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--surface); transition: border-color .15s;
+}
+.cap-card:hover { border-color: var(--line-strong); }
+.cap-card.ready { border-style: dashed; background: transparent; }
+.cap-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cap-card-head h4 { margin: 0; font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
+.cap-card-id { margin-left: auto; flex: none; font-size: 11px; color: var(--muted); }
+.cap-card-about { margin: 0; font-size: 13px; line-height: 1.5; }
+.cap-card-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.cap-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 2px; }
+.cap-card-actions button.danger { margin-left: auto; color: var(--muted); }
+.cap-card-actions button.danger:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); background: transparent; }
+.cap-needs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; }
+.cap-needs-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-right: 2px; }
+.cap-need { padding: 1px 8px; border-radius: 999px; background: var(--surface-2); font: 12px var(--mono); }
+.cap-need.optional { color: var(--muted); background: transparent; border: 1px dashed var(--line); }
+.cap-section { margin: 22px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.cap-section h3 { margin: 0; font-size: 15px; }
+.cap-section .hint { margin: 2px 0 0; }
+.cap-archive { margin: 22px 0 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.cap-archive summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--muted); }
+.cap-archive[open] summary { margin-bottom: 6px; color: var(--fg); }
+
+/* Виды шагов: у каждого свой цвет — на карточке скилла, в карточке запуска и в отчёте. */
+.kind-model { --kind: var(--accent-2); }
+.kind-agent { --kind: var(--cluster-5); }
+.kind-tool { --kind: var(--cluster-3); }
+.kind-command { --kind: var(--cluster-1); }
+.kind-script { --kind: var(--accent); }
+.kind-skill { --kind: var(--cluster-4); }
+.kind-badge {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 0 7px; border-radius: 999px; line-height: 18px;
+  font: 11px var(--mono); color: var(--kind); background: color-mix(in srgb, var(--kind) 13%, transparent);
+}
+.kind-icon { font-size: 10px; }
+
+/* Шаги скилла — нумерованный путь: кружок с номером, линия к следующему, вид шага и название. */
+.steps-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.steps-step { position: relative; padding-left: 0; }
+.steps-step:not(:last-child)::before {
+  content: ""; position: absolute; left: 10px; top: 22px; bottom: -2px; width: 1px; background: var(--line);
+}
+.steps-step summary {
+  display: flex; align-items: center; gap: 8px; padding: 3px 4px 3px 0; cursor: pointer; list-style: none; border-radius: 6px;
+  font-size: 13px; min-width: 0;
+}
+.steps-step summary::-webkit-details-marker { display: none; }
+.steps-step summary:hover .rs-title { color: var(--accent-2); }
+.rs-num {
+  flex: none; width: 21px; height: 21px; display: inline-grid; place-items: center; border-radius: 50%;
+  font: 600 11px var(--mono); color: var(--kind); border: 1px solid color-mix(in srgb, var(--kind) 55%, transparent);
+  background: var(--surface); position: relative; z-index: 1;
+}
+.rs-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-flag { flex: none; margin-left: auto; font: 11px var(--mono); color: var(--warn); }
+.rs-detail { margin: 2px 0 8px 29px; padding: 8px 10px; border-left: 2px solid color-mix(in srgb, var(--kind) 45%, transparent);
+  background: var(--bg); border-radius: 0 6px 6px 0; font-size: 12px; }
+.rs-prompt { margin: 0; white-space: pre-wrap; line-height: 1.5; }
+.rs-code, .steps-effects pre {
+  margin: 4px 0 0; padding: 6px 8px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 var(--mono);
+  background: var(--surface-2); border-radius: 6px; border: 0; max-height: 180px; overflow: auto;
+}
+.rs-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 10px; margin: 8px 0 0; }
+.rs-facts dt { color: var(--muted); }
+.rs-facts dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+.steps-problems { margin: 0; padding: 6px 10px 6px 26px; border-radius: 6px; font-size: 12px; color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent); }
+
+/* Окно правки: шпаргалка по шагам и поле id для нового скилла. */
+.source-help { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; font-size: 12px; }
+.source-help summary { cursor: pointer; color: var(--accent-2); font-weight: 500; }
+.source-help dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 8px 0 2px; }
+.source-help dt { font-family: var(--mono); color: var(--fg); white-space: nowrap; }
+.source-help dd { margin: 0; color: var(--muted); }
+.source-id { display: flex; flex-direction: column; gap: 4px; font-size: 13px; max-width: 360px; }
+.source-id input { font-family: var(--mono); }
+
+/* Карточка запуска шагов скилла в чате. */
+.card.steps-start { box-shadow: inset 3px 0 var(--accent); }
+.steps-section { margin: 10px 0 4px; font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.steps-inputs { display: grid; gap: 8px; }
+.steps-input { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: start; gap: 2px 10px; }
+.steps-input-name { padding-top: 6px; font: 600 13px var(--mono); overflow-wrap: anywhere; }
+.steps-input-optional { display: block; font: 400 11px var(--sans); color: var(--muted); }
+.steps-input textarea { width: 100%; min-height: 32px; resize: none; overflow: hidden; font-size: 13px; line-height: 1.45; background: var(--surface); }
+.steps-input-hint { grid-column: 2; font-size: 12px; color: var(--muted); }
+.steps-effects { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; }
+.steps-start .steps-list { margin-top: 2px; }
+.steps-start-status { align-self: center; font-size: 12px; color: var(--warn); }
+
+/* Шаги скилла в чате: идут — под строкой хода, готовы — отчётом по шагам. */
+.steps-live:empty { display: none; }
+.steps-live { margin: 6px 0 14px; }
+.steps-run { margin: 0 0 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.steps-run.failed { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); }
+.steps-run-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.steps-run-icon { font-weight: 700; color: var(--ok); }
+.steps-run.failed .steps-run-icon { color: var(--danger); }
+.steps-run-label { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.steps-run-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steps-run-meta { margin-left: auto; flex: none; font: 12px var(--mono); color: var(--muted); }
+.steps-run-inputs { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 6px 12px; font-size: 12px; border-bottom: 1px solid var(--line); }
+.steps-run-input { color: var(--muted); min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steps-run-input-name { font-family: var(--mono); color: var(--fg); margin-right: 6px; }
+.steps-run-error { margin: 0; padding: 6px 12px; font-size: 13px; color: var(--danger); border-bottom: 1px solid var(--line); }
+.steps-run-list { list-style: none; margin: 0; padding: 4px 0; }
+.run-step summary {
+  display: flex; align-items: center; gap: 8px; padding: 4px 12px; cursor: pointer; list-style: none; font-size: 13px; min-width: 0;
+}
+.run-step summary::-webkit-details-marker { display: none; }
+.run-step details.no-output summary { cursor: default; }
+.run-step summary:hover { background: var(--surface-2); }
+.run-step-icon { flex: none; width: 14px; text-align: center; font-weight: 700; color: var(--muted); }
+.run-step.done .run-step-icon { color: var(--ok); }
+.run-step.failed .run-step-icon { color: var(--danger); }
+.spinner.small { width: 10px; height: 10px; margin: 0 2px; }
+.run-step-num { flex: none; font: 11px var(--mono); color: var(--muted); width: 1.5em; }
+.run-step-title { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-step.pending .run-step-title, .run-step.skipped .run-step-title { color: var(--muted); }
+.run-step.running .run-step-title { font-weight: 600; }
+.run-step-tries { flex: none; font: 11px var(--mono); color: var(--warn); }
+.run-step-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.run-step-note code { margin-right: 4px; color: var(--accent-2); background: var(--surface-2); border-radius: 4px; padding: 0 5px; font-size: 11px; }
+.run-step.failed .run-step-note { color: var(--danger); }
+.run-step-time { flex: none; font: 11px var(--mono); color: var(--muted); }
+.run-step-body { margin: 2px 12px 8px 46px; padding: 8px 10px; border-left: 2px solid var(--line); font-size: 13px; max-height: 420px; overflow: auto; }
+.run-step-body :is(h1, h2, h3, h4) { font-size: 1em; margin: .6em 0 .3em; }
+.run-step-body pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 var(--mono); }
+
+@media (max-width: 900px) {
+  .kind-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cap-intro { flex-wrap: wrap; }
+  .steps-input { grid-template-columns: minmax(0, 1fr); }
+  .steps-input-hint { grid-column: 1; }
+  .run-step-title { max-width: 55%; }
 }

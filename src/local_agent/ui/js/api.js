@@ -53,8 +53,7 @@ async function stream(path, body, signal, onEvent) {
 }
 
 export const api = {
-  // Со скрытыми сессиями: разговоры агентов в сессиях и личные чаты с ними открываются из сайдбара и с холста.
-  sessions: () => request("/sessions?include_hidden=true"),
+  sessions: () => request("/sessions"),
   session: (id) => request(`/sessions/${id}`),
   createSession: (projectId) => request("/sessions", json("POST", projectId ? { project_id: projectId } : {})),
   renameSession: (id, title) => request(`/sessions/${id}/title`, json("PUT", { title })),
@@ -65,26 +64,10 @@ export const api = {
   messages: (id) => request(`/sessions/${id}/messages`),
   send: (id, content, signal, onEvent, retry = false, attachments = []) =>
     stream(`/sessions/${id}/turns/stream`, { content, retry, attachments }, signal, onEvent),
+  // «▶ Запустить по шагам»: ход сразу начинается карточкой шагов скилла.
+  runSkill: (id, skill, signal, onEvent) => stream(`/sessions/${id}/turns/stream`, { skill }, signal, onEvent),
   // Картинка как data URL → её имя для сообщения.
   attach: (data) => request("/attachments", json("POST", { data })),
-  team: (id) => request(`/sessions/${id}/team`),
-  link: (agentId, target) => request(`/agents/${encodeURIComponent(agentId)}/links/${encodeURIComponent(target)}`, { method: "PUT" }),
-  unlink: (agentId, target) => request(`/agents/${encodeURIComponent(agentId)}/links/${encodeURIComponent(target)}`, { method: "DELETE" }),
-  teamChat: (id, agentId) => request(`/sessions/${id}/team/${encodeURIComponent(agentId)}/chat`, { method: "POST" }),
-  // Убрать агента из сессии: его разговор в ней удаляется.
-  removeAgent: (id, agentId) => request(`/sessions/${id}/team/${encodeURIComponent(agentId)}`, { method: "DELETE" }),
-  clearSession: (id) => request(`/sessions/${id}/clear`, { method: "POST" }),
-
-  agents: () => request("/agents"),
-  // Справочник команды: все агенты и кто к кому может обращаться.
-  agentsTeam: () => request("/agents/team"),
-  // Переписка саб-агентов между собой в сессии — строки ленты команды в основном чате.
-  teamLog: (id) => request(`/sessions/${id}/team/log`),
-  saveMainInstructions: (text) => request("/agents/main/instructions", json("PUT", { text })),
-  createAgent: (fields) => request("/agents", json("POST", fields)),
-  updateAgent: (id, fields) => request(`/agents/${encodeURIComponent(id)}`, json("PUT", fields)),
-  // Личный чат с агентом вне проектов; модель — выбранная под полем ввода.
-  agentChat: (id, provider, model) => request(`/agents/${encodeURIComponent(id)}/chat`, json("POST", { provider, model })),
   resume: (id, decision, signal, onEvent) => stream(`/sessions/${id}/resume`, decision, signal, onEvent),
   // Ход идёт на сервере независимо от вкладки: к нему можно подключиться заново и остановить его.
   turn: (id) => request(`/sessions/${id}/turn`),
@@ -101,7 +84,6 @@ export const api = {
   saveFile: (projectId, path, content) => request(`/projects/${projectId}/files/content?${q({ path })}`, json("PUT", { content })),
   moveFile: (projectId, path, newPath) => request(`/projects/${projectId}/files/move?${q({ path })}`, json("POST", { new_path: newPath })),
   deleteFile: (projectId, path) => request(`/projects/${projectId}/files?${q({ path })}`, { method: "DELETE" }),
-  forgetRoute: (id, kind) => request(`/projects/${id}/routes?${q({ kind })}`, { method: "DELETE" }),
   deleteProject: (id) => request(`/projects/${id}`, { method: "DELETE" }),
   folders: (path) => request(`/folders${path ? `?${q({ path })}` : ""}`),
 
@@ -113,6 +95,9 @@ export const api = {
   deleteProvider: (id) => request(`/providers/${id}`, { method: "DELETE" }),
   setDefaultModel: (provider, model) => request("/providers/default", json("PUT", { provider, model })),
   models: (provider) => request(`/models?${q({ provider })}`),
+  // Правила основного агента и его встроенный промпт (только для просмотра).
+  instructions: () => request("/instructions"),
+  saveInstructions: (text) => request("/instructions", json("PUT", { text })),
 
   attention: (sessionId) => request(`/attention${sessionId ? `?${q({ session_id: sessionId })}` : ""}`),
 
@@ -121,13 +106,19 @@ export const api = {
   archive: (kind, id) => request(`/capabilities/${kind}/${encodeURIComponent(id)}/archive`, { method: "POST" }),
   enable: (kind, id) => request(`/capabilities/library/${kind}/${encodeURIComponent(id)}`, { method: "POST" }),
   restore: (kind, archiveId) => request(`/capabilities/${kind}/restore/${encodeURIComponent(archiveId)}`, { method: "POST" }),
+  createCapability: (kind, id, text) => request(`/capabilities/${kind}`, { method: "POST", body: JSON.stringify({ id, text }) }),
   saveSource: (kind, id, files) => request(`/capabilities/${kind}/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ files }) }),
   purge: (kind, archiveId) => request(`/capabilities/${kind}/archive/${encodeURIComponent(archiveId)}`, { method: "DELETE" }),
   reloadCapabilities: () => request("/capabilities/reload", { method: "POST" }),
   setSecret: (name, value) => request(`/capabilities/secrets/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify({ value }) }),
   deleteSecret: (name) => request(`/capabilities/secrets/${encodeURIComponent(name)}`, { method: "DELETE" }),
   checkConnector: (id) => request(`/capabilities/connectors/${encodeURIComponent(id)}/check`, { method: "POST" }),
+  installPackages: (requirements) => request("/capabilities/packages", json("POST", { requirements })),
   uninstallPackage: (name) => request(`/capabilities/packages/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  // Переключатели MCP: состояние сохраняется в data/mcp.json и действует сразу.
+  switchServer: (name, enabled) => request(`/capabilities/mcp/${encodeURIComponent(name)}`, json("PUT", { enabled })),
+  switchTool: (name, tool, enabled) =>
+    request(`/capabilities/mcp/${encodeURIComponent(name)}/tools/${encodeURIComponent(tool)}`, json("PUT", { enabled })),
 
   wiki: () => request("/wiki"),
   wikiSearch: (query) => request(`/wiki/search?${q({ q: query })}`),

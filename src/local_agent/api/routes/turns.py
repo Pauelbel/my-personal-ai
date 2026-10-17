@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from local_agent.api.routes.sessions import get_session_service
 from local_agent.core.runtime import AgentRuntime, AgentRuntimeError, SessionBusyError, SessionNotFoundError
@@ -29,10 +29,12 @@ class TurnCreate(BaseModel):
     attachments: list[str] = []
     # Повтор после сбоя: реплика уже сохранена и осталась без ответа.
     retry: bool = False
+    # «▶ Запустить по шагам» на карточке скилла: ход начинается карточкой его шагов, без запроса к модели.
+    skill: str | None = None
 
     @model_validator(mode="after")
     def not_empty(self):
-        if not self.content and not self.attachments:
+        if not self.content and not self.attachments and not self.skill:
             raise ValueError("Пустое сообщение")
         return self
 
@@ -46,8 +48,8 @@ class Decision(BaseModel):
     selected: list[int] | None = None
     # Утвердить и дальше не спрашивать про эту группу инструментов (например, браузер) в этой сессии.
     trust: bool = False
-    # Карточка «Кто сделает»: id выбранного агента или main.
-    choice: str | None = Field(default=None, max_length=64)
+    # Карточка шагов скилла: значения полей «Нужно от вас».
+    inputs: dict[str, str] | None = None
 
 
 def get_agent_runtime(request: Request) -> AgentRuntime:
@@ -103,8 +105,15 @@ async def stream_turn(
     if payload.attachments and session.pending:
         # Сообщение при карточке — ответ на неё словами, картинку к такому ответу не приложить.
         raise HTTPException(status_code=409, detail="Ход ждёт решения по карточке: сначала ответьте на неё, картинку пришлите следующим сообщением")
+    if payload.skill is not None:
+        skill = request.app.state.skill_registry.get(payload.skill)
+        if skill is None or skill.steps is None:
+            raise HTTPException(status_code=400, detail=f"У скилла «{payload.skill}» нет шагов")
+        if session.pending:
+            raise HTTPException(status_code=409, detail="Ход ждёт решения по карточке: сначала ответьте на неё")
     turn = hub.start(session_id, runtime.stream_turn(
         session_id, payload.content, request.state.request_id, retry=payload.retry, attachments=tuple(payload.attachments),
+        skill=payload.skill,
     ))
     return _follow(hub, turn)
 

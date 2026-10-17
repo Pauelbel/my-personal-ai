@@ -158,7 +158,6 @@ def test_file_write_tools_cannot_change_memory(tmp_path):
 
 def test_app_configures_memory_write_protection(tmp_path):
     settings = Settings(
-        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory",
@@ -172,3 +171,14 @@ def test_app_configures_memory_write_protection(tmp_path):
         assert result.is_error
         assert "только через раздел" in result.content
         assert (settings.memory_path / "preferences.md").read_text(encoding="utf-8") == "# Предпочтения\n"
+
+
+def test_path_copied_from_breadcrumbs_with_spaces_around_slashes_is_found(tmp_path):
+    folder = tmp_path / "softwlc_md" / "02_Модули SoftWLC" / "01_Личный Кабинет"
+    folder.mkdir(parents=True)
+    (folder / "index.md").write_text("Личный кабинет B2B", encoding="utf-8")
+
+    read = asyncio.run(ReadFileTool().execute(
+        {"path": "softwlc_md / 02_Модули SoftWLC / 01_Личный Кабинет /\nindex.md"}, tmp_path,
+    ))
+    assert not read.is_error and read.content == "Личный кабинет B2B"

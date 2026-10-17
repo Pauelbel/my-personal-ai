@@ -1,5 +1,6 @@
-// Окно «Модели»: провайдеры (Ollama, LM Studio, OpenAI-совместимый API с ключом), проверка подключения
-// со списком моделей и модель по умолчанию. Провайдеры из .env только показываются — меняются в .env.
+// Окно «Настройки»: провайдеры моделей (Ollama, LM Studio, OpenAI-совместимый API с ключом), проверка подключения
+// со списком моделей, модель по умолчанию и правила основного агента. Провайдеры из .env только показываются —
+// меняются в .env.
 import { api } from "./api.js";
 import { el } from "./chat.js";
 
@@ -22,13 +23,36 @@ export function initProviders({ onChanged }) {
   $("#provider-form").addEventListener("submit", save);
   $("#provider-kind").addEventListener("change", syncKind);
   $("#provider-default").addEventListener("change", saveDefault);
+  $("#rules-save").addEventListener("click", saveRules);
+  $("#rules-text").addEventListener("input", () => { $("#rules-status").textContent = ""; });
 }
 
-export async function openProviders() {
+async function openProviders() {
   closeForm();
   $("#providers-note").textContent = "";
+  $("#rules-status").textContent = "";
   $("#providers-dialog").showModal();
-  await refresh();
+  await Promise.all([refresh(), loadRules()]);
+}
+
+// Правила основного агента — поверх встроенного промпта; сам промпт только показывается.
+async function loadRules() {
+  try {
+    const rules = await api.instructions();
+    $("#rules-text").value = rules.instructions;
+    $("#rules-builtin").textContent = rules.builtin;
+  } catch (error) {
+    $("#rules-status").textContent = error.message;
+  }
+}
+
+async function saveRules() {
+  try {
+    $("#rules-text").value = (await api.saveInstructions($("#rules-text").value)).instructions;
+    $("#rules-status").textContent = "Сохранено: действуют со следующего ответа";
+  } catch (error) {
+    $("#rules-status").textContent = error.message;
+  }
 }
 
 async function refresh() {

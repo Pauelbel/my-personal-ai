@@ -1,17 +1,15 @@
-// Точка входа интерфейса: агенты, проекты и сессии, чат со стримингом, карточки решений, задачи саб-агентов, разделы.
+// Точка входа интерфейса: проекты и сессии, чат со стримингом, карточки решений, разделы.
 import { initial, tone } from "./marks.js";
 import { fitInput, plural, recall, remember } from "./util.js";
 import { api } from "./api.js";
 import { imageInput } from "./attach.js";
-import { StreamingMessage, el, parse, renderMessages, scrollDown, setAgentNames } from "./chat.js";
-import { renderCards, renderDock } from "./panel.js";
+import { STEPS_TOOLS, StreamingMessage, el, parse, renderMessages, scrollDown } from "./chat.js";
+import { renderCards } from "./panel.js";
 import { initFiles, openPath, revealChange, showFiles } from "./files.js";
-import { reloadCapabilities, saveMemory, showCapabilities, showMemory, showWiki, wikiKeys } from "./pages.js";
+import { initFolder, reloadCapabilities, saveMemory, showCapabilities, showMemory, showWiki, wikiKeys } from "./pages.js";
 import { initWikiChat, LINT_PROMPT, refreshWikiChat, sendWiki } from "./wikichat.js";
 import { makeResizable } from "./resize.js";
-import { initAgentForm, openAgentForm, openMainForm } from "./agents.js";
 import { initProviders } from "./providers.js";
-import { renderTeam } from "./team.js";
 import { editLabel, rowAction, treeRow } from "./tree.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -19,7 +17,6 @@ const POLL_MS = 30000;
 // События приходят пачками (каждое сообщение, каждая запись сессии): перечитываем после короткой паузы.
 const EVENT_DELAY_MS = 150;
 const SEP = "\u0000";
-const RUNNING = new Set(["queued", "running"]);
 // Узкий экран: панель проектов выезжает поверх чата и закрывается после выбора сессии.
 const narrow = window.matchMedia("(max-width: 900px)");
 
@@ -29,8 +26,6 @@ let images = null;
 const state = {
   sessions: [],
   projects: [],
-  // Саб-агенты для блока «Агенты»: с личным чатом (chat_id) и тем, чем каждый занят (status).
-  agents: [],
   // Сессия, история которой загружена в state.messages: только по ней можно судить, что сессия пуста.
   loaded: null,
   current: null,
@@ -42,16 +37,15 @@ const state = {
   bubble: null,
   // Сессии, по карточкам которых решение уже отправлено и ход продолжается в фоне.
   resuming: new Set(),
-  // Команда открытой сессии (основной агент и саб-агенты) и последний неудачный ход для «Повторить».
-  team: null,
+  // Последний неудачный ход — для «Повторить».
   failed: null,
   seenUpdate: null,
   folder: null,
   editingProject: null,
   // Очередь сообщений открытой сессии: уходят на сервере после ответа.
   queue: [],
-  // Карточки решений и задачи саб-агентов из последнего опроса; offline — сервер не ответил на опрос.
-  attention: { cards: [], tasks: [] },
+  // Карточки решений из последнего опроса; offline — сервер не ответил на опрос.
+  attention: { cards: [] },
   offline: false,
   // Какую версию каждой сессии пользователь уже видел: более свежие помечаются «новое».
   seen: recallJson("seen", {}),
@@ -89,16 +83,15 @@ function recallJson(key, fallback) {
 // ---------- сессии и проекты ----------
 
 async function loadSessions() {
-  [state.sessions, state.projects, state.agents] = await Promise.all([api.sessions(), api.projects(), api.agents()]);
+  [state.sessions, state.projects] = await Promise.all([api.sessions(), api.projects()]);
   state.sessions.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-  setAgentNames(state.agents);
   markSeen();
 }
 
 // Сессию, которую видим впервые, считаем прочитанной: «новое» — только про ответы, пришедшие после этого.
 function markSeen() {
   const seen = {};
-  for (const session of state.sessions.filter((item) => !item.hidden)) {
+  for (const session of state.sessions) {
     seen[session.id] = session.id === state.current || !state.seen[session.id] ? session.updated_at : state.seen[session.id];
   }
   if (JSON.stringify(seen) === JSON.stringify(state.seen)) return;
@@ -116,7 +109,6 @@ async function selectSession(id) {
   renderQueue();
   remember("session", id);
   state.messages = [];
-  state.teamLog = [];
   // История новой сессии ещё не пришла: пока она не загружена, пустой эту сессию не считаем.
   state.loaded = null;
   state.seenUpdate = current()?.updated_at ?? null;
@@ -128,16 +120,14 @@ async function selectSession(id) {
   await loadMessages();
   void syncTurn();
   void refreshPanel();
-  void refreshTeam();
 }
 
-// Пустая сессия проекта: история загружена и в ней ничего нет, ход не идёт, агентов в ней нет.
-// Пока что-то из этого неизвестно (история или команда ещё не пришли), сессию считаем непустой.
+// Пустая сессия проекта: история загружена и в ней ничего нет, ход не идёт. Пока история не пришла,
+// сессию считаем непустой.
 function isBlank(session) {
-  if (!session || session.kind !== "chat" || session.parent_id || session.hidden) return false;
+  if (!session) return false;
   if (state.loaded !== session.id || state.messages.length || session.pending) return false;
-  if (state.streaming === session.id || state.resuming.has(session.id)) return false;
-  return state.team?.owner_id === session.id && !state.team.nodes.some((node) => node.id !== "main" && node.member);
+  return state.streaming !== session.id && !state.resuming.has(session.id);
 }
 
 async function discardSession(id) {
@@ -199,7 +189,6 @@ function latestProject() {
 function showWelcome() {
   state.current = null;
   state.messages = [];
-  state.team = null;
   showView("chat");
   const empty = el("div", "empty");
   const mascot = el("img");
@@ -220,20 +209,17 @@ function lintWiki() {
   void sendWiki(LINT_PROMPT);
 }
 
-// Ход в сессии ждёт решения по карточке, идёт сейчас или в ней работают саб-агенты.
+// Ход в сессии ждёт решения по карточке или идёт сейчас.
 function sessionStatus(session) {
-  const { cards, tasks } = state.attention;
-  if (session.pending || cards.some((card) => card.owner_id === session.id)) return "waiting";
-  if (state.streaming === session.id || state.resuming.has(session.id) || state.attention.running?.includes(session.id)
-    || tasks.some((task) => task.owner_id === session.id && RUNNING.has(task.status))) return "running";
+  if (session.pending || state.attention.cards.some((card) => card.owner_id === session.id)) return "waiting";
+  if (state.streaming === session.id || state.resuming.has(session.id) || state.attention.running?.includes(session.id)) return "running";
   return "idle";
 }
 
-// Сайдбар: агенты, под ними дерево «проект → сессии». Агенты сессии — кружками над чатом.
+// Сайдбар: дерево «проект → сессии».
 function renderSidebar() {
-  const sessions = state.sessions.filter((session) => !session.hidden);
-  // Открыт разговор с агентом в сессии: в дереве отмечена сессия, которой он принадлежит.
-  const marked = current()?.parent_id ?? state.current;
+  const sessions = state.sessions;
+  const marked = state.current;
   const tree = state.projects.map((project) => ({
     id: project.id,
     name: project.name,
@@ -248,52 +234,19 @@ function renderSidebar() {
       marked: session.id === marked,
     })),
   }));
-  const agents = state.agents.map(({ id, name, description, status, builtin }) => ({ id, name, description, status, builtin }));
   // Пока название правят, дерево не перерисовывается: поле ввода пропало бы.
   if ($("#session-list .trow-input")) {
     drawn.delete("sidebar");
     return;
   }
-  if (!changed("sidebar", { tree, agents, open: state.current })) return;
-  $("#agent-list").replaceChildren(...(agents.length
-    ? agents.map(agentNode)
-    : [treeRow({ label: "агентов пока нет", mark: "" })]));
+  if (!changed("sidebar", { tree, open: state.current })) return;
   $("#session-list").replaceChildren(...(tree.length
     ? tree.flatMap(projectNode)
     : [treeRow({ label: "проектов пока нет", mark: "" })]));
 }
 
-const BUSY = new Set(["running", "queued", "waiting"]);
-
-// Агент в блоке «Агенты»: щелчок — личный чат, ✎ — форма, × — в архив. Обводка значка — агент где-то работает.
-// Основной закреплён первым: значок — маскот, щелчок — общий чат вне проектов, ✎ — свои правила, удалить нельзя.
-function agentNode(agent) {
-  const personal = current()?.kind === "agent" && current().agent_id === agent.id;
-  const row = treeRow({
-    label: agent.name, title: agent.description, current: personal,
-    mark: agent.builtin ? "" : initial(agent.name), state: BUSY.has(agent.status) ? agent.status : "",
-    onClick: () => openPersonal(agent.id),
-    extra: agent.builtin
-      ? [rowAction("✎", "Дополнительные инструкции основного агента", () => editAgent(agent.id))]
-      : [
-        rowAction("✎", "Изменить агента", () => editAgent(agent.id)),
-        rowAction("×", "Убрать агента в архив", () => archiveAgent(agent)),
-      ],
-  });
-  row.classList.add("agent");
-  const mark = row.querySelector(".trow-mark");
-  if (agent.builtin) {
-    row.classList.add("main");
-    const mascot = el("img");
-    mascot.src = "/ui/assets/meepo-mascot.png";
-    mascot.alt = "";
-    mark.append(mascot);
-  } else mark.style.setProperty("--tone", tone(agent.id));
-  return row;
-}
-
-// Проект — цветной значок с буквой и имя, его сессии — строки под ним. Точка у сессии — идёт ход или работают
-// саб-агенты, «ждёт» — нужна карточка; у свёрнутого проекта то же показывает обводка значка.
+// Проект — цветной значок с буквой и имя, его сессии — строки под ним. Точка у сессии — идёт ход,
+// «ждёт» — нужна карточка; у свёрнутого проекта то же показывает обводка значка.
 function projectNode(item) {
   const head = treeRow({
     label: item.name, group: true, open: item.open, mark: initial(item.name),
@@ -338,206 +291,6 @@ function sessionNode(item) {
   // Открыт разговор агента этой сессии: сама сессия не выделена плашкой, но отмечена.
   row.classList.toggle("marked", item.marked && !item.current);
   return row;
-}
-
-// Агенты сессии — кружки над чатом: Основной (маскот) и добавленные саб-агенты, щелчок переключает разговор,
-// обводка — агент работает или ждёт решения. ＋ — добавить агента. Рядом — имя того, с кем разговор сейчас.
-function renderAgentCircles(session) {
-  const owner = session?.parent_id ?? session?.id;
-  const team = session?.kind === "chat" && state.team?.owner_id === owner ? state.team : null;
-  // Общий и личные чаты вне проектов: ни агентов сессии, ни файлов — полоса не нужна.
-  $("#chat-bar").hidden = session?.kind !== "chat";
-  if (!team) $("#chat-activity").hidden = true;
-  $("#agent-circles").hidden = !team;
-  $("#agent-current").textContent = team && session.parent_id ? agentName(session) : team ? "Основной" : "";
-  const nodes = team ? team.nodes.filter((node) => node.id === "main" || node.member) : [];
-  const data = nodes.map(({ id, name, description, session_id, status, task, from }) => ({ id, name, description, session_id, status, task, from }));
-  renderActivity(data);
-  if (!changed("circles", [owner, state.current, data])) return;
-  $("#agent-circles").replaceChildren(...data.map((node) => agentCircle(node, owner)), ...(team ? [addCircle(owner)] : []));
-}
-
-// Под кружками — кто из агентов сейчас занят: кто ему поручил, что делает и в каком он состоянии.
-// Щелчок по строке открывает его разговор.
-const ACTIVITY = { running: "работает", queued: "в очереди", waiting: "ждёт вашего решения" };
-
-function renderActivity(nodes) {
-  // По цепочке: сначала поручения основного агента, затем то, что агенты поручили друг другу.
-  const busy = nodes.filter((node) => node.id !== "main" && BUSY.has(node.status))
-    .sort((a, b) => Number(Boolean(a.from) && a.from !== "Основной") - Number(Boolean(b.from) && b.from !== "Основной"));
-  const root = $("#chat-activity");
-  root.hidden = !busy.length;
-  if (!changed("activity", busy)) return;
-  root.replaceChildren(...busy.map((node) => {
-    const row = el("button", `activity-row ${node.status}`);
-    row.type = "button";
-    row.append(
-      el("span", `status-dot ${node.status}`),
-      el("span", "activity-route", `${node.from || "Основной"} → ${node.name}`),
-      el("span", "activity-task", node.task ?? ""),
-      el("span", "activity-state", ACTIVITY[node.status]),
-    );
-    row.title = "Открыть разговор агента";
-    row.addEventListener("click", () => openAgent(node));
-    return row;
-  }));
-}
-
-function agentCircle(node, owner) {
-  const main = node.id === "main";
-  const circle = el("button", `agent-circle${main ? " main" : ""}`);
-  circle.type = "button";
-  const open = main ? state.current === owner : node.session_id === state.current;
-  circle.setAttribute("aria-pressed", String(open));
-  const status = BUSY.has(node.status) ? node.status : "";
-  if (status) circle.classList.add(status);
-  circle.title = `${main ? "Основной" : node.name}${node.task ? ` — ${node.task}` : ""}${status === "waiting" ? " · ждёт решения" : ""}`;
-  circle.setAttribute("aria-label", main ? "Основной" : node.name);
-  if (main) {
-    const mascot = el("img");
-    mascot.src = "/ui/assets/meepo-mascot.png";
-    mascot.alt = "";
-    circle.append(mascot);
-  } else {
-    circle.textContent = initial(node.name);
-    circle.style.setProperty("--tone", tone(node.id));
-  }
-  circle.addEventListener("click", () => (main ? selectSession(owner) : openAgent(node)));
-  return circle;
-}
-
-function addCircle(owner) {
-  const add = el("button", "agent-circle add", "＋");
-  add.type = "button";
-  add.title = "Добавить агента в сессию";
-  add.setAttribute("aria-label", "Добавить агента в сессию");
-  add.addEventListener("click", (event) => agentMenu(event.currentTarget, owner));
-  return add;
-}
-
-// Меню «добавить агента в сессию» под кнопкой ＋ у сессии. Агент, который уже в ней, просто открывается.
-function agentMenu(anchor, sessionId) {
-  closeMenu();
-  const menu = el("div", "menu");
-  menu.id = "agent-menu";
-  menu.setAttribute("role", "menu");
-  // Основной агент и так ведёт каждую сессию: добавлять можно только саб-агентов.
-  const agents = state.agents.filter((agent) => !agent.builtin);
-  if (!agents.length) menu.append(el("p", "hint", "Саб-агентов пока нет: создайте его в блоке «Агенты»."));
-  for (const agent of agents) {
-    const item = el("button", "menu-item");
-    item.type = "button";
-    item.setAttribute("role", "menuitem");
-    item.title = agent.description;
-    const mark = el("span", "menu-mark", initial(agent.name));
-    mark.style.setProperty("--tone", tone(agent.id));
-    item.append(mark, el("span", "", agent.name));
-    item.addEventListener("click", () => {
-      closeMenu();
-      void addMember(sessionId, agent.id);
-    });
-    menu.append(item);
-  }
-  document.body.append(menu);
-  const box = anchor.getBoundingClientRect();
-  menu.style.left = `${Math.min(box.left, window.innerWidth - menu.offsetWidth - 8)}px`;
-  menu.style.top = `${Math.min(box.bottom + 4, window.innerHeight - menu.offsetHeight - 8)}px`;
-  menu.querySelector("button")?.focus();
-  // Закрывается щелчком мимо и Esc; щелчок, который меню открыл, до этого обработчика уже не дойдёт.
-  setTimeout(() => document.addEventListener("click", closeMenu, { once: true }));
-  menu.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      event.stopPropagation();
-      closeMenu();
-      anchor.focus();
-    }
-  });
-}
-
-function closeMenu() {
-  $("#agent-menu")?.remove();
-}
-
-async function addMember(sessionId, agentId) {
-  try {
-    const dialog = await api.teamChat(sessionId, agentId);
-    await loadSessions();
-    await selectSession(dialog.id);
-  } catch (error) {
-    toast(error);
-  }
-}
-
-async function removeMember(ownerId, node) {
-  if (!window.confirm(`Убрать агента «${node.name}» из сессии? Его разговор в ней удалится.`)) return;
-  try {
-    await api.removeAgent(ownerId, node.id);
-    await loadSessions();
-    if (!current()) await selectSession(ownerId);
-    else await refreshTeam();
-  } catch (error) {
-    toast(error);
-  }
-}
-
-// Личный чат с агентом вне проектов: создаётся при первом открытии с моделью, выбранной под полем ввода.
-async function openPersonal(agentId) {
-  const [provider, model] = $("#model-select").value.split(SEP);
-  try {
-    const session = await api.agentChat(agentId, provider || null, model || null);
-    await loadSessions();
-    await selectSession(session.id);
-  } catch (error) {
-    toast(error);
-  }
-}
-
-function editAgent(agentId) {
-  const agent = state.agents.find((item) => item.id === agentId);
-  if (agent?.builtin) openMainForm(agent, agentSaved);
-  else if (agent) void openAgentForm(agent, agentSaved);
-}
-
-async function agentSaved() {
-  await loadSessions();
-  render();
-  if (state.view === "capabilities") await showCapabilities(toast);
-  if (state.view === "team") await showTeamReference();
-}
-
-async function archiveAgent(agent) {
-  if (!window.confirm(`Убрать агента «${agent.name}» в архив? Файл останется, вернуть можно в «Возможности → Архив».`)) return;
-  try {
-    await api.archive("agent", agent.id);
-    await loadSessions();
-    // Открыт разговор с этим агентом: без агента он не работает, возвращаемся к обычной сессии.
-    if (current()?.agent_id === agent.id) {
-      const back = current().parent_id ?? state.sessions.find((item) => !item.hidden)?.id;
-      if (back) await selectSession(back);
-    }
-    render();
-  } catch (error) {
-    toast(error);
-  }
-}
-
-function agentName(session) {
-  return state.agents.find((agent) => agent.id === session.agent_id)?.name ?? session.task?.agent_name ?? session.agent_id;
-}
-
-// «Очистить»: разговор с агентом начинается заново, агент остаётся там же.
-async function clearDialog() {
-  const session = current();
-  if (!session || !window.confirm(`Очистить разговор с агентом «${agentName(session)}»? История удалится, агент останется.`)) return;
-  try {
-    await api.clearSession(session.id);
-    await loadSessions();
-    state.messages = [];
-    renderChat();
-    render();
-  } catch (error) {
-    toast(error);
-  }
 }
 
 function renameSession(row, item) {
@@ -587,7 +340,7 @@ async function deleteSession(session) {
     await api.deleteSession(session.id);
     await loadSessions();
     if (session.id === state.current) {
-      const next = state.sessions.find((item) => !item.hidden);
+      const next = state.sessions[0];
       if (next) await selectSession(next.id);
       else await newSession();
     }
@@ -620,34 +373,9 @@ function openProject(project = null) {
   $("#project-mode").value = project?.mode ?? "full";
   $("#project-error").textContent = "";
   $("#project-delete").hidden = !project;
-  showRoutes(project);
   closeOverlay();
   $("#project-dialog").showModal();
   void browse(project?.workspace ?? null);
-}
-
-// Запомненные маршруты проекта: «забыть» — и основной агент снова спросит, кто делает такие задачи.
-function showRoutes(project) {
-  const routes = Object.entries(project?.routes ?? {});
-  $("#project-routes-block").hidden = !routes.length;
-  const names = new Map(state.agents.map((agent) => [agent.id, agent.name]));
-  $("#project-routes").replaceChildren(...routes.map(([kind, who]) => {
-    const item = el("li");
-    const forget = el("button", "", "Забыть");
-    forget.type = "button";
-    forget.addEventListener("click", async () => {
-      try {
-        const updated = await api.forgetRoute(project.id, kind);
-        state.editingProject = updated;
-        showRoutes(updated);
-        await loadSessions();
-      } catch (error) {
-        $("#project-error").textContent = error.message;
-      }
-    });
-    item.append(el("span", "", `${kind} → ${who === "main" ? "Основной сам" : names.get(who) ?? who}`), forget);
-    return item;
-  }));
 }
 
 async function browse(path) {
@@ -706,7 +434,7 @@ async function deleteProject() {
     $("#project-dialog").close();
     await loadSessions();
     if (!current()) {
-      const next = state.sessions.find((item) => !item.hidden);
+      const next = state.sessions[0];
       if (next) await selectSession(next.id);
       else await newSession();
     }
@@ -807,11 +535,7 @@ async function send() {
     }
     return;
   }
-  if (!session.model) {
-    const [provider, model] = $("#model-select").value.split(SEP);
-    if (!provider || !model) return toast(new Error("Выберите модель: сервер модели должен быть запущен"));
-    await changeModel();
-  }
+  if (!(await ensureModel(session))) return;
   state.failed = null;
   const sent = () => {
     input.value = "";
@@ -819,6 +543,36 @@ async function send() {
     autosize();
   };
   await run(session.id, (signal, onEvent) => api.send(session.id, content, signal, onEvent, false, attachments), sent, content, attachments);
+}
+
+// У сессии ещё нет модели: берём выбранную над полем ввода, она сохранится с первым ходом.
+async function ensureModel(session) {
+  if (session.model) return true;
+  const [provider, model] = $("#model-select").value.split(SEP);
+  if (!provider || !model) {
+    toast(new Error("Выберите модель: сервер модели должен быть запущен"));
+    return false;
+  }
+  await changeModel();
+  return true;
+}
+
+// «▶ Запустить по шагам» на карточке скилла: шаги идут в папке проекта — в открытой сессии проекта или в новой.
+// Сессия, которая ждёт решения по карточке или занята ходом, не подходит: запуск стал бы ответом или встал в очередь.
+async function runSkill(id) {
+  let session = current();
+  const usable = session && !session.pending && state.streaming !== session.id;
+  if (!usable) {
+    const project = projectOf(session) ?? latestProject();
+    if (!project) return toast(new Error("Сначала создайте проект: шаги скилла работают в его папке"));
+    await newSession(project.id);
+    session = current();
+    if (!session) return;
+  }
+  showView("chat");
+  if (!(await ensureModel(session))) return;
+  state.failed = null;
+  await run(session.id, (signal, onEvent) => api.runSkill(session.id, id, signal, onEvent));
 }
 
 // ■ и Esc: ход останавливает сервер, поток сам закончится событием stopped.
@@ -836,7 +590,7 @@ async function decide(card, decision) {
     await run(card.session_id, (signal, onEvent) => api.resume(card.session_id, decision, signal, onEvent));
     return;
   }
-  // Карточка саб-агента или другой сессии: ход продолжается в фоне, итог придёт в панель и чат.
+  // Карточка другой сессии: ход продолжается в фоне, итог придёт в панель и чат.
   state.resuming.add(card.session_id);
   void refreshPanel();
   try {
@@ -910,6 +664,7 @@ async function run(sessionId, start, onSaved = () => {}, content = null, attachm
       } else if (event.type === "delta") bubble.append(event.text);
       else if (event.type === "reasoning") bubble.addReasoning(event.text);
       else if (event.type === "log") bubble.addLog(event.text);
+      else if (event.type === "steps") bubble.setSteps(event.run);
       // Модель зациклилась или ответила пустотой — сервер повторяет запрос, оборванный текст убираем.
       else if (event.type === "retry") bubble.reset("retry");
       else if (event.type === "tool_calls") {
@@ -1009,14 +764,11 @@ function keepScroll(container, { top, stick }) {
 function render() {
   const session = current();
   const project = projectOf(session);
-  const personal = session?.kind === "agent";
-  const parent = session?.parent_id ? state.sessions.find((item) => item.id === session.parent_id) : null;
-  $("#session-title").textContent = !session ? "—" : personal ? agentName(session)
-    : session.parent_id ? `${parent?.title ?? "Сессия"} / ${agentName(session)}` : session.title;
-  $("#project-chip").textContent = personal ? "Агенты" : project?.name ?? "—";
+  $("#session-title").textContent = session?.title ?? "—";
+  $("#project-chip").textContent = project?.name ?? "—";
   $("#project-chip").disabled = !project;
-  renderChatHead(session, parent);
-  renderAgentCircles(session);
+  // Пока сессия не выбрана, файлов нет — полоса с кнопкой «Файлы» не нужна.
+  $("#chat-bar").hidden = !session;
   syncFilesPanel(project);
   $("#project-chip").title = project ? `Настройки проекта · ${project.workspace}` : "";
   $("#offline").hidden = !state.offline;
@@ -1058,20 +810,6 @@ function stageOf(plan) {
   return index < 0 ? "" : `этап ${index + 1}/${plan.length}: ${plan[index].text}`;
 }
 
-// Над чатом с агентом — с кем разговор и где он, «Очистить», а в сессии ещё «убрать из сессии».
-function renderChatHead(session, parent) {
-  const kind = session?.kind === "agent" ? "personal" : session?.parent_id ? "member" : null;
-  $("#chat-head").hidden = !kind;
-  if (!kind) return;
-  const name = agentName(session);
-  const general = kind === "personal" && session.agent_id === "main";
-  $("#chat-head-title").textContent = general
-    ? "Общий чат вне проектов: память о вас работает, файлов и поручений саб-агентам нет"
-    : kind === "personal" ? `Личный чат с агентом «${name}» — вне проектов, без доступа к файлам`
-    : `Разговор с агентом «${name}» в сессии «${parent?.title ?? ""}»`;
-  $("#chat-remove").hidden = kind !== "member" || session.parent_id !== parent?.id || Boolean(parent?.parent_id);
-}
-
 // Заполненность окна модели последним запросом и скорость генерации.
 function renderUsage(session) {
   const usage = $("#usage");
@@ -1094,17 +832,9 @@ function renderChat({ follow = false } = {}) {
   // Перерисовка на каждом шаге агента не дёргает прокрутку: читающего выше оставляем на месте.
   const scroll = { top: container.scrollTop, stick: follow || container.scrollHeight - container.scrollTop - container.clientHeight < 120 };
   const session = current();
-  // Общий чат — тот же основной агент: приветствие обычное.
-  const agent = session && session.agent_id !== "main" && (session.kind === "agent" || session.parent_id) ? agentName(session) : null;
-  // Строки ленты команды встают среди сообщений по времени — только в основной сессии, куда они загружены.
-  const owner = session && session.kind === "chat" && !session.parent_id;
-  const lines = owner ? (state.teamLog ?? []).map((item) => ({ ...item, role: "team", created_at: item.at })) : [];
-  const timeline = lines.length ? [...state.messages, ...lines].sort((a, b) => a.created_at.localeCompare(b.created_at)) : state.messages;
   const own = Boolean(session) && state.streaming === session.id && Boolean(state.bubble);
   const fresh = own && state.bubble.fresh;
-  renderMessages(container, timeline, agent ? [`Разговор с агентом «${agent}»`, session.kind === "agent"
-    ? "Здесь можно обсудить его роль и задать общий вопрос. Файлы проектов отсюда ему недоступны."
-    : "Поручения основного агента и ваши сообщения идут сюда по очереди. «Очистить» начнёт разговор заново."] : undefined, {
+  renderMessages(container, state.messages, undefined, {
     // Идущий ход этой сессии — одной строкой печатающегося ответа; стоящий на карточке — «ждёт решения».
     // Пока новая реплика не пришла, последний ход в истории — прошлый, законченный: его не трогаем.
     live: own && !fresh ? state.bubble : null,
@@ -1128,12 +858,11 @@ async function refreshPanel() {
   renderSidebar();
 }
 
-// Карточки открытой сессии и её агентов — в чате над полем ввода; про карточки других сессий — одна строка-ссылка.
-// Задачи саб-агентов открытой сессии — в доке там же.
+// Карточки открытой сессии — в чате над полем ввода; про карточки других сессий — одна строка-ссылка.
 function renderAttention() {
-  const { cards, tasks } = state.attention;
+  const { cards } = state.attention;
   const busy = Boolean(state.streaming);
-  const owner = current()?.parent_id ?? state.current;
+  const owner = state.current;
   const here = cards.filter((card) => card.owner_id === owner);
   const elsewhere = cards.filter((card) => card.owner_id !== owner);
   $("#cards").hidden = !here.length;
@@ -1146,14 +875,6 @@ function renderAttention() {
     const titles = [...new Set(elsewhere.map((card) => `«${card.session_title}»`))];
     note.textContent = `Ещё ${elsewhere.length} ${plural(elsewhere.length, "карточка ждёт", "карточки ждут", "карточек ждут")} решения: ${titles.join(", ")} →`;
     note.onclick = () => selectSession(elsewhere[0].owner_id);
-  }
-  const own = tasks.filter((task) => task.owner_id === owner);
-  $("#dock").hidden = !own.length;
-  if (own.length && changed("dock", own)) {
-    renderDock({ count: $("#dock-count"), summary: $("#dock-summary"), list: $("#tasks") }, own, {
-      onOpen: (id) => selectSession(id),
-      onMore: () => showView("team"),
-    });
   }
 }
 
@@ -1170,12 +891,6 @@ async function readCardFile(card, path) {
   }
 }
 
-function setDock(collapsed) {
-  $("#dock").classList.toggle("collapsed", collapsed);
-  $("#dock-toggle").setAttribute("aria-expanded", String(!collapsed));
-  remember("dock", collapsed ? "collapsed" : "open");
-}
-
 async function refreshAll() {
   try {
     await loadSessions();
@@ -1183,10 +898,10 @@ async function refreshAll() {
     toast(error);
   }
   render();
-  await Promise.all([refreshPanel(), refreshTeam()]);
+  await refreshPanel();
 }
 
-// Сервер сообщает об изменениях потоком событий; на каждое (пачкой) перечитываем сессии, карточки и команду.
+// Сервер сообщает об изменениях потоком событий; на каждое (пачкой) перечитываем сессии и карточки.
 // Редкий опрос — на случай, если поток событий оборвался и ещё не переподключился.
 function listen() {
   const source = new EventSource("/api/events");
@@ -1221,7 +936,7 @@ async function refreshFromServer() {
     state.offline = true;
   }
   render();
-  await Promise.all([refreshPanel(), refreshTeam(), state.streaming ? null : syncTurn(), refreshWikiChat()]);
+  await Promise.all([refreshPanel(), state.streaming ? null : syncTurn(), refreshWikiChat()]);
 }
 
 async function poll() {
@@ -1229,74 +944,9 @@ async function poll() {
   setTimeout(poll, POLL_MS);
 }
 
-// ---------- команда ----------
-
-async function refreshTeam() {
-  if (!state.current) return;
-  // Личный чат с агентом вне проектов: команды сессии у него нет.
-  if (current()?.kind === "agent") {
-    state.team = null;
-    render();
-    return;
-  }
-  try {
-    state.team = await api.team(state.current);
-  } catch {
-    return;
-  }
-  render();
-  if (state.view === "team") void showTeamReference();
-  await refreshTeamLog();
-}
-
-// Лента команды в основном чате: кто из саб-агентов кому что поручил или спросил и что ответил.
-// Только в основной сессии: в разговоре самого агента его переписка и так видна.
-async function refreshTeamLog() {
-  const session = current();
-  if (!session || session.kind !== "chat" || session.parent_id) return;
-  let log;
-  try {
-    log = await api.teamLog(session.id);
-  } catch {
-    return;
-  }
-  if (state.current !== session.id) return;
-  state.teamLog = log;
-  if (!changed("team-log", [session.id, log])) return;
-  if (state.streaming === session.id) redrawKeepingBubble();
-  else renderChat();
-}
-
-// «Команда» — справочник: все агенты и кто к кому может обращаться; щелчок по карточке — настройки агента.
-async function showTeamReference() {
-  let data;
-  try {
-    data = await api.agentsTeam();
-  } catch (error) {
-    toast(error);
-    return;
-  }
-  const status = new Map(state.agents.map((agent) => [agent.id, agent.status]));
-  data.nodes = data.nodes.map((node) => ({ ...node, status: status.get(node.id) ?? "idle" }));
-  renderTeam($("#team"), data, { onOpen: (node) => editAgent(node.id) });
-}
-
-async function openAgent(node) {
-  try {
-    let sessionId = node.session_id;
-    if (!sessionId) {
-      sessionId = (await api.teamChat(state.current, node.id)).id;
-      await loadSessions();
-    }
-    await selectSession(sessionId);
-  } catch (error) {
-    toast(error);
-  }
-}
-
 // ---------- разделы ----------
 
-const VIEWS = ["chat", "team", "wiki", "capabilities", "memory"];
+const VIEWS = ["chat", "wiki", "capabilities", "memory"];
 
 function showView(view) {
   state.view = view;
@@ -1304,7 +954,6 @@ function showView(view) {
   remember("view", view);
   for (const button of document.querySelectorAll(".tabs button")) button.setAttribute("aria-pressed", String(button.dataset.view === view));
   for (const name of VIEWS) $(`#view-${name}`).hidden = name !== view;
-  if (view === "team") void showTeamReference();
   if (view === "wiki") {
     void showWiki(toast);
     void refreshWikiChat(true);
@@ -1352,6 +1001,14 @@ function syncFilesPanel(project) {
 
 // Агент записал или поправил файл в открытой сессии — файл открывается в панели с подсвеченными изменениями.
 function revealToolChange(message) {
+  // Шаги скилла записали файлы — панель файлов показывает последний из них.
+  const written = STEPS_TOOLS.has(message.tool_name)
+    ? (message.meta?.steps?.steps ?? []).flatMap((step) => step.files ?? []) : [];
+  if (written.length && projectOf(current())) {
+    setFilesPanel(true);
+    void revealChange(projectPath(projectOf(current()), written.at(-1)), null);
+    return;
+  }
   if (message.is_error || !["write_file", "edit_file"].includes(message.tool_name)) return;
   const project = projectOf(current());
   const call = state.messages.flatMap((item) => item.tool_calls ?? []).find((item) => item.id === message.tool_call_id);
@@ -1394,17 +1051,7 @@ function bind() {
     const project = projectOf(current());
     if (project) openProject(project);
   });
-  $("#new-agent").addEventListener("click", () => void openAgentForm(null, async (agent) => {
-    await agentSaved();
-    await openPersonal(agent.id);
-  }));
-  $("#chat-clear").addEventListener("click", clearDialog);
-  $("#chat-remove").addEventListener("click", () => {
-    const session = current();
-    const node = state.team?.nodes.find((item) => item.session_id === session?.id);
-    if (session?.parent_id) void removeMember(session.parent_id, node ?? { id: session.agent_id, name: agentName(session) });
-  });
-  initAgentForm();
+  document.addEventListener("meepo:run-skill", (event) => void runSkill(event.detail.id));
   // Провайдеры поменялись — модели над полем ввода собираются заново.
   initProviders({ onChanged: async () => { await loadModels(); showModel(); } });
   $("#mode-badge").addEventListener("click", () => openProject(projectOf(current())));
@@ -1418,7 +1065,7 @@ function bind() {
   $("#project-cancel").addEventListener("click", () => $("#project-dialog").close());
   $("#project-delete").addEventListener("click", deleteProject);
   $("#folder-up").addEventListener("click", () => browse(state.folder?.parent ?? null));
-  $("#source-close").addEventListener("click", () => $("#source-dialog").close());
+  initFolder();
   $("#model-select").addEventListener("change", changeModel);
   $("#composer").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1433,20 +1080,12 @@ function bind() {
     }
   });
   $("#messages").addEventListener("click", (event) => {
-    // Строка ленты команды: «открыть разговор» ведёт в разговор агента.
-    const dialog = event.target.closest(".team-open");
-    if (dialog) {
-      event.preventDefault();
-      void selectSession(dialog.dataset.session);
-      return;
-    }
     const link = event.target.closest(".path-link");
     if (!link) return;
     // Путь в заголовке шага не должен заодно раскрывать сам шаг.
     event.preventDefault();
     void openInFiles(link.dataset.path, Number(link.dataset.line) || null);
   });
-  $("#dock-toggle").addEventListener("click", () => setDock(!$("#dock").classList.contains("collapsed")));
   for (const button of document.querySelectorAll(".tabs button")) button.addEventListener("click", () => showView(button.dataset.view));
   let searchTimer = null;
   $("#wiki-search").addEventListener("input", () => {
@@ -1530,7 +1169,6 @@ async function start() {
   bind();
   fitScreen();
   showTheme();
-  setDock(recall("dock") === "collapsed");
   try {
     await Promise.all([loadSessions(), loadModels()]);
   } catch (error) {
@@ -1539,7 +1177,7 @@ async function start() {
   // Вкладку читаем до выбора сессии: выбор сессии сам переключает на чат.
   const savedView = recall("view");
   const saved = recall("session");
-  const target = state.sessions.find((session) => session.id === saved) ?? state.sessions.find((session) => !session.hidden);
+  const target = state.sessions.find((session) => session.id === saved) ?? state.sessions[0];
   if (target) {
     await selectSession(target.id);
     if (VIEWS.includes(savedView) && savedView !== "chat") showView(savedView);

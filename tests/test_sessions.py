@@ -8,7 +8,7 @@ from local_agent.config.settings import Settings
 
 
 def test_session_persists_after_app_restart(tmp_path) -> None:
-    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", projects_path=tmp_path / "projects", _env_file=None)
+    settings = Settings(sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", projects_path=tmp_path / "projects", _env_file=None)
     (tmp_path / "code").mkdir()
 
     with TestClient(create_app(settings)) as client:
@@ -38,7 +38,7 @@ def test_session_persists_after_app_restart(tmp_path) -> None:
 
 
 def test_session_needs_a_project(tmp_path) -> None:
-    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", projects_path=tmp_path / "projects", _env_file=None)
+    settings = Settings(sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", projects_path=tmp_path / "projects", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
         without = client.post("/api/sessions", json={})
@@ -53,7 +53,7 @@ def test_session_needs_a_project(tmp_path) -> None:
 
 
 def test_session_can_be_renamed(tmp_path) -> None:
-    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
         session = post_session(client, {}).json()
@@ -76,7 +76,7 @@ def test_session_can_be_renamed(tmp_path) -> None:
 
 
 def test_deleting_session_removes_only_its_messages(tmp_path) -> None:
-    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings)) as client:
         first = post_session(client, {}).json()

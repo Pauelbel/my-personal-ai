@@ -9,7 +9,6 @@ from local_agent.config.settings import Settings
 
 def test_messages_persist_after_app_restart(tmp_path) -> None:
     settings = Settings(
-        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory",

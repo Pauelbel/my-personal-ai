@@ -13,7 +13,7 @@ from local_agent.config.settings import Settings
 
 def settings(tmp_path: Path) -> Settings:
     return Settings(
-        agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions",
+        sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory",
         projects_path=tmp_path / "projects", skills_path=tmp_path / "skills", _env_file=None,
     )

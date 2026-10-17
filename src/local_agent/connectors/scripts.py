@@ -204,7 +204,11 @@ def restore_script_tool(root: Path, archive_id: str) -> ScriptTool:
 
 
 def _list(value: str) -> list[str]:
-    return [item.strip() for item in value.strip("[]").split(",") if item.strip()]
+    """Список через запятую; запятые в скобках — часть пакета: markitdown[pdf,docx] — один пакет."""
+    value = value.strip()
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1]
+    return [item.strip() for item in re.split(r",(?![^\[]*\])", value) if item.strip()]
 
 
 def _one_line(value: str) -> str:

@@ -23,10 +23,8 @@ class ConversationService:
         self._store = store
         self._on_saved = on_saved
 
-    def add_user_message(
-        self, session_id: str, content: str, sender: str | None = None, attachments: tuple[str, ...] = (),
-    ) -> Message:
-        return self._add(session_id, role="user", content=content, sender=sender, attachments=list(attachments))
+    def add_user_message(self, session_id: str, content: str, attachments: tuple[str, ...] = ()) -> Message:
+        return self._add(session_id, role="user", content=content, attachments=list(attachments))
 
     def add_assistant_message(
         self, session_id: str, content: str, tool_calls: tuple[ToolCall, ...] = (), stats: MessageStats | None = None,

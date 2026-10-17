@@ -36,8 +36,6 @@ class Message(BaseModel):
     tool_call_id: str | None = None
     tool_name: str | None = None
     is_error: bool = False
-    # Реплику «user» написал не человек, а агент: основной (задача саб-агенту) или саб-агент (результат задачи).
-    sender: str | None = None
     # Только у финального ответа хода.
     stats: MessageStats | None = None
     # Рассуждения модели перед этим ответом: только для показа в «ходе работы», в контекст модели не идут.
@@ -50,7 +48,7 @@ class Message(BaseModel):
     @property
     def from_user(self) -> bool:
         """Реплика человека: только её разбирает долговременная память."""
-        return self.role == "user" and self.sender is None
+        return self.role == "user"
 
     @property
     def is_dialogue(self) -> bool:

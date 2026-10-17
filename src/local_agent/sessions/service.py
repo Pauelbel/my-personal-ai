@@ -35,11 +35,10 @@ class SessionService:
         model: str,
         provider: str,
         project_id: str | None,
-        parent_id: str | None = None,
         hidden: bool = False,
         kind: str = "chat",
     ) -> Session:
-        # Своей папки у сессии нет: её задаёт проект. Без проекта — служебная сессия вики и личный чат с агентом.
+        # Своей папки у сессии нет: её задаёт проект. Без проекта — только служебная сессия вики.
         if project_id is None and kind == "chat":
             raise ValueError("Сессия разговора живёт в проекте")
         now = datetime.now(UTC)
@@ -52,7 +51,6 @@ class SessionService:
             model=model,
             provider=provider,
             project_id=project_id,
-            parent_id=parent_id,
             hidden=hidden,
             kind=kind,
         )
@@ -67,7 +65,6 @@ class SessionService:
         *,
         provider: str,
         model: str,
-        agent_id: str | None = None,
     ) -> Session | None:
         session = self._repository.get(session_id)
         if session is None:
@@ -80,15 +77,10 @@ class SessionService:
         }
         if (provider, model) != (session.provider, session.model):
             updates.update(context_tokens=None, context_window=None, tokens_per_second=None)
-        if agent_id is not None:
-            updates["agent_id"] = agent_id
         updated = self._repository.patch(session_id, updates)
         if project is not None and updated is not None:
-            # Следующая новая сессия проекта начнёт с того же агента и модели.
-            self._projects.patch(project.id, {
-                "agent_id": updated.agent_id, "provider": provider, "model": model,
-                "updated_at": datetime.now(UTC),
-            })
+            # Следующая новая сессия проекта начнёт с той же модели.
+            self._projects.patch(project.id, {"provider": provider, "model": model, "updated_at": datetime.now(UTC)})
         return self._effective(updated)
 
     def assign_project(self, session_id: str, project_id: str) -> Session | None:
@@ -126,11 +118,6 @@ class SessionService:
         """Ход ждёт решения пользователя (thread и pending заданы) или больше не ждёт (оба None)."""
         self._repository.patch(session_id, {"pending_thread": thread, "pending": pending})
 
-    def set_task(self, session_id: str, **fields) -> None:
-        session = self._repository.get(session_id)
-        if session is not None:
-            self._repository.patch(session_id, {"task": {**(session.task or {}), **fields}})
-
     def trust(self, session_id: str, group: str) -> None:
         """Дальше в этой сессии вызовы группы group идут без подтверждения."""
         session = self._repository.get(session_id)
@@ -150,23 +137,7 @@ class SessionService:
         if deleted:
             for callback in self._on_deleted:
                 callback(session_id)
-            # Дочерние сессии саб-агентов живут, только пока жива их сессия.
-            for child in self._repository.list():
-                if child.parent_id == session_id:
-                    self.delete(child.id)
         return deleted
-
-    def clear(self, session_id: str) -> Session | None:
-        """«Очистить»: разговор начинается заново, а сама сессия, её агент и место в проекте остаются."""
-        if self._repository.get(session_id) is None:
-            return None
-        for callback in self._on_deleted:
-            callback(session_id)
-        return self._effective(self._repository.patch(session_id, {
-            "summary": "", "summary_until_message_id": None, "pending_thread": None, "pending": None, "task": None,
-            "plan": [], "plan_request": None,
-            "context_tokens": None, "context_window": None, "tokens_per_second": None, "updated_at": datetime.now(UTC),
-        }))
 
     def set_plan(self, session_id: str, plan: list[dict], request_id: str | None) -> None:
         self._repository.patch(session_id, {"plan": plan, "plan_request": request_id})

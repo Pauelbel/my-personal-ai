@@ -27,7 +27,6 @@ class Settings(BaseSettings):
     llm_name: str = "Локальный сервер"
     llm_providers: list[ProviderConfig] = Field(default_factory=list)
     default_model: str = ""
-    agents_path: Path = Path("data/agents")
     skills_path: Path = Path("data/skills")
     sessions_path: Path = Path("data/sessions")
     projects_path: Path = Path("data/projects")
@@ -45,12 +44,6 @@ class Settings(BaseSettings):
     # Секреты инструментов (токены, адреса): задаются формой коннектора («настроить»), модель их не видит.
     secrets_path: Path | None = None
     logs_path: Path | None = None
-    # Модель для саб-агентов, чтобы они не делили одну модель с основным: провайдер из LLM_PROVIDERS и ID модели.
-    # Пусто — модель сессии, которая поручила задачу.
-    subagent_provider: str = ""
-    subagent_model: str = ""
-    # Сколько задач саб-агентов выполняется одновременно; остальные ждут очереди.
-    max_parallel_tasks: int = Field(default=2, gt=0)
     # Запускать MCP-серверы (браузер, веб-поиск) при старте.
     mcp_enabled: bool = True
     memory_model: str = ""
@@ -59,7 +52,7 @@ class Settings(BaseSettings):
     memory_auto_update_messages: int = Field(default=10, ge=0)
     # Чат вики помнит столько последних реплик пользователя вместе с ответами; всё раньше забывается.
     wiki_context_messages: int = Field(default=3, ge=1)
-    # Сколько раундов вызова инструментов модель может сделать за один ход (у агента можно задать своё в файле).
+    # Сколько раундов вызова инструментов модель может сделать за один ход; дальше — карточка «продолжить?».
     max_tool_rounds: int = Field(default=40, ge=1, le=200)
     log_level: str = "INFO"
     max_context_messages: int = Field(default=20, gt=0)

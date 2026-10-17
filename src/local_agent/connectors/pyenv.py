@@ -29,6 +29,10 @@ REQUIREMENT = re.compile(
     r"(?:\s*,\s*(?:===|==|!=|~=|<=|>=|<|>)\s*[A-Za-z0-9.*+!_-]+)*)?$"
 )
 
+# Строка зависимости из метаданных пакета: имя, extras, условие после «;» («pdfminer-six>=1; extra == 'pdf'»).
+DEPENDENCY = re.compile(r"^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[(?P<extras>[^\]]*)\])?")
+EXTRA_MARKER = re.compile(r"""extra\s*==\s*["']([^"']+)["']""")
+
 
 def requirement_name(spec: str) -> str | None:
     """Нормализованное имя пакета (PEP 503) или None, если строка — не требование из PyPI."""
@@ -38,7 +42,9 @@ def requirement_name(spec: str) -> str | None:
 
 class PythonEnv:
     def __init__(self, path: Path) -> None:
-        self.path = path
+        # Путь из настроек бывает относительным (data/sandbox-env), а скрипт запускается в папке проекта:
+        # без абсолютного пути bwrap и интерпретатор его там не найдут. abspath не раскрывает ссылку bin/python.
+        self.path = Path(os.path.abspath(path))
         self._lock = asyncio.Lock()
 
     @property
@@ -65,6 +71,30 @@ class PythonEnv:
             if name and name not in {"pip", "setuptools"}:
                 found[name] = dist.version
         return dict(sorted(found.items()))
+
+    def needed(self, requirements: list[str]) -> set[str]:
+        """Пакеты, без которых требования не работают: сами они и все их зависимости, с учётом extras
+        (markitdown[pdf] тянет pdfminer). Прочие условия (версия Python, платформа) не разбираются: лишний пакет
+        в списке «нужен» не страшен, а кнопка «удалить» у нужного — сломала бы инструмент."""
+        graph = {}
+        for dist in metadata.distributions(path=[str(path) for path in self._site_packages()]):
+            if name := requirement_name(dist.metadata["Name"] or ""):
+                graph[name] = dist.requires or []
+        found: set[str] = set()
+        seen: set[tuple[str, str]] = set()
+        queue = [_dependency(spec) for spec in requirements]
+        while queue:
+            name, extras = queue.pop()
+            if name is None or (name, ",".join(sorted(extras))) in seen:
+                continue
+            seen.add((name, ",".join(sorted(extras))))
+            found.add(name)
+            for line in graph.get(name, []):
+                spec, _, marker = line.partition(";")
+                wanted = EXTRA_MARKER.search(marker)
+                if wanted is None or wanted[1].lower() in extras:
+                    queue.append(_dependency(spec))
+        return found & set(graph)
 
     def missing(self, requirements: list[str]) -> list[str]:
         installed = self.packages()
@@ -107,6 +137,14 @@ class PythonEnv:
             return ToolResult(f"Не удалось создать окружение песочницы {self.path}: {result.content}", is_error=True)
         logger.info("Создано окружение песочницы %s", self.path)
         return None
+
+
+def _dependency(spec: str) -> tuple[str | None, set[str]]:
+    match = DEPENDENCY.match(spec)
+    if match is None:
+        return None, set()
+    extras = {item.strip().lower() for item in (match["extras"] or "").split(",") if item.strip()}
+    return re.sub(r"[-_.]+", "-", match["name"]).lower(), extras
 
 
 def check_requirements(requirements: object) -> str | None:

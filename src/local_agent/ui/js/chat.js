@@ -1,5 +1,5 @@
 // Чат: история сессии и печатающийся ответ. Вызовы инструментов — строки в общей рамке,
-// под ответом — сводка хода и «Копировать», результаты саб-агентов выделены, код в ответах подсвечен.
+// под ответом — сводка хода и «Копировать», отчёты шагов скиллов выделены, код подсвечен.
 import { renderDiagrams } from "./diagrams.js";
 import { highlightCode } from "./highlight.js";
 import { appendMarkdown } from "./markdown.js";
@@ -7,15 +7,13 @@ import { plural } from "./util.js";
 
 const FLUSH_MS = 80;
 const STEP_ICON = { done: "✓", failed: "✕", pending: "◌" };
-// Длинный отчёт саб-агента в основном чате свёрнут; развёрнутые остаются такими после перерисовки.
-const REPORT_FOLD_CHARS = 300;
-const REPORT_FOLD_LINES = 5;
+// Длинная реплика пользователя свёрнута; развёрнутые остаются такими после перерисовки.
 const unfolded = new Set();
 
 // greeting — заголовок и строка пустого разговора; по умолчанию здоровается основной агент.
-// Разговор идёт ходами: реплика пользователя (или отчёт саб-агента), под ней свёрнутый «ход работы» — весь процесс:
-// рассуждения, инструменты, промежуточные реплики модели, — затем строки событий (кому поручено, кто что выбрал),
-// готовые результаты этапов и итоговый ответ.
+// Разговор идёт ходами: реплика пользователя, под ней свёрнутый
+// «ход работы» — весь процесс: рассуждения, инструменты, промежуточные реплики модели, — затем ответы на карточки,
+// отчёты шагов скиллов, готовые результаты этапов и итоговый ответ.
 // Пока ход идёт (live — печатающийся ответ этой вкладки, busy — ход идёт на сервере, waiting — ход ждёт решения
 // по карточке), в чате только одна строка хода: результатов ещё нет, и наружу ничего не выходит.
 export function renderMessages(
@@ -38,17 +36,10 @@ export function renderMessages(
   all.forEach((turn, index) => renderTurn(container, turn, results, index === all.length - 1, ongoing));
 }
 
-// Имена агентов для строк «Поручено …»: в вызове инструмента — только id.
-let agentNames = new Map();
-export function setAgentNames(agents) {
-  agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
-}
-
-// Служебные вызовы основного агента — не в рамку инструментов, а строками событий.
-const EVENT_TOOLS = new Set(["delegate", "choose_route"]);
+// Раскрытый «ход работы» остаётся раскрытым после перерисовки.
 const openedWork = new Map();
 
-// Ход начинается репликой пользователя или отчётом саб-агента. Ответ на карточку — часть того же хода:
+// Ход начинается репликой пользователя. Ответ на карточку — часть того же хода:
 // ход стоял на вызове инструмента, и ответ сохраняется вместе с результатом вызова. Реплика после оборванного
 // хода (у вызова нет результата или он сильно раньше реплики) начинает новый ход.
 const REPLY_GAP_MS = 2000;
@@ -59,7 +50,7 @@ function turns(messages, results) {
   let calls = [];
   for (const message of messages) {
     if (message.role === "tool") continue;
-    const reply = message.role === "user" && !message.sender && calls.some((call) => {
+    const reply = message.role === "user" && calls.some((call) => {
       const result = results.get(call.id);
       return result && Math.abs(Date.parse(result.created_at) - Date.parse(message.created_at)) <= REPLY_GAP_MS;
     });
@@ -85,45 +76,33 @@ function isAnswer(item) {
 }
 
 function renderTurn(container, turn, results, last, ongoing) {
-  if (turn.head) container.append(turn.head.sender ? reportNode(turn.head) : userNode(turn.head));
+  if (turn.head) container.append(userNode(turn.head));
   // Ход идёт — итогов нет: всё, что модель пишет по дороге, остаётся внутри строки хода.
   const running = last && ongoing.active;
   // Итог хода — последняя реплика модели без вызовов; итоги этапов — реплики, после которых модель
   // отметила пункт плана сделанным.
-  const tail = [...turn.items].reverse().find((item) => item.role !== "team");
+  const tail = turn.items.at(-1);
   const final = !running && isAnswer(tail) ? tail : null;
   const stages = running ? new Map() : stageResults(turn.items, results);
+  // Отчёты шагов скиллов — результат хода, а не его процесс: стоят в чате, а не внутри свёрнутой строки.
+  const runs = running ? [] : stepsReports(turn.items, results);
   const work = [];
   const events = [];
-  const answered = new Set();
-  for (const [index, item] of turn.items.entries()) {
+  for (const item of turn.items) {
     if (item === final) {
       // Итог — в чат, а рассуждения перед ним — в ход работы, на своё место.
       if (item.reasoning) work.push({ thought: item });
       continue;
     }
-    if (item.role === "team") {
-      events.push(teamNode(item));
-      continue;
-    }
     if (item.role === "user") {
-      // Ответ на карточку: выбор исполнителя уже показан строкой «Кто сделает», остальные — своей строкой.
-      if (!answered.has(item)) events.push(replyLine(item));
+      // Ответ на карточку словами — своей строкой.
+      events.push(replyLine(item));
       continue;
     }
     if (item.reasoning) work.push({ thought: item });
     // Текст итога этапа — в чат результатом; его вызовы (отметка этапа и что ещё было) остаются шагами хода.
     if (item.content?.trim() && !stages.has(item)) work.push({ note: item });
-    const calls = (item.tool_calls ?? []).filter((call) => !EVENT_TOOLS.has(call.name));
-    if (calls.length) work.push({ calls, message: item });
-    for (const call of item.tool_calls ?? []) {
-      if (call.name === "delegate" && results.has(call.id)) events.push(delegateLine(call, results.get(call.id)));
-      if (call.name === "choose_route" && results.has(call.id)) {
-        const reply = turn.items.slice(index + 1).find((next) => next.role === "user");
-        if (reply) answered.add(reply);
-        events.push(routeLine(call, reply));
-      }
-    }
+    if (item.tool_calls?.length) work.push({ calls: item.tool_calls, message: item });
   }
   // Идущий ход этой вкладки — одна строка печатающегося ответа: шаги из истории уходят в неё.
   if (running && ongoing.live) ongoing.live.adopt(work, results);
@@ -133,12 +112,108 @@ function renderTurn(container, turn, results, last, ongoing) {
     container.append(workNode(work, results, label));
   }
   container.append(...events);
+  container.append(...runs);
   for (const [message, title] of stages) if (message !== final) container.append(assistantNode(message, false, title));
   if (final) container.append(assistantNode(final, last));
   if (!running) {
     const files = filesNode(turn.items, results);
     if (files) container.append(files);
   }
+}
+
+// Инструменты, которые идут шагами и показывают в чате отчёт по ним: шаги скилла и документ по частям.
+export const STEPS_TOOLS = new Set(["run_skill", "process_document"]);
+
+function stepsReports(items, results) {
+  return items.flatMap((item) => (item.tool_calls ?? [])
+    .filter((call) => STEPS_TOOLS.has(call.name) && results.get(call.id)?.meta?.steps)
+    .map((call) => stepsRunNode(results.get(call.id).meta.steps, { key: call.id })));
+}
+
+// Виды шагов: подпись и значок — одинаковые на карточке скилла, в карточке запуска и в отчёте.
+export const STEP_KINDS = {
+  model: ["модель", "✎", "один ответ модели"], agent: ["агент", "◆", "модель с инструментами"],
+  tool: ["инструмент", "⚙", "вызов инструмента"], command: ["команда", "›_", "команда в папке проекта"],
+  script: ["скрипт", "▷", "скрипт скилла в песочнице"],
+};
+
+export function kindBadge(kind) {
+  const [label, icon, about] = STEP_KINDS[kind] ?? [kind, "·", ""];
+  const badge = el("span", `kind-badge kind-${kind}`);
+  badge.append(el("span", "kind-icon", icon), label);
+  badge.title = about;
+  return badge;
+}
+
+const RUN_STATE = { running: "идёт", done: "готово", failed: "остановлен" };
+const RUN_STEP_ICON = { done: "✓", failed: "✕", pending: "·", skipped: "–" };
+
+// Шаги скилла в чате: шапка (название, сколько шагов готово, время), данные пользователя и шаги по порядку.
+// Шаг раскрывается — его итог целиком и файлы. live — шаги идут прямо сейчас: у текущего шага колесо и чем он занят.
+export function stepsRunNode(run, { key = "live", live = false } = {}) {
+  const node = el("section", `steps-run ${run.status}`);
+  const done = run.steps.filter((step) => step.status === "done").length;
+  const head = el("div", "steps-run-head");
+  head.append(
+    run.status === "running" ? el("span", "spinner") : el("span", "steps-run-icon", run.status === "done" ? "✓" : "✕"),
+    // Документ по частям — не скилл пользователя, а встроенная работа: подпись «Скилл» ей не нужна.
+    ...(run.skill === "process_document" ? [] : [el("span", "steps-run-label", "Скилл")]),
+    el("span", "steps-run-name", run.name),
+    el("span", "steps-run-meta", meta([`${done} из ${run.steps.length}`, !live && run.seconds >= 1 && duration(round(run.seconds)),
+      RUN_STATE[run.status]])),
+  );
+  node.append(head);
+  const values = Object.entries(run.inputs ?? {}).filter(([, value]) => value);
+  if (values.length) {
+    const inputs = el("div", "steps-run-inputs");
+    for (const [name, value] of values) {
+      const item = el("span", "steps-run-input");
+      // Значение — как есть, в одну строку: это пути и тексты полей, а не Markdown (preview съел бы «_» в путях).
+      const line = value.replace(/\s+/g, " ").trim();
+      item.append(el("span", "steps-run-input-name", name), line.length > 60 ? `${line.slice(0, 59)}…` : line);
+      item.title = value;
+      inputs.append(item);
+    }
+    node.append(inputs);
+  }
+  if (run.error) node.append(el("p", "steps-run-error", run.error));
+  const list = el("ol", "steps-run-list");
+  run.steps.forEach((step, index) => list.append(runStepNode(step, index, `${key}:${index}`)));
+  node.append(list);
+  return node;
+}
+
+function runStepNode(step, index, key) {
+  const item = el("li", `run-step ${step.status}`);
+  const row = el("details");
+  remembered(row, `steps:${key}`);
+  const summary = el("summary");
+  const icon = step.status === "running" ? el("span", "spinner small") : el("span", "run-step-icon", RUN_STEP_ICON[step.status] ?? "·");
+  summary.append(icon, el("span", "run-step-num", String(index + 1)), kindBadge(step.kind), el("span", "run-step-title", step.title));
+  if (step.tries > 1) summary.append(el("span", "run-step-tries", `попытка ${step.tries}`));
+  // Готовый шаг показывает свои файлы, идущий и упавший — чем занят или почему встал.
+  const note = el("span", "run-step-note", step.status === "skipped" ? "не выполнялся"
+    : step.status === "pending" ? "" : step.status === "done" && step.files.length ? "" : step.detail);
+  for (const path of step.status === "done" ? step.files : []) {
+    const chip = el("code", "", path);
+    markPath(chip, path);
+    note.append(chip);
+  }
+  summary.append(note, el("span", "run-step-time", step.status === "done" || step.status === "failed"
+    ? (step.seconds >= 0.1 ? duration(round(step.seconds)) : "") : ""));
+  row.append(summary);
+  if (step.output) {
+    const body = el("div", "run-step-body");
+    if (["command", "tool", "script"].includes(step.kind)) body.append(el("pre", "", step.output));
+    else {
+      const text = el("div", "text");
+      renderMarkdown(text, step.output);
+      body.append(text);
+    }
+    row.append(body);
+  } else row.classList.add("no-output");
+  item.append(row);
+  return item;
 }
 
 // Файлы, которые агент создал или изменил за ход, — в конце хода одной строкой; щелчок открывает файл.
@@ -186,6 +261,8 @@ function guessedStages(items, results) {
     const call = planDone(item) ?? planDone(next);
     if (!call) return;
     const step = Number(parse(call.arguments).step);
+    // Отметка не прошла (модель передала не номер пункта) — этапа нет.
+    if (!Number.isInteger(step) || results.get(call.id)?.is_error) return;
     const line = (results.get(call.id)?.content ?? "").split("\n").find((text) => text.startsWith(`${step}. [x] `));
     const name = line ? line.slice(`${step}. [x] `.length).split(" — ")[0] : "";
     stages.set(item, `Этап ${step}${name ? ` · ${name}` : ""}`);
@@ -198,15 +275,13 @@ function guessedStages(items, results) {
 const TOOL_STEPS = {
   list_files: ["Список файлов", "files"], read_file: ["Прочитан файл", "files"], search_files: ["Поиск по файлам", "files"],
   write_file: ["Записан файл", "files"], edit_file: ["Изменён файл", "files"], search_docs: ["Поиск по документации", "docs"],
-  generate_test_cases: ["Генерация тест-кейсов", "files"], git: ["История git", "git"], fetch_url: ["Прочитана страница", "web"],
+  git: ["История git", "git"], fetch_url: ["Прочитана страница", "web"],
   jira: ["Запрос в Jira", "jira"], wiki_read: ["Прочитана заметка", "wiki"], wiki_search: ["Поиск по вики", "wiki"],
   wiki_match: ["Сверка с вики", "wiki"], wiki_save_note: ["Заметка сохранена", "wiki"], wiki_lint: ["Проверка вики", "wiki"],
   wiki_propose_edits: ["Правки вики", "wiki"], memory_search: ["Поиск в памяти", "memory"], remember: ["Запомнено", "memory"],
-  delegate: ["Поручено агенту", "team"], ask_agent: ["Вопрос агенту", "team"], handoff: ["Передано основному", "team"],
-  ask_user: ["Вопрос вам", null], request_tools: ["Запрос инструментов", null], choose_route: ["Выбор исполнителя", null],
   plan: ["План задачи", null], activate: ["Подключены инструменты", null], use_skill: ["Скилл", null],
   propose: ["Предложение возможности", null], archive: ["Архив возможностей", null], install_packages: ["Установка пакетов", null],
-  learn: ["Урок записан", null],
+  run_skill: ["Шаги скилла", "steps"], process_document: ["Документ по частям", "document"],
 };
 const BROWSER_STEPS = {
   navigate: "Открыта страница", navigate_back: "Назад", click: "Нажатие", type: "Ввод текста", fill_form: "Заполнение формы",
@@ -221,7 +296,9 @@ const ACTIVITY = {
   files: ["Работаю с файлами", "Работал с файлами"], docs: ["Ищу в документации", "Искал в документации"],
   git: ["Смотрю историю git", "Смотрел историю git"], jira: ["Смотрю Jira", "Смотрел Jira"],
   wiki: ["Работаю с вики", "Работал с вики"], memory: ["Вспоминаю", "Обращался к памяти"],
-  team: ["Работаю с агентами", "Работал с агентами"], other: ["Выполняю шаги", "Выполнил шаги"],
+  steps: ["Выполняю шаги скилла", "Выполнил шаги скилла"],
+  document: ["Обрабатываю документ по частям", "Обработал документ по частям"],
+  other: ["Выполняю шаги", "Выполнил шаги"],
 };
 
 // [что сделано, группа] по id инструмента; инструменты MCP — «браузер_действие» и «search_действие».
@@ -350,39 +427,10 @@ function remembered(node, key) {
   });
 }
 
-// «→ Поручено Тестировщику: задача» — кому и что ушло; щелчок по строке показывает задачу целиком.
-function delegateLine(call, result) {
-  const args = parse(call.arguments);
-  const name = agentNames.get(args.agent) ?? args.agent ?? "агенту";
-  const task = String(args.task ?? "").replace(/\s+/g, " ").trim();
-  const line = el("div", `event-line${result.is_error ? " failed" : ""}`);
-  line.append(
-    el("span", "event-route", result.is_error ? `✕ Не удалось поручить: ${name}` : `→ Поручено: ${name}`),
-    el("span", "event-text", result.is_error ? result.content : task),
-  );
-  line.title = task;
-  return line;
-}
-
 function replyLine(message) {
   const line = el("div", "event-line");
   line.append(el("span", "event-route", "↳ Ваш ответ"), el("span", "event-text", message.content));
   line.title = message.content;
-  return line;
-}
-
-// Выбор в карточке «Кто сделает»: что выбрал пользователь и что это запомнено для такого типа задач.
-function routeLine(call, reply) {
-  const args = parse(call.arguments);
-  const text = reply?.content ?? "";
-  const who = text.startsWith("Поручить: ") ? text.slice("Поручить: ".length)
-    : text === "Сделай сам" ? "Основной сам" : text ? `«${text}»` : "решает Основной";
-  const line = el("div", "event-line");
-  const remembered = (text.startsWith("Поручить: ") || text === "Сделай сам") && args.kind;
-  line.append(
-    el("span", "event-route", `◆ Кто сделает: ${who}`),
-    el("span", "event-text", remembered ? `ваш выбор, запомнен для «${String(args.kind).trim().toLowerCase()}»` : "ваш ответ"),
-  );
   return line;
 }
 
@@ -418,7 +466,9 @@ export class StreamingMessage {
     const body = el("div", "work-body");
     body.append(this.history, this.reasoningText, this.textNode, this.log);
     this.live.append(this.status, body);
-    this.node.append(this.live);
+    // Идущие шаги скилла видны сразу под строкой хода: ради них пользователь их и запустил.
+    this.stepsBox = el("div", "steps-live");
+    this.node.append(this.live, this.stepsBox);
     this.text = "";
     this.timer = null;
     this.steps = 0;
@@ -484,6 +534,18 @@ export class StreamingMessage {
     clearTimeout(this.timer);
     clearInterval(this.ticker);
     this.node.remove();
+  }
+
+  // Шаги скилла идут: блоком под строкой хода, в самой строке — текущий шаг.
+  setSteps(run) {
+    this.stepsBox.replaceChildren(stepsRunNode(run, { live: true }));
+    const step = run.steps[run.current];
+    const parts = run.skill === "process_document";
+    // У документа по частям в строке хода — какая часть идёт («часть 3 из 12»), у скилла — какой шаг.
+    if (run.status === "running" && step) {
+      this.setStage(parts ? step.detail.split(" · ")[0] : `шаг ${run.current + 1}/${run.steps.length}: ${step.title}`);
+    }
+    if (this.activity !== "tool") this.setStatus("tool", [parts ? "process_document" : "run_skill"]);
   }
 
   // Текущий этап плана задачи («этап 2/3: Баг-репорты»), если агент ведёт план; пусто — без этапа.
@@ -658,67 +720,6 @@ function assistantNode(message, last = true, stage = "") {
   return node;
 }
 
-// Строка ленты команды: саб-агент обратился к другому или ответил ему. Свёрнута до одной строки;
-// раскрытая — весь текст и ссылка на разговор того агента, где это было.
-const openedTeamLines = new Set();
-
-function teamNode(item) {
-  const key = `${item.session_id}:${item.at}`;
-  const node = el("details", `team-line ${item.kind}`);
-  node.open = openedTeamLines.has(key);
-  node.addEventListener("toggle", () => {
-    if (node.open) openedTeamLines.add(key);
-    else openedTeamLines.delete(key);
-  });
-  const summary = el("summary");
-  const preview = item.text.replace(/\s+/g, " ").trim();
-  summary.append(
-    el("span", "team-route", `◆ ${item.from} → ${item.to}${item.kind === "answer" ? " (ответ)" : ""}`),
-    el("span", "team-preview", preview.length > 140 ? `${preview.slice(0, 139)}…` : preview),
-  );
-  const body = el("div", "text");
-  renderMarkdown(body, item.text);
-  const open = el("button", "msg-action team-open", "Открыть разговор");
-  open.type = "button";
-  open.dataset.session = item.session_id;
-  node.append(summary, body, open);
-  return node;
-}
-
-// Отчёт саб-агента: заголовок рамки — кто и какая задача, текст — сам результат, длинный свёрнут.
-const REPORT_PREFIX = /^Результат задачи «([^\n]*)» от саб-агента [^\n]*:\n+/;
-
-function reportNode(message) {
-  const node = el("article", "msg report");
-  const match = message.content.match(REPORT_PREFIX);
-  const text = match ? message.content.slice(match[0].length) : message.content;
-  const body = el("div", "text");
-  renderMarkdown(body, text);
-  const extra = [];
-  if (text.length > REPORT_FOLD_CHARS || text.split("\n").length > REPORT_FOLD_LINES) {
-    const fold = el("button", "msg-action fold");
-    fold.type = "button";
-    const sync = () => {
-      const open = unfolded.has(message.id);
-      node.classList.toggle("folded", !open);
-      fold.textContent = open ? "Свернуть" : "Показать полностью";
-    };
-    fold.addEventListener("click", () => {
-      if (!unfolded.delete(message.id)) unfolded.add(message.id);
-      sync();
-    });
-    sync();
-    extra.push(fold);
-  }
-  // Отчёт агента — в рамке, как вызовы инструментов: имя и задача на верхней кромке.
-  const head = el("div", "report-head");
-  const label = el("span", "", `◆ ${message.sender}${match ? ` · ${match[1]}` : ""}`);
-  if (match) label.title = match[1];
-  head.append(label);
-  node.append(head, body, footNode(message, extra));
-  return node;
-}
-
 // Подвал ответа: сводка хода, если она сохранена, и копирование всего ответа в Markdown.
 function footNode(message, extra = [], quiet = false) {
   const foot = el("div", `msg-foot${(message.stats || extra.length) && !quiet ? "" : " bare"}`);
@@ -739,7 +740,7 @@ function stepNode(call, result, seconds) {
   remembered(node, `call:${call.id}`);
   const args = parse(call.arguments);
   // Браузер: element — что за элемент, text — что ввели, target — ссылка на элемент из снимка.
-  const target = args.path || args.query || args.url || args.jql || args.key || args.name || args.agent
+  const target = args.path || args.query || args.url || args.jql || args.key || args.name || args.skill
     || (Array.isArray(args.names) ? args.names.join(", ") : "") || (Array.isArray(args.steps) ? args.steps.join(" · ") : "")
     || [args.element, args.text && `«${args.text}»`].filter(Boolean).join(" ← ") || args.target || args.action || "";
   const summary = el("summary");

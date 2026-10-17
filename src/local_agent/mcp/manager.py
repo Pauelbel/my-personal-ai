@@ -6,6 +6,9 @@
 
 Подтверждение: без него выполняются только инструменты из auto_approve или с подсказкой read_only_hint.
 Описания инструментов можно перевести в «descriptions» сервера: имя инструмента → текст.
+Сервер можно выключить («enabled»: false) — он не запускается; отдельные инструменты — списком «disabled_tools»:
+их нет в реестре, поэтому ни модель, ни шаги скиллов их не видят. Переключатели на вкладке «Возможности»
+пишут в mcp.json и действуют сразу, без перезапуска.
 Если сервер не запустился (например, нет Node.js для Playwright), его инструментов просто нет
 в реестре, а причина видна в списке возможностей — агент скажет, что такой возможности нет.
 """
@@ -206,7 +209,14 @@ class ServerState:
     name: str
     description: str = ""
     status: str = "выключен"
+    # Ключ сервера в mcp.json: имя в реестре очищено (sanitize), а настройки пишутся под исходным ключом.
+    key: str = ""
+    enabled: bool = True
+    # id в реестре подключённых инструментов; все инструменты работающего сервера — с выключенными.
     tools: list[str] = field(default_factory=list)
+    known: dict[str, "MCPTool"] = field(default_factory=dict)
+    # Имена инструментов на сервере, которые пользователь выключил.
+    disabled: set[str] = field(default_factory=set)
 
 
 class MCPTool:
@@ -291,9 +301,11 @@ class MCPManager:
         self._config_path = config_path
         self._registry = registry
         self._logs_path = logs_path
-        self._stop = asyncio.Event()
-        self._tasks: list[asyncio.Task] = []
+        self._stops: dict[str, asyncio.Event] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
         self.servers: dict[str, ServerState] = {}
+        # MCP включён в .env (MCP_ENABLED): только тогда серверы запускаются и переключаются.
+        self.started = False
 
     def config(self) -> dict:
         if not self._config_path.exists():
@@ -307,26 +319,72 @@ class MCPManager:
         return data if isinstance(data.get("servers"), dict) else {"servers": {}}
 
     def start(self) -> None:
-        for name, settings in self.config()["servers"].items():
-            state = ServerState(sanitize(name), str(settings.get("description", "")))
+        self.started = True
+        for key, settings in self.config()["servers"].items():
+            disabled = settings.get("disabled_tools")
+            state = ServerState(
+                sanitize(key), str(settings.get("description", "")), key=key, enabled=settings.get("enabled", True) is not False,
+                disabled={name for name in disabled if isinstance(name, str)} if isinstance(disabled, list) else set(),
+            )
             self.servers[state.name] = state
-            if not settings.get("enabled", True):
-                continue
-            command = settings.get("command")
-            if not isinstance(command, str) or shutil.which(command) is None:
-                state.status = f"не запущен: команды {command!r} нет в системе" + (
-                    " — установите Node.js" if command in {"npx", "node"} else "")
-                continue
-            state.status = "запускается"
-            self._tasks.append(asyncio.create_task(self._serve(state, settings), name=f"mcp:{state.name}"))
+            if state.enabled:
+                self._launch(state, settings)
+
+    def _launch(self, state: ServerState, settings: dict) -> None:
+        command = settings.get("command")
+        if not isinstance(command, str) or shutil.which(command) is None:
+            state.status = f"не запущен: команды {command!r} нет в системе" + (
+                " — установите Node.js" if command in {"npx", "node"} else "")
+            return
+        state.status = "запускается"
+        stop = self._stops[state.name] = asyncio.Event()
+        self._tasks[state.name] = asyncio.create_task(self._serve(state, settings, stop), name=f"mcp:{state.name}")
+
+    async def set_server(self, name: str, enabled: bool) -> ServerState:
+        """Включает или выключает сервер: выключенный не запущен, и его инструментов нет в реестре."""
+        state = self.servers[name]
+        self._save(state.key, enabled=enabled)
+        state.enabled = enabled
+        task = self._tasks.get(name)
+        running = task is not None and not task.done()
+        if enabled and not running:
+            self._launch(state, self.config()["servers"].get(state.key, {}))
+        elif not enabled and running:
+            self._stops[name].set()
+            await asyncio.gather(task, return_exceptions=True)
+        if not enabled:
+            state.status = "выключен"
+        return state
+
+    def set_tool(self, name: str, tool_id: str, enabled: bool) -> ServerState:
+        """Включает или выключает инструмент работающего сервера: выключенный уходит из реестра сразу."""
+        state = self.servers[name]
+        tool = state.known[tool_id]
+        if enabled:
+            state.disabled.discard(tool.remote_name)
+            self._registry.replace(tool)
+        else:
+            state.disabled.add(tool.remote_name)
+            self._registry.unregister(tool.id)
+        state.tools = [item.id for item in state.known.values() if item.remote_name not in state.disabled]
+        self._save(state.key, disabled_tools=sorted(state.disabled))
+        return state
+
+    def _save(self, key: str, **fields) -> None:
+        """Настройки сервера — в mcp.json, рядом с тем, что пользователь написал руками."""
+        data = self.config()
+        data["servers"].setdefault(key, {}).update(fields)
+        self._config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     async def close(self) -> None:
-        self._stop.set()
-        for task in self._tasks:
+        for stop in self._stops.values():
+            stop.set()
+        tasks = list(self._tasks.values())
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _serve(self, state: ServerState, settings: dict) -> None:
+    async def _serve(self, state: ServerState, settings: dict, stop: asyncio.Event) -> None:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
@@ -352,22 +410,24 @@ class MCPManager:
                             MCPTool(state.name, session, tool, auto_approve, descriptions, visible=visible, workdir=workdir)
                             for tool in listed.tools if tool.name not in HIDDEN_TOOLS
                         ]
+                        state.known = {tool.id: tool for tool in tools}
                         for tool in tools:
-                            if self._registry.get(tool.id) is None:
+                            if tool.remote_name not in state.disabled and self._registry.get(tool.id) is None:
                                 self._registry.register(tool)
-                        state.tools = [tool.id for tool in tools]
+                        state.tools = [tool.id for tool in tools if tool.remote_name not in state.disabled]
                         state.status = "работает"
                         logger.info("MCP-сервер %s подключён: %s", state.name, ", ".join(state.tools))
-                        await self._stop.wait()
+                        await stop.wait()
         except asyncio.CancelledError:
             raise
         except BaseException as exc:  # noqa: BLE001 — сервер мог упасть как угодно; приложение работает дальше
             state.status = f"ошибка: {_describe(exc)}"
             logger.warning("MCP-сервер %s не работает: %s", state.name, state.status)
         finally:
-            for tool_id in state.tools:
+            for tool_id in state.known:
                 self._registry.unregister(tool_id)
             state.tools = []
+            state.known = {}
             if state.status in {"работает", "запускается"}:
                 state.status = "остановлен"
 

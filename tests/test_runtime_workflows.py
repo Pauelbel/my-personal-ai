@@ -21,7 +21,7 @@ EXTRAS_SKILLS = Path(__file__).resolve().parents[1] / "src/local_agent/skills/li
 
 def settings(tmp_path):
     return Settings(
-        agents_path=tmp_path / "agents", skills_path=tmp_path / "skills",
+        skills_path=tmp_path / "skills",
         sessions_path=tmp_path / "sessions", projects_path=tmp_path / "projects",
         conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory",
         memory_auto_update_messages=0, _env_file=None,
@@ -63,8 +63,7 @@ def test_skill_write_approval_and_new_dialog(tmp_path, approved):
     workspace.mkdir()
     provider = WorkflowProvider()
     # Стартовых скиллов нет: нужный берём из готовых (skills/library).
-    (tmp_path / "skills").mkdir()
-    shutil.copy(EXTRAS_SKILLS / "update-skills.md", tmp_path / "skills")
+    shutil.copytree(EXTRAS_SKILLS / "update-skills", tmp_path / "skills" / "update-skills")
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
         session = project_session(client, workspace)
         session_id = session["id"]

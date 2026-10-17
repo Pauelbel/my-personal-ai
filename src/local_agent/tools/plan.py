@@ -41,6 +41,25 @@ class PlanTool:
         # По истории выбирается итог этапа, который чат покажет результатом (см. core/plan.py).
         self._conversation = conversation
 
+    def validate(self, arguments: dict[str, object]) -> str | None:
+        """Маленькая модель отмечает пункт его текстом («Тест-кейсы») или строкой «2» — переводим в номер пункта.
+        Не узнали — номер остаётся как есть, и execute объяснит, что нужно."""
+        step = arguments.get("step")
+        if arguments.get("action") != "done" or not isinstance(step, str):
+            return None
+        text = " ".join(step.split()).casefold().rstrip(".")
+        if text.isdigit():
+            arguments["step"] = int(text)
+            return None
+        session = self._sessions.get(self._session_id)
+        items = [item["text"].casefold() for item in session.plan] if session else []
+        found = [number for number, item in enumerate(items, start=1) if item == text] or [
+            number for number, item in enumerate(items, start=1) if text and (text in item or item in text)
+        ]
+        if len(found) == 1:
+            arguments["step"] = found[0]
+        return None
+
     async def execute(self, arguments: dict[str, object], workspace: Path | None) -> ToolResult:
         session = self._sessions.get(self._session_id)
         if session is None:

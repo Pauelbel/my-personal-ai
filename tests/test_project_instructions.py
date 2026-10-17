@@ -87,7 +87,7 @@ def test_next_turn_reloads_and_workspace_switch_does_not_leak(tmp_path):
     rule.write_text("ПЕРВОЕ_ПРАВИЛО", encoding="utf-8")
     (second / "AGENTS.md").write_text("ДРУГОЙ_ПРОЕКТ", encoding="utf-8")
     settings = Settings(
-        agents_path=tmp_path / "agents", skills_path=tmp_path / "skills",
+        skills_path=tmp_path / "skills",
         sessions_path=tmp_path / "sessions", projects_path=tmp_path / "projects",
         conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory",
         memory_auto_update_messages=0, _env_file=None,

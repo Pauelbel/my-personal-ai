@@ -31,7 +31,6 @@ class FailingProvider(FakeProvider):
 
 def test_turn_uses_recent_messages_and_persists_reply(tmp_path) -> None:
     settings = Settings(
-        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory",
@@ -76,7 +75,7 @@ def test_turn_uses_recent_messages_and_persists_reply(tmp_path) -> None:
 
 
 def test_session_model_can_be_selected_after_creation(tmp_path) -> None:
-    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
     provider = FakeProvider()
 
     with TestClient(create_app(settings, llm_provider=provider)) as client:
@@ -99,7 +98,7 @@ def test_session_model_can_be_selected_after_creation(tmp_path) -> None:
 
 
 def test_failed_model_call_keeps_user_message(tmp_path) -> None:
-    settings = Settings(agents_path=tmp_path / "agents", sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
+    settings = Settings(sessions_path=tmp_path / "sessions", conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory", _env_file=None)
 
     with TestClient(create_app(settings, llm_provider=FailingProvider())) as client:
         session = post_session(client, {"model": "test-model"}).json()

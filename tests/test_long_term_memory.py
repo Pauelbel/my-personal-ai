@@ -125,7 +125,6 @@ def test_markdown_operations_preserve_manual_entries(tmp_path) -> None:
 def test_update_memory_uses_only_new_messages_and_memory_model(tmp_path) -> None:
     provider = MemoryProvider()
     settings = Settings(
-        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory",
@@ -160,7 +159,6 @@ def test_update_memory_uses_only_new_messages_and_memory_model(tmp_path) -> None
 def test_memory_service_updates_existing_line_without_id(tmp_path) -> None:
     provider = UpdatingMemoryProvider()
     settings = Settings(
-        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory",
@@ -186,7 +184,6 @@ def test_memory_service_updates_existing_line_without_id(tmp_path) -> None:
 def test_invalid_model_response_does_not_advance_checkpoint(tmp_path) -> None:
     provider = MemoryProvider(invalid=True)
     settings = Settings(
-        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory",
@@ -231,7 +228,6 @@ class PartlyInvalidProvider(MemoryProvider):
 def test_rejected_patch_changes_nothing_and_keeps_checkpoint(tmp_path) -> None:
     provider = PartlyInvalidProvider()
     settings = Settings(
-        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory",
@@ -261,7 +257,6 @@ def test_rejected_patch_changes_nothing_and_keeps_checkpoint(tmp_path) -> None:
 def test_update_requires_memory_or_session_model(tmp_path) -> None:
     provider = MemoryProvider()
     settings = Settings(
-        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory",

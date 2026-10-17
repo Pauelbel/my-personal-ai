@@ -7,9 +7,12 @@ import re
 from pathlib import Path
 
 from local_agent.core.tool import ToolResult
+from local_agent.shared.document import MAX_DOCUMENT_BYTES, outline, tokens
 from local_agent.shared.folders import MAX_SEARCH_FILE_BYTES, MAX_SEARCH_FILES, SKIPPED_DIRS
 
+# Сколько read_file отдаёт за раз: файл больше — оглавлением, а читается кусками строк (offset, limit).
 MAX_READ_BYTES = 64 * 1024
+DEFAULT_READ_LINES = 400
 MAX_WRITE_BYTES = 256 * 1024
 MAX_SEARCH_MATCHES = 50
 
@@ -31,6 +34,8 @@ def _clean(path: str) -> str:
     while path != previous:
         previous = path
         path = path.strip().strip(WRAPPERS).rstrip(",;:")
+        # Путь, скопированный из «крошек» («docs / api / index.md»): пробелы вокруг «/» — не часть имён.
+        path = re.sub(r"\s*/\s*", "/", path)
         # Скобка за кавычкой — обёртка «(`путь`)», лишняя скобка — хвост фразы; «docs (old)» не трогаем.
         if path.endswith(")") and (path[-2:-1] in tuple(WRAPPERS) or path.count(")") > path.count("(")):
             path = path[:-1]
@@ -106,11 +111,19 @@ class ListFilesTool:
 class ReadFileTool:
     id = "read_file"
     name = "Чтение файла"
-    description = "Прочитать небольшой текстовый файл внутри выбранной рабочей папки."
+    description = (
+        "Прочитать текстовый файл внутри выбранной рабочей папки. Большой файл (больше 64 КБ) целиком не отдаётся: "
+        "без offset придёт его оглавление с номерами строк, затем читай нужные места кусками — offset и limit"
+    )
     requires_approval = False
     parameters = {
         "type": "object",
-        "properties": {"path": {"type": "string", "description": "Относительный путь к текстовому файлу"}},
+        "properties": {
+            "path": {"type": "string", "description": "Относительный путь к текстовому файлу"},
+            "offset": {"type": "integer", "minimum": 1, "description": "С какой строки читать (с 1) — для больших файлов"},
+            "limit": {"type": "integer", "minimum": 1,
+                      "description": f"Сколько строк прочитать, по умолчанию {DEFAULT_READ_LINES}"},
+        },
         "required": ["path"],
         "additionalProperties": False,
     }
@@ -121,19 +134,61 @@ class ReadFileTool:
     @staticmethod
     def _run(arguments: dict[str, object], workspace: Path) -> ToolResult:
         try:
+            root = _workspace_root(workspace)
             target = _inside_workspace(workspace, arguments.get("path"))
             if not target.is_file():
                 raise ValueError("Это не файл")
-            with target.open("rb") as handle:
-                raw = handle.read(MAX_READ_BYTES + 1)
-            if len(raw) > MAX_READ_BYTES:
-                raise ValueError("Файл больше 64 КБ")
-            content = raw.decode("utf-8")
+            offset, limit = arguments.get("offset"), arguments.get("limit")
+            for name, value in (("offset", offset), ("limit", limit)):
+                if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
+                    raise ValueError(f"{name} — номер строки, целое число от 1")
+            size = target.stat().st_size
+            if size > MAX_DOCUMENT_BYTES:
+                raise ValueError(f"Файл больше {MAX_DOCUMENT_BYTES // 1024 // 1024} МБ")
+            content = target.read_bytes().decode("utf-8")
             if "\x00" in content:
                 raise ValueError("Поддерживаются только текстовые файлы")
-            return ToolResult(content)
+            relative = target.relative_to(root).as_posix()
+            if offset is None and limit is None:
+                if size <= MAX_READ_BYTES:
+                    return ToolResult(content)
+                return ToolResult(_overview(relative, content, size))
+            return ToolResult(_lines(relative, content, offset or 1, limit or DEFAULT_READ_LINES))
         except (OSError, UnicodeError, ValueError) as exc:
             return ToolResult(str(exc), is_error=True)
+
+
+def _overview(relative: str, content: str, size: int) -> str:
+    """Большой файл: размер, оглавление и как читать дальше — вместо содержимого."""
+    lines = content.splitlines()
+    contents = outline(content)
+    head = "\n".join(lines[:20]) if not contents else ""
+    return "\n\n".join(part for part in (
+        f"Файл {relative} большой: {len(lines)} строк, {size // 1024} КБ (≈{tokens(content)} токенов) — "
+        "целиком в окно модели не помещается.",
+        f"Оглавление (номер строки: заголовок):\n{contents}" if contents
+        else f"Заголовков в файле нет. Начало файла:\n{head}",
+        f"Читай нужные места кусками: read_file с offset (номер строки) и limit (до {DEFAULT_READ_LINES} строк); "
+        "найти место по слову — search_files с path этого файла. Если задача про весь документ (тест-кейсы, "
+        "выписка требований, конспект, поиск ошибок), обработай его целиком через process_document.",
+    ) if part)
+
+
+def _lines(relative: str, content: str, offset: int, limit: int) -> str:
+    """Кусок файла строками offset…: не больше limit строк и не больше MAX_READ_BYTES."""
+    lines = content.splitlines()
+    if offset > len(lines):
+        raise ValueError(f"В файле {len(lines)} строк — offset больше")
+    taken: list[str] = []
+    used = 0
+    for line in lines[offset - 1:offset - 1 + limit]:
+        used += len(line.encode("utf-8")) + 1
+        if taken and used > MAX_READ_BYTES:
+            break
+        taken.append(line)
+    end = offset + len(taken) - 1
+    tail = f"\n\n(дальше — read_file с offset {end + 1})" if end < len(lines) else ""
+    return f"{relative}, строки {offset}–{end} из {len(lines)}:\n" + "\n".join(taken) + tail
 
 
 class SearchFilesTool:
@@ -148,7 +203,7 @@ class SearchFilesTool:
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Искомый текст без учёта регистра"},
-            "path": {"type": "string", "description": "Относительная папка для поиска; по умолчанию ."},
+            "path": {"type": "string", "description": "Относительная папка или файл для поиска; по умолчанию ."},
             "glob": {"type": "string", "description": "Маска имени файла, например *.py"},
         },
         "required": ["query"],
@@ -169,11 +224,19 @@ class SearchFilesTool:
                 raise ValueError("glob должен быть строкой")
             root = _workspace_root(workspace)
             start = _inside_workspace(workspace, arguments.get("path") or ".")
-            if not start.is_dir():
-                raise ValueError("Это не папка")
             needle = query.casefold()
             matches: list[str] = []
+            if start.is_file():
+                # Один файл ищется при любом размере до MAX_DOCUMENT_BYTES: так находят место в большом документе.
+                if start.stat().st_size > MAX_DOCUMENT_BYTES:
+                    raise ValueError(f"Файл больше {MAX_DOCUMENT_BYTES // 1024 // 1024} МБ")
+                _search_text(start, root, needle, matches)
+                return ToolResult(_found(matches, []))
+            if not start.is_dir():
+                raise ValueError("Это не папка и не файл")
             scanned = 0
+            # Большие файлы в обходе папки пропускаются, но модель узнаёт о них — и может поискать в каждом отдельно.
+            large: list[str] = []
             for directory, dirs, files in os.walk(start):
                 dirs[:] = sorted(name for name in dirs if name not in SKIPPED_DIRS)
                 for file_name in sorted(files):
@@ -183,23 +246,45 @@ class SearchFilesTool:
                     scanned += 1
                     if scanned > MAX_SEARCH_FILES:
                         matches.append(f"Просмотрено максимум {MAX_SEARCH_FILES} файлов, уточните папку или маску")
-                        return ToolResult("\n".join(matches))
+                        return ToolResult(_found(matches, large))
                     try:
-                        if not path.resolve(strict=True).is_relative_to(root) or path.stat().st_size > MAX_SEARCH_FILE_BYTES:
+                        if not path.resolve(strict=True).is_relative_to(root):
                             continue
-                        text = path.read_text(encoding="utf-8")
-                    except (OSError, UnicodeError):
+                        if path.stat().st_size > MAX_SEARCH_FILE_BYTES:
+                            large.append(path.relative_to(root).as_posix())
+                            continue
+                    except OSError:
                         continue
-                    relative = path.relative_to(root).as_posix()
-                    for number, line in enumerate(text.splitlines(), start=1):
-                        if needle in line.casefold():
-                            matches.append(f"{relative}:{number}: {line.strip()[:200]}")
-                            if len(matches) >= MAX_SEARCH_MATCHES:
-                                matches.append(f"Показаны первые {MAX_SEARCH_MATCHES} совпадений")
-                                return ToolResult("\n".join(matches))
-            return ToolResult("\n".join(matches) or "Совпадений нет")
+                    if _search_text(path, root, needle, matches):
+                        return ToolResult(_found(matches, large))
+            return ToolResult(_found(matches, large))
         except (OSError, ValueError) as exc:
             return ToolResult(str(exc), is_error=True)
+
+
+def _search_text(path: Path, root: Path, needle: str, matches: list[str]) -> bool:
+    """Добавляет совпадения файла; True — набралось MAX_SEARCH_MATCHES и искать дальше не нужно."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return False
+    relative = path.relative_to(root).as_posix()
+    for number, line in enumerate(text.splitlines(), start=1):
+        if needle in line.casefold():
+            matches.append(f"{relative}:{number}: {line.strip()[:200]}")
+            if len(matches) >= MAX_SEARCH_MATCHES:
+                matches.append(f"Показаны первые {MAX_SEARCH_MATCHES} совпадений")
+                return True
+    return False
+
+
+def _found(matches: list[str], large: list[str]) -> str:
+    text = "\n".join(matches) or "Совпадений нет"
+    if large:
+        names = ", ".join(large[:10]) + (f" и ещё {len(large) - 10}" if len(large) > 10 else "")
+        text += (f"\n\nБольшие файлы (больше {MAX_SEARCH_FILE_BYTES // 1024 // 1024} МБ) в поиске по папке пропущены: "
+                 f"{names}. Чтобы искать в таком файле, укажи его в path.")
+    return text
 
 
 class WriteFileTool:

@@ -1,16 +1,19 @@
 """Ход на графе: компактный реестр, activate, interrupt вместо подтверждения, resume после перезапуска."""
 
+import json
+
 from fastapi.testclient import TestClient
 from tests.fakes import ScriptedProvider, call, events_of, post_session
 
 from local_agent.api.app import create_app
 from local_agent.config.settings import Settings
+from local_agent.core.context import estimate_message_tokens, estimate_tokens
 from local_agent.llm.models import ReasoningDelta
 
 
 def settings(tmp_path) -> Settings:
     return Settings(
-        agents_path=tmp_path / "agents", skills_path=tmp_path / "skills", sessions_path=tmp_path / "sessions",
+        skills_path=tmp_path / "skills", sessions_path=tmp_path / "sessions",
         projects_path=tmp_path / "projects", conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory", memory_auto_update_messages=0,
         mcp_enabled=False, _env_file=None,
@@ -353,24 +356,55 @@ def test_fit_turn_shortens_oldest_tool_results_first():
     assert compacted == 1 and "сокращено до 2000 из 4000" in fitted[2].content
     assert [message.content for message in fitted[3:]] == [message.content for message in messages[3:]]
     tight, compacted = fit_turn(messages, budget=10)
-    assert compacted == 2 and tight[4].content == messages[4].content and len(tight[2].content) < 400
+    # Окна не хватает даже так: последняя мера — середина самых больших сообщений, каждого по разу.
+    assert compacted == 4 and len(tight[2].content) < 400
+    assert all(message.content.count("середина сокращена") == 1 for message in tight[4:])
 
 
-def test_long_turn_is_compacted_instead_of_overflowing(tmp_path):
+def test_fit_turn_shrinks_huge_recent_message_to_window():
+    from local_agent.core.context import fit_turn
+    from local_agent.llm.models import ChatMessage
+
+    page = "начало " + "текст документа " * 20_000 + " конец"
+    messages = [ChatMessage("system", "правила"), ChatMessage("user", "Найди ошибки"),
+                ChatMessage("tool", page, tool_call_id="1")]
+    fitted, compacted = fit_turn(messages, budget=3000, extra_tokens=200)
+    assert compacted == 1 and fitted[0].content == "правила" and fitted[1].content == "Найди ошибки"
+    assert 200 + sum(estimate_message_tokens(message) for message in fitted) <= 3000
+    assert fitted[2].content.startswith("начало") and fitted[2].content.endswith("конец")
+    assert "середина сокращена" in fitted[2].content
+
+
+def long_turn_request(tmp_path, window: int):
+    """Четыре чтения по 6000 символов в одном ходе с окном window: что ушло модели последним запросом."""
     workspace = tmp_path / "project"
     workspace.mkdir()
     for name in "abcd":
         (workspace / f"{name}.txt").write_text(name * 6000, encoding="utf-8")
     provider = ScriptedProvider(*(call("read_file", path=f"{name}.txt") for name in "abcd"), "Готово")
-    small = settings(tmp_path).model_copy(update={"default_context_tokens": 6000})
+    small = settings(tmp_path).model_copy(update={"default_context_tokens": window})
     with TestClient(create_app(small, llm_provider=provider)) as client:
         session = project_session(client, workspace)
         events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Прочитай всё"}))
+    request = provider.requests[-1]
+    schemas = estimate_tokens(json.dumps(request["tools"], ensure_ascii=False)) if request["tools"] else 0
+    total = schemas + sum(estimate_message_tokens(message) for message in request["messages"])
+    return events, [message.content for message in request["messages"] if message.role == "tool"], total
 
+
+def test_long_turn_is_compacted_instead_of_overflowing(tmp_path):
+    events, results, total = long_turn_request(tmp_path, 12000)
     assert events[-1]["type"] == "done"
-    assert any("сокращены давние результаты" in event.get("text", "") for event in events if event["type"] == "log")
-    results = [message.content for message in provider.requests[-1]["messages"] if message.role == "tool"]
-    assert "сокращено" in results[0] and "d" * 6000 in results[-1] and "c" * 6000 in results[-2]
+    assert any("Контекст хода не помещался в окно" in event.get("text", "") for event in events if event["type"] == "log")
+    # Давние результаты сокращены, два последних — целиком, и запрос уложился в окно за вычетом запаса на ответ.
+    assert "сокращено" in results[0] and "c" * 6000 in results[-2] and "d" * 6000 in results[-1]
+    assert total <= 12000 - 1024
+
+
+def test_tight_window_shrinks_recent_results_too(tmp_path):
+    _, results, total = long_turn_request(tmp_path, 9000)
+    assert total <= 9000 - 1024
+    assert "середина сокращена" in results[-1] and results[-1].startswith("d") and results[-1].endswith("d")
 
 
 def test_turn_does_not_end_while_plan_has_open_steps(tmp_path):

@@ -6,20 +6,18 @@
 """
 
 import asyncio
+import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
-from dataclasses import dataclass, replace
+from collections.abc import AsyncIterator, Callable, Coroutine
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
 from langgraph.types import Command
 
-from local_agent.agents.files import MAX_TOOL_ROUNDS_LIMIT
-from local_agent.agents.main import HANDOFF_RULE, LANGUAGE_REMINDER, LANGUAGE_RULE, MAIN_AGENT_ID, main_agent
+from local_agent.agents.main import main_agent
 from local_agent.agents.models import Agent
-from local_agent.agents.registry import AgentRegistry
-from local_agent.agents.team import team_prompt
 from local_agent.agents.wiki import wiki_agent
 from local_agent.core.context import (
     browser_state,
@@ -27,6 +25,7 @@ from local_agent.core.context import (
     build_system_prompt,
     estimate_message_tokens,
     estimate_tokens,
+    stash_paste,
 )
 from local_agent.core.errors import AgentRuntimeError, NothingPendingError, SessionBusyError, SessionNotFoundError
 from local_agent.core.graph import CATALOG_MARKER, STOPPED_TEXT, GraphDeps, build_agent_graph, from_chat, log
@@ -36,17 +35,17 @@ from local_agent.core.summary import ConversationSummarizer
 from local_agent.core.tool import Tool, summary_line
 from local_agent.core.toolbox import DEFAULT_ACTIVE_TOOLS, ActivateTool, Toolbox, UseSkillTool
 from local_agent.llm.base import context_length
+from local_agent.llm.models import ChatMessage, ToolCall
 from local_agent.llm.registry import LLMRegistry
 from local_agent.memory.conversation import ConversationService
 from local_agent.memory.models import Message
 from local_agent.memory.service import MemoryService, MemoryServiceError
 from local_agent.sessions.models import Session
 from local_agent.sessions.service import SessionService
+from local_agent.skills.models import Skill
 from local_agent.skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
-
-# activate занимает раунд, поэтому основному агенту лимит выше, чем раньше.
 
 __all__ = [
     "AgentRuntime", "AgentRuntimeError", "NothingPendingError", "RuntimeLimits",
@@ -62,15 +61,13 @@ class RuntimeLimits:
     memory_auto_update_messages: int
     # Сколько последних реплик пользователя (с ответами на них) помнит чат вики; всё раньше забывается.
     wiki_context_messages: int = 3
-    # Раундов вызова инструментов за ход, если у агента не задано своё.
+    # Раундов вызова инструментов за ход; дальше — карточка «продолжить или остановить».
     max_tool_rounds: int = 40
 
 
-# Базовые инструменты, которые добавляют другие части приложения: память, вики, предложения, делегирование.
+# Базовые инструменты, которые добавляют другие части приложения: память, вики, предложения, шаги скиллов.
 # Получают сессию, её агента и набор хода; возвращают инструменты, подключённые всегда.
 CoreTools = Callable[[Session, Agent, Toolbox], list[Tool]]
-# Вызывается, когда ход сессии закончился ответом: так результат саб-агента возвращается основному.
-FinishedHook = Callable[[Session, Message], Awaitable[None]]
 
 
 class AgentRuntime:
@@ -78,7 +75,6 @@ class AgentRuntime:
         self,
         sessions: SessionService,
         conversation: ConversationService,
-        agents: AgentRegistry,
         providers: LLMRegistry,
         memory: MemoryService,
         tools: ToolRegistry,
@@ -89,7 +85,6 @@ class AgentRuntime:
     ) -> None:
         self._sessions = sessions
         self._conversation = conversation
-        self._agents = agents
         self._providers = providers
         self._memory = memory
         self._tools = tools
@@ -100,7 +95,6 @@ class AgentRuntime:
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._background: dict[str, asyncio.Task] = {}
         self.core_tools: list[CoreTools] = []
-        self.finished_hooks: list[FinishedHook] = []
         # Дополнительные инструкции основного агента: читаются на каждом ходе, правка действует сразу.
         self.main_instructions: Callable[[], str] = lambda: ""
         # Архив возможностей для реестра основного агента; задаёт приложение.
@@ -116,43 +110,25 @@ class AgentRuntime:
     # ---------- агенты и инструменты ----------
 
     def agent_for(self, session: Session) -> Agent:
-        """Основная сессия и общий чат — за основным агентом; дочерняя и личный чат — за своим саб-агентом."""
+        """Сессии проектов — за основным агентом, чат вики — за агентом вики."""
         if session.kind == "wiki":
             return wiki_agent(session.provider)
-        if (not session.parent_id and session.kind != "agent") or (session.kind == "agent" and session.agent_id == MAIN_AGENT_ID):
-            return main_agent(session.provider, self.main_instructions())
-        agent = self._agents.get(session.agent_id)
-        if agent is None:
-            raise AgentRuntimeError(f"Саб-агент «{session.agent_id}» не найден: возможно, он в архиве")
-        prompt = f"{agent.system_prompt}\n\n{LANGUAGE_RULE}\n{HANDOFF_RULE}"
-        # В сессии проекта саб-агент знает команду: кто руководит и к кому обратиться.
-        if session.project_id:
-            prompt += f"\n\n{team_prompt(agent, self._agents)}"
-        # Последние строки промпта маленькая модель помнит лучше всего: язык — ещё раз в самом конце.
-        prompt += f"\n\n{LANGUAGE_REMINDER}"
-        return replace(agent, system_prompt=prompt)
+        return main_agent(session.provider, self.main_instructions())
 
     def toolbox(self, session: Session) -> Toolbox:
         agent = self.agent_for(session)
-        sub_agent = agent.id != MAIN_AGENT_ID
         project = self._sessions.project_of(session)
         registry_tools = self._tools.all() if session.workspace else []
         if project is not None and project.mode == "read":
             # Проект только для чтения: всё, что меняет файлы или систему, агенту даже не показываем.
             registry_tools = [tool for tool in registry_tools if not tool.requires_approval]
-        if sub_agent:
-            registry_tools = [tool for tool in registry_tools if tool.id in agent.tools]
         active = project.active_tools if project is not None and project.active_tools is not None else DEFAULT_ACTIVE_TOOLS
         box = Toolbox(
             core=[], catalog=registry_tools, active=list(active),
             on_active_change=lambda active: self._sessions.set_active_tools(session.id, active),
-            all_active=sub_agent,
         )
-        if not sub_agent:
-            box.core.append(ActivateTool(box))
         skill_tool = UseSkillTool(
-            self._skills, {tool.id for tool in self._tools.all()}, {tool.id for tool in registry_tools},
-            agent.skills if sub_agent else None,
+            self._skills, {tool.id for tool in self._tools.all()}, {tool.id for tool in registry_tools}, agent.skills,
         )
         if skill_tool.skills():
             box.core.append(skill_tool)
@@ -160,19 +136,19 @@ class AgentRuntime:
             for tool in build(session, agent, box):
                 # Редкие инструменты основного агента (поиск в памяти, архив) лежат в реестре одной строкой.
                 (box.catalog if getattr(tool, "catalog", False) else box.core).append(tool)
+        if box.catalog:
+            # У чата вики реестра нет: все его инструменты подключены сразу, activate ему не нужен.
+            box.core.insert(0, ActivateTool(box))
         box.__post_init__()
         return box
 
     def catalog_text(self, session: Session, box: Toolbox) -> str:
         """Компактный реестр: имя и одна строка описания, полные схемы подключаются по запросу."""
         if session.kind == "wiki":
-            return "Все инструменты вики подключены сразу. Файлов проекта, памяти о пользователе и саб-агентов здесь нет."
-        agent = self.agent_for(session)
-        sub_agent = agent.id != MAIN_AGENT_ID
-        skills = [
-            skill for skill in self._skills.all()
-            if not sub_agent or agent.skills is None or skill.id in agent.skills
-        ]
+            return "Все инструменты вики подключены сразу. Файлов проекта и памяти о пользователе здесь нет."
+        # Скиллы с шагами — первыми: подходящая задача должна уйти в шаги, а не в самостоятельную работу модели.
+        skills = sorted(self._skills.all(), key=lambda skill: skill.steps is None)
+        runnable = box.get("run_skill") is not None
         parts = ["Реестр возможностей (имя — что делает)."]
         project = self._sessions.project_of(session)
         if project is not None and project.mode == "read":
@@ -180,52 +156,28 @@ class AgentRuntime:
                 "Проект открыт только для чтения: инструменты, меняющие файлы или систему, недоступны. "
                 "Если без них не обойтись, скажи пользователю, что нужно переключить проект в полный режим."
             )
+        if skills:
+            parts.append(
+                "Скиллы — инструкции под тип задач, загружаются через use_skill. У скиллов с «▶ по шагам» работа "
+                "готова целиком: шаги выполняются сами, по порядку, с проверками. Задачу, которая подходит под такой "
+                "скилл, не делай сам — запусти его через run_skill и передай в inputs то, что уже известно из разговора:\n"
+                + "\n".join(_skill_line(skill, runnable) for skill in skills)
+            )
+        else:
+            parts.append("Скиллов пока нет.")
         tools = box.catalog_lines()
         if tools:
             parts.append(
-                ("Твои инструменты:" if sub_agent else "Инструменты (вызывай подключённые, остальные сначала подключи через activate):")
-                + "\n" + "\n".join(tools)
+                "Инструменты (вызывай подключённые, остальные сначала подключи через activate):\n" + "\n".join(tools)
             )
         else:
             parts.append("Инструментов для работы с файлами нет.")
-        parts.append(
-            "Скиллы — инструкции под тип задач, загружаются через use_skill:\n"
-            + "\n".join(f"- {skill.id} — {summary_line(skill.description)}" for skill in skills)
-            if skills else "Скиллов пока нет."
-        )
-        if not sub_agent:
-            agents = self._agents.all()
-            # Инструменты рядом с ролью: по ним видно, по силам ли агенту задача (браузер, файлы, поиск).
-            parts.append(
-                "Саб-агенты — помощники с постоянной ролью, задачу поручают через delegate. Задачу по профилю агента "
-                "поручай ему, а не делай сам. Передавай её такой, какой её поставил пользователь (просят автотест — "
-                "поручи написать автотест, а не что-то другое). Если для неё агенту не хватает инструментов, не делай "
-                "его работу молча: скажи пользователю, чего не хватает, и предложи дать (propose с id агента):\n"
-                + "\n".join(
-                    f"- {item.id} — {summary_line(item.description or item.name)} "
-                    f"(инструменты: {', '.join(item.tools) if item.tools else 'нет'})"
-                    for item in agents
-                )
-                if agents else "Саб-агентов пока нет."
-            )
-            known = {item.id: item.name for item in agents}
-            routes = [
-                f"- {kind} → {'ты сам' if who == MAIN_AGENT_ID else f'{who} ({known[who]})'}"
-                for kind, who in (project.routes.items() if project is not None else ())
-                if who == MAIN_AGENT_ID or who in known
-            ]
-            if routes:
-                parts.append(
-                    "Маршруты проекта — пользователь выбрал, кто делает такие задачи; следуй им без вопроса. Тип сверяй "
-                    "по смыслу («UI-автотесты» и «автотесты» — один маршрут); не уверен — спроси через choose_route:\n"
-                    + "\n".join(routes)
-                )
-        if not sub_agent and self.secret_names is not None and (names := self.secret_names()):
+        if self.secret_names is not None and (names := self.secret_names()):
             parts.append(
                 "Доступы, которые пользователь уже задал (значения скрыты; скрипт инструмента получает их из os.environ, если перечислить "
                 f"в secrets при propose): {', '.join(names)}"
             )
-        if not sub_agent and self.archive_lines is not None and (archived := self.archive_lines()):
+        if self.archive_lines is not None and (archived := self.archive_lines()):
             parts.append("В архиве (вернуть можно через archive с action restore, с утверждением пользователя):\n" + "\n".join(archived))
         return "\n\n".join(parts)
 
@@ -263,12 +215,12 @@ class AgentRuntime:
             events = self.resume(session_id, {"action": "reject"}, request_id)
 
     async def stream_turn(
-        self, session_id: str, content: str, request_id: str, sender: str | None = None, *, retry: bool = False,
-        attachments: tuple[str, ...] = (),
+        self, session_id: str, content: str, request_id: str, *, retry: bool = False,
+        attachments: tuple[str, ...] = (), skill: str | None = None,
     ) -> AsyncIterator[dict]:
-        """sender — кто написал реплику, если не пользователь (например, основной агент саб-агенту);
-        retry — повтор после сбоя: та же реплика без ответа не сохраняется второй раз;
-        attachments — имена картинок, которые пользователь вставил в реплику."""
+        """retry — повтор после сбоя: та же реплика без ответа не сохраняется второй раз;
+        attachments — имена картинок, которые пользователь вставил в реплику;
+        skill — пользователь сам запустил шаги скилла кнопкой: ход начинается их карточкой, без запроса к модели."""
         lock = self._session_locks.setdefault(session_id, asyncio.Lock())
         if lock.locked():
             raise SessionBusyError("В этой сессии ещё выполняется предыдущий ход")
@@ -277,6 +229,8 @@ class AgentRuntime:
             if session is None:
                 raise SessionNotFoundError("Сессия не найдена")
             if session.pending_thread and session.pending:
+                if skill is not None:
+                    raise SessionBusyError("Ход ждёт решения по карточке: сначала ответьте на неё")
                 # Ход ждёт решения по карточке: новое сообщение — ответ на неё.
                 async for event in self._drive(session, session.pending_thread, Command(resume={
                     "action": "reply", "text": content,
@@ -286,7 +240,7 @@ class AgentRuntime:
             if session.pending_thread:
                 # Прошлый ход оборвался посреди графа (сбой или остановка сервера): начинаем с чистого листа.
                 await self._forget(session.id, session.pending_thread)
-            async for event in self._start(session, content, request_id, sender, retry, tuple(attachments)):
+            async for event in self._start(session, content, request_id, retry, tuple(attachments), skill):
                 yield event
 
     async def resume(self, session_id: str, decision: object, request_id: str) -> AsyncIterator[dict]:
@@ -310,8 +264,8 @@ class AgentRuntime:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _start(
-        self, session: Session, content: str, request_id: str, sender: str | None, retry: bool = False,
-        attachments: tuple[str, ...] = (),
+        self, session: Session, content: str, request_id: str, retry: bool = False, attachments: tuple[str, ...] = (),
+        skill_id: str | None = None,
     ) -> AsyncIterator[dict]:
         agent = self.agent_for(session)
         provider_id = session.provider or agent.llm_provider
@@ -321,31 +275,44 @@ class AgentRuntime:
         model = session.model or agent.model
         if not model:
             raise AgentRuntimeError("Выберите модель для этой сессии")
+        skill = self._skills.get(skill_id) if skill_id is not None else None
+        if skill_id is not None and (skill is None or skill.steps is None):
+            raise AgentRuntimeError(f"У скилла «{skill_id}» нет шагов")
+        if skill is not None:
+            content = content or f"▶ Запустить по шагам: {skill.name}"
+        loaded_window = await context_length(provider, model)
+        window = loaded_window or self._limits.default_context_tokens
+        budget = max(window - self._limits.response_reserve_tokens, 0)
+        stashed = None
+        if session.kind == "chat" and session.workspace:
+            # Огромная вставка — в файл проекта: в разговоре и в окне модели остаются её края и путь.
+            stashed = await asyncio.to_thread(stash_paste, Path(session.workspace), content, budget)
+            if stashed is not None:
+                content = stashed[0]
 
         last = await asyncio.to_thread(self._conversation.recent, session.id, 1)
         if retry and last and last[-1].role == "user" and last[-1].content == content:
             user_message = last[-1]
         else:
             user_message = await asyncio.to_thread(
-                self._conversation.add_user_message, session.id, content, sender, attachments,
+                self._conversation.add_user_message, session.id, content, attachments,
             )
         wiki = session.kind == "wiki"
-        if sender is None and not session.parent_id and session.kind == "chat":
-            self._sessions.name_from_first_message(session.id, content or "Картинка", self._conversation.count(session.id))
+        if session.kind == "chat":
+            title = f"Скилл «{skill.name}» по шагам" if skill else content or "Картинка"
+            self._sessions.name_from_first_message(session.id, title, self._conversation.count(session.id))
         yield {"type": "user_message", "message": user_message}
+        if stashed is not None:
+            yield log(f"Большой текст сохранён в файл {stashed[1]} — модель получит его начало, конец и путь к файлу")
 
         box = self.toolbox(session)
         definitions = box.definitions()
-        loaded_window = await context_length(provider, model)
-        window = loaded_window or self._limits.default_context_tokens
-        budget = max(window - self._limits.response_reserve_tokens, 0)
         history = await asyncio.to_thread(self._conversation.recent, session.id, self._limits.max_context_messages * 10)
         if wiki:
             # Чат вики — череда независимых просьб: модель видит только хвост разговора, без резюме,
             # иначе старые тексты и ответы путают её на новой задаче.
             history = last_user_turns(history, self._limits.wiki_context_messages)
-        # Саб-агент работает на основного агента, а не на пользователя, а вики — не про пользователя:
-        # личная память в эти сессии не попадает.
+        # Вики — не про пользователя: личная память в её чат не попадает.
         memory_context = await asyncio.to_thread(self._memory.prompt_context, content) if _with_user(session) else ""
         summary = "" if wiki else session.summary
         project_context = await asyncio.to_thread(
@@ -374,14 +341,22 @@ class AgentRuntime:
         ) if present]
         yield log(f"В системный промпт добавлено: {', '.join(extras)}" if extras else "Дополнительный контекст не подключён")
 
+        if skill is not None and box.get("run_skill") is not None:
+            # Скилл выбран пользователем: вызов готов сразу, граф начнёт с его карточки, без запроса к модели.
+            call = ToolCall(f"skill-{uuid4().hex[:12]}", "run_skill", json.dumps(
+                {"skill": skill.id, "inputs": {}}, ensure_ascii=False,
+            ))
+            saved = await asyncio.to_thread(self._conversation.add_assistant_message, session.id, "", (call,))
+            yield {"type": "tool_calls", "message": saved}
+            context.messages.append(ChatMessage("assistant", None, tool_calls=(call,)))
         thread = f"{session.id}:{uuid4().hex}"
         # Ход идёт: если сервер упадёт посреди графа, следующий ход начнётся с чистого листа.
         self._sessions.set_pending(session.id, thread, None)
         state = {
             "session_id": session.id, "request_id": request_id, "provider_id": provider_id, "model": model,
             "window": window, "budget": budget, "rounds": 0,
-            "max_rounds": agent.max_tool_rounds or self._limits.max_tool_rounds,
-            "round_step": agent.max_tool_rounds or self._limits.max_tool_rounds,
+            "max_rounds": self._limits.max_tool_rounds,
+            "round_step": self._limits.max_tool_rounds,
             "messages": [from_chat(message) for message in context.messages],
             "decisions": {}, "answer": None,
             "included": context.included_count, "history_count": self._conversation.count(session.id),
@@ -391,8 +366,9 @@ class AgentRuntime:
 
     async def _drive(self, session: Session, thread: str, payload: object) -> AsyncIterator[dict]:
         """Прогоняет граф до ответа или до interrupt и переводит его события в события UI."""
-        # Узлов графа на раунд — три (модель, подтверждения, инструменты): запас под самый большой лимит раундов.
-        config = {"configurable": {"thread_id": thread}, "recursion_limit": 3 * MAX_TOOL_ROUNDS_LIMIT + 50}
+        # Узлов графа на раунд — три (модель, подтверждения, инструменты); за один запуск графа — не больше
+        # лимита раундов: дальше ход встаёт на карточку «продолжить или остановить».
+        config = {"configurable": {"thread_id": thread}, "recursion_limit": 3 * self._limits.max_tool_rounds + 50}
         interrupted = None
         answer: Message | None = None
         try:
@@ -422,8 +398,6 @@ class AgentRuntime:
         )
         current = self._sessions.get(session.id) or session
         self._after_turn(current, values.get("model") or current.model, included)
-        for hook in self.finished_hooks:
-            self._spawn(f"finished:{session.id}:{answer.id}", hook(current, answer))
 
     async def _thread_values(self, thread: str) -> dict:
         if self._checkpointer is None:
@@ -443,10 +417,10 @@ class AgentRuntime:
 
     def _after_turn(self, session: Session, model: str, included_count: int) -> None:
         # Чат вики забывает старое намеренно: резюме выпавших сообщений ему не нужно.
-        if session.kind in {"chat", "agent"} and self._conversation.count(session.id) > included_count:
+        if session.kind == "chat" and self._conversation.count(session.id) > included_count:
             self._spawn(f"summary:{session.id}", self._summarizer.update(session.id, included_count, model))
         threshold = self._limits.memory_auto_update_messages
-        # Память — о пользователе: из переписки саб-агентов и служебной проверки вики её не пополняем.
+        # Память — о пользователе: из чата вики её не пополняем.
         if _with_user(session) and threshold and self._memory.pending_user_messages(session.id) >= threshold:
             self._spawn(f"memory:{session.id}", self._update_memory(session.id))
 
@@ -480,6 +454,14 @@ class AgentRuntime:
             logger.error("Фоновая задача завершилась ошибкой key=%s", key, exc_info=task.exception())
 
 
+def _skill_line(skill: Skill, runnable: bool) -> str:
+    line = f"- {skill.id} — {summary_line(skill.description)}"
+    if skill.steps is None or not runnable:
+        return line
+    needs = f"; нужно: {', '.join(item.name for item in skill.steps.inputs)}" if skill.steps.inputs else ""
+    return f"{line} (▶ по шагам{needs})"
+
+
 def last_user_turns(history: list[Message], count: int) -> list[Message]:
     """Хвост истории с последних count реплик пользователя: всё, что раньше, модель не видит."""
     starts = [index for index, message in enumerate(history) if message.role == "user"]
@@ -487,8 +469,6 @@ def last_user_turns(history: list[Message], count: int) -> list[Message]:
 
 
 def _with_user(session: Session) -> bool:
-    """Разговор пользователя с основным агентом — сессия проекта или общий чат: только в них нужна и пополняется
-    личная память. Саб-агенты работают на основного агента, а вики — не про пользователя."""
-    if session.parent_id:
-        return False
-    return session.kind == "chat" or (session.kind == "agent" and session.agent_id == MAIN_AGENT_ID)
+    """Разговор пользователя с основным агентом — сессия проекта: только в ней нужна и пополняется
+    личная память. Вики — не про пользователя."""
+    return session.kind == "chat"

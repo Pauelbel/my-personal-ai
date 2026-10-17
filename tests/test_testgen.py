@@ -1,40 +1,45 @@
-"""Генерация тест-кейсов по документации: разбор страниц, нарезка, запросы к модели, запись, продолжение и инструмент."""
+"""Скрипт тест-кейсов скилла test-cases: разбор страниц, куски, генерация с продолжением, ревью по кускам, запуск."""
 
-import asyncio
+import importlib.util
+import io
 import json
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from local_agent.llm.base import LLMProviderError, LLMProviderUnavailable
-from local_agent.llm.models import ChatResult
-from local_agent.tools.testgen.pipeline import CaseGenerator, chunks, parse_page, system_prompt
-from local_agent.tools.testgen.style import lint
-from local_agent.tools.testgen.tool import GenerateTestCasesTool
+import pytest
+
+from local_agent.skills.files import LIBRARY
+
+SPEC = importlib.util.spec_from_file_location("testcases_script", LIBRARY / "test-cases" / "scripts" / "testcases.py")
+script = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = script
+SPEC.loader.exec_module(script)
 
 BODY = "## Настройка\n\n" + "Откройте меню «Сервер» и задайте адрес. " * 20
 
 CASE = {
     "title": "Настройка адреса сервера",
-    "component": "EMS",
     "priority": "High",
-    "type": "Позитивный",
     "preconditions": ["EMS запущен."],
     "steps": [{"action": "Откройте меню «Сервер».", "test_data": "IP = 10.0.0.1 | 24", "expected": "Открывается вкладка."}],
-    "source_section": "Настройка",
+    "questions": "",
 }
 
 
-class FakeProvider:
+class FakeModel:
     """Отвечает заготовленными ответами по очереди; ответ-исключение выбрасывается."""
 
     def __init__(self, *replies):
         self.replies = list(replies)
         self.calls = []
 
-    async def chat(self, model, messages, tools=None, response_format=None, options=None):
-        self.calls.append({"model": model, "messages": messages, "response_format": response_format, "options": options})
+    def chat(self, system, user, response_format=None):
+        self.calls.append({"system": system, "user": user, "response_format": response_format})
         reply = self.replies.pop(0) if self.replies else {"test_cases": [CASE]}
         if isinstance(reply, Exception):
             raise reply
-        return ChatResult(content=reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False))
+        return reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
 
 
 def page(root, relative, text, title="Страница", source="https://docs/pages/viewpage.action?pageId=42"):
@@ -44,35 +49,31 @@ def page(root, relative, text, title="Страница", source="https://docs/pa
     return path
 
 
-def run(generator, start, **kwargs):
-    return asyncio.run(generator.run(start, **kwargs))
-
-
 def test_parse_page_drops_images_links_and_child_pages(tmp_path):
     text = (
         "# Заголовок\n\nТекст ![схема](img.png) раздела.\n\n- [Ссылка](other.md)\n\nЕщё текст.\n"
         "\n---\n\n### Дочерние страницы\n\n- [Дочь](child/index.md)\n"
     )
-    parsed = parse_page(page(tmp_path, "docs/a/index.md", text, title="Инициализация"), tmp_path)
+    parsed = script.parse_page(page(tmp_path, "docs/a/index.md", text, title="Инициализация"), tmp_path)
 
     assert parsed.title == "Инициализация" and parsed.location == "Документация > Инициализация"
-    assert parsed.page_id == "42" and parsed.relative == "docs/a/index.md"
+    assert parsed.source.endswith("pageId=42") and parsed.relative == "docs/a/index.md"
     assert parsed.text == "Текст  раздела.\n\nЕщё текст."
 
 
-def test_parse_page_without_front_matter_uses_heading_and_hash_id(tmp_path):
+def test_parse_page_without_front_matter_uses_heading(tmp_path):
     (tmp_path / "guide.md").write_text("# Руководство\n\nТекст.\n", encoding="utf-8")
 
-    parsed = parse_page(tmp_path / "guide.md", tmp_path)
+    parsed = script.parse_page(tmp_path / "guide.md", tmp_path)
 
     assert parsed.title == "Руководство" and parsed.location == "guide.md"
-    assert len(parsed.page_id) == 8 and parsed.text == "Текст."
+    assert parsed.source == "" and parsed.text == "Текст."
 
 
 def test_chunks_split_by_headings_and_keep_all_text():
     text = "".join(f"## Раздел {n}\n\n" + "слово " * 300 + "\n\n" for n in range(6)) + "## Огромный\n\n" + ("абзац " * 200 + "\n\n") * 10
 
-    parts = chunks(text, 4000)
+    parts = script.chunks(text, 4000)
 
     assert len(parts) > 3 and all(len(part) <= 4000 for part in parts)
     assert "".join(parts) == text
@@ -85,11 +86,11 @@ def test_lint_checks_verb_length_and_banned_words():
         {"action": "Убедитесь, что данные сохранены.", "expected": "Открывается окно."},
     ]}
 
-    issues = lint([case])
+    issues = script.lint([case], first=5)
 
-    assert any("шаг 1: шаг не начинается с глагола" in issue for issue in issues)
-    assert any("шаг 1: в expected запрещённое слово «успешн…»" in issue for issue in issues)
-    assert any("шаг 2: в expected предложение длиннее 20 слов" in issue for issue in issues)
+    assert any("TC-005, шаг 1: шаг не начинается с глагола" in issue for issue in issues)
+    assert any("TC-005, шаг 1: в expected запрещённое слово «успешн…»" in issue for issue in issues)
+    assert any("TC-005, шаг 2: в expected предложение длиннее 20 слов" in issue for issue in issues)
     assert not any("шаг 3" in issue for issue in issues)
 
 
@@ -97,23 +98,43 @@ def test_generator_writes_pages_in_batches_and_resumes(tmp_path):
     page(tmp_path, "docs/a/index.md", BODY, title="Первая")
     page(tmp_path, "docs/a/short/index.md", "Мало текста.", title="Короткая")
     page(tmp_path, "docs/b/index.md", BODY, title="Вторая", source="")
-    provider = FakeProvider()
-    generator = CaseGenerator(provider, "gemma", tmp_path)
+    model = FakeModel()
 
-    first = run(generator, tmp_path / "docs", limit=1)
-    second = run(generator, tmp_path / "docs", limit=5)
-    third = run(generator, tmp_path / "docs")
+    first, first_ok = script.generate(model, tmp_path, tmp_path / "docs", 1, False)
+    second, _ = script.generate(model, tmp_path, tmp_path / "docs", 5, False)
+    third, _ = script.generate(model, tmp_path, tmp_path / "docs", 5, False)
 
     out = (tmp_path / "testgen/test_cases/docs/a/index.md").read_text(encoding="utf-8")
-    assert "## TC-42-01. Настройка адреса сервера" in out and "IP = 10.0.0.1 \\| 24" in out
-    assert [p.output for p in first.pages] == ["testgen/test_cases/docs/a/index.md"] and first.remaining == 1
+    assert "| TC-001 | Настройка адреса сервера | High | EMS запущен. | 1. IP = 10.0.0.1 \\| 24 |" in out
+    assert first_ok and "осталось без тест-кейсов: 1" in first and "testgen/test_cases/docs/a/index.md: кейсов 1" in first
     # Короткая страница пропускается и в лимит не входит.
-    assert [p.skipped for p in second.pages] == ["мало текста", ""] and second.remaining == 0
-    assert [p.skipped for p in third.pages] == ["мало текста"] and third.total == 3
-    assert len(provider.calls) == 2
-    call = provider.calls[0]
-    assert call["model"] == "gemma" and call["response_format"]["json_schema"]["strict"] is True
-    assert call["options"] == {"temperature": 0.2, "reasoning_effort": "none"}
+    assert "осталось без тест-кейсов: 0" in second and "мало текста" in second
+    assert "Новых страниц для генерации нет." in third and len(model.calls) == 2
+    assert model.calls[0]["response_format"]["json_schema"]["strict"] is True
+
+
+def test_cases_are_one_table_with_numbered_steps_and_questions(tmp_path):
+    page(tmp_path, "docs/login.md", BODY, title="Вход")
+    login = {
+        "title": "Авторизация пользователя", "priority": "High", "preconditions": ["Сервис запущен.", "Есть admin."],
+        "steps": [
+            {"action": "Откройте страницу входа.", "test_data": "—", "expected": "Открывается форма."},
+            {"action": "Введите неверный пароль.", "test_data": "Пароль = wrong", "expected": "—"},
+            {"action": "Нажмите «Войти».", "test_data": "", "expected": "Вход не выполняется."},
+        ],
+        "questions": "Сколько попыток до блокировки?",
+    }
+    script.generate(FakeModel({"test_cases": [login, {**CASE, "questions": ""}]}), tmp_path, tmp_path / "docs", 5, False)
+
+    lines = (tmp_path / "testgen/test_cases/docs/login.md").read_text(encoding="utf-8").splitlines()
+    table = lines[lines.index("| ID | Название | Приоритет | Предусловия | Тестовые данные | Шаги | Ожидаемый результат | Вопросы |"):]
+    assert table[2] == (
+        "| TC-001 | Авторизация пользователя | High | Сервис запущен.<br>Есть admin. | 2. Пароль = wrong "
+        "| 1. Откройте страницу входа.<br>2. Введите неверный пароль.<br>3. Нажмите «Войти». "
+        "| 1. Открывается форма.<br>3. Вход не выполняется. | Сколько попыток до блокировки? |"
+    )
+    # Вопросов нет — столбец пустой.
+    assert table[3].startswith("| TC-002 | Настройка адреса сервера |") and table[3].endswith("| 1. Открывается вкладка. |  |")
 
 
 def test_system_prompt_takes_project_rules_and_example(tmp_path):
@@ -121,76 +142,129 @@ def test_system_prompt_takes_project_rules_and_example(tmp_path):
     (tmp_path / "testgen/rules.md").write_text("Продукт: Wi-Fi контроллер SoftWLC.", encoding="utf-8")
     (tmp_path / "testgen/example.json").write_text(json.dumps({"title": "Создание домена"}), encoding="utf-8")
 
-    prompt = system_prompt(tmp_path)
+    prompt = script.system_prompt(tmp_path)
 
     assert "Правила проекта:\nПродукт: Wi-Fi контроллер SoftWLC." in prompt
-    assert "Создание домена" in prompt and "Вход в веб-интерфейс с неверным паролем" not in prompt
+    # Свой пример заменяет встроенный целиком.
+    assert "Создание домена" in prompt and "Пароль = wrong" not in prompt
 
 
-def test_empty_answer_is_retried_and_rejected_option_is_dropped(tmp_path):
+def test_empty_or_broken_answer_is_retried(tmp_path):
     page(tmp_path, "docs/a.md", BODY)
-    provider = FakeProvider("", LLMProviderError("Сервер вернул ошибку HTTP 400: unknown field"), {"test_cases": [CASE]})
+    model = FakeModel("", script.ModelError("сервер модели вернул HTTP 500"), {"test_cases": [CASE]})
 
-    result = run(CaseGenerator(provider, "gemma", tmp_path), tmp_path / "docs")
+    text, ok = script.generate(model, tmp_path, tmp_path / "docs", 5, False)
 
-    assert result.pages[0].output and not result.pages[0].errors
-    # Пустой ответ не отключает reasoning_effort, отказ сервера с HTTP 400 — отключает.
-    assert [call["options"].get("reasoning_effort") for call in provider.calls] == ["none", "none", None]
+    assert ok and "testgen/test_cases/docs/a.md: кейсов 1" in text and len(model.calls) == 3
 
 
 def test_page_with_failed_chunk_is_not_written_and_stays_pending(tmp_path):
     page(tmp_path, "docs/a.md", BODY)
-    provider = FakeProvider("не json", "снова не json", "и опять")
+    model = FakeModel("не json", "снова не json", "и опять")
 
-    result = run(CaseGenerator(provider, "gemma", tmp_path), tmp_path / "docs")
+    text, ok = script.generate(model, tmp_path, tmp_path / "docs", 5, False)
 
-    assert result.pages[0].errors and not result.pages[0].output
-    assert result.remaining == 1 and not (tmp_path / "testgen/test_cases/docs/a.md").exists()
+    assert not ok and "кусок 1/1: ответ модели — не JSON" in text
+    assert "осталось без тест-кейсов: 1" in text and not (tmp_path / "testgen/test_cases/docs/a.md").exists()
 
 
-def test_tool_validates_arguments_and_reports_batch(tmp_path):
+def test_big_file_is_skipped_in_folder_but_processed_by_path_and_resumed(tmp_path, monkeypatch):
+    monkeypatch.setattr(script, "MAX_PAGE_BYTES", 3000)
+    monkeypatch.setattr(script, "CHUNK_CHARS", 1500)
+    sections = "".join(f"## Раздел {n}\n\n" + "Задайте адрес сервера и сохраните. " * 30 + "\n\n" for n in range(4))
+    big = page(tmp_path, "docs/all.md", sections, title="Вся документация")
     page(tmp_path, "docs/a.md", BODY)
-    unbound = asyncio.run(GenerateTestCasesTool().execute({"path": "docs"}, tmp_path))
-    tool = GenerateTestCasesTool().bind(FakeProvider(), "gemma")
 
-    outside = asyncio.run(tool.execute({"path": "../"}, tmp_path))
-    bad_limit = asyncio.run(tool.execute({"path": "docs", "limit": 0}, tmp_path))
-    done = asyncio.run(tool.execute({"path": "docs"}, tmp_path))
+    in_folder, _ = script.generate(FakeModel(), tmp_path, tmp_path / "docs", 5, False)
+    skipped = not (tmp_path / "testgen/test_cases/docs/all.md").exists()
+    broken = FakeModel({"test_cases": [CASE]}, {"test_cases": [CASE]}, script.Unavailable("Сервер модели недоступен"))
+    stopped, stopped_ok = script.generate(broken, tmp_path, big, 5, False)
+    resumed = FakeModel()
+    done, done_ok = script.generate(resumed, tmp_path, big, 5, False)
 
-    assert unbound.is_error and "Модель" in unbound.content
-    assert outside.is_error and bad_limit.is_error
-    assert not done.is_error and "testgen/test_cases/docs/a.md: кейсов 1" in done.content
-    assert GenerateTestCasesTool.requires_approval is True
+    assert "похоже на сводный" in in_folder and skipped
+    # Сервер пропал на третьем куске: два готовых сохранены, следующий запуск начинает с третьего.
+    assert not stopped_ok and "продолжит с места остановки" in stopped
+    parts = len(script.chunks(script.parse_page(big, tmp_path).text, 1500))
+    assert parts == 4 and len(resumed.calls) == parts - 2
+    assert done_ok and "testgen/test_cases/docs/all.md: кейсов 4, кусков 4" in done
 
 
-def test_tool_keeps_finished_pages_when_server_goes_down(tmp_path):
+def test_review_checks_each_chunk_with_its_own_cases(tmp_path, monkeypatch):
+    monkeypatch.setattr(script, "CHUNK_CHARS", 1500)
+    text = "".join(f"## Раздел {n}\n\n" + f"Пункт {n}: задайте адрес сервера. " * 40 + "\n\n" for n in range(2))
+    page(tmp_path, "docs/a.md", text, title="Адреса")
+    second = {**CASE, "title": "Второй блок", "steps": [{"action": "Успешно нажмите.", "test_data": "—", "expected": "Ок."}]}
+    script.generate(FakeModel({"test_cases": [CASE]}, {"test_cases": [CASE, second]}), tmp_path, tmp_path / "docs", 5, False)
+    model = FakeModel("1. Не покрыт пункт 0.\n**Вывод:** поправить TC-001.", "Замечаний нет.\nВывод: можно отдавать.")
+
+    summary, ok = script.review(model, tmp_path, tmp_path / "docs", 5)
+    again, _ = script.review(model, tmp_path, tmp_path / "docs", 5)
+
+    first_call, second_call = model.calls
+    # Ревьюер видит кусок документации и кейсы, написанные по нему, с номерами из общей таблицы страницы.
+    assert "Пункт 0" in first_call["user"] and "Пункт 1" not in first_call["user"]
+    assert "| TC-001 |" in first_call["user"] and "| TC-003 | Второй блок" in second_call["user"]
+    assert "TC-003, шаг 1: в action запрещённое слово «Успешн…»" in second_call["user"]
+    assert first_call["system"].startswith("Ты — строгий ревьюер тест-кейсов")
+    report = (tmp_path / "testgen/review/docs/a.md").read_text(encoding="utf-8")
+    assert "## Фрагмент 1 из 2 (TC-001–TC-001)" in report and "## Фрагмент 2 из 2 (TC-002–TC-003)" in report
+    assert ok and "testgen/review/docs/a.md — Вывод: поправить TC-001.; Вывод: можно отдавать." in summary
+    # Повторное ревью ничего не спрашивает: куски уже проверены.
+    assert len(model.calls) == 2 and "testgen/review/docs/a.md" in again
+
+
+def test_main_checks_arguments_and_needs_the_model(tmp_path, monkeypatch, capsys):
     page(tmp_path, "docs/a.md", BODY)
-    page(tmp_path, "docs/b.md", BODY)
-    tool = GenerateTestCasesTool().bind(FakeProvider({"test_cases": [CASE]}, LLMProviderUnavailable("Сервер недоступен")), "m")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MEEPO_LLM_URL", raising=False)
 
-    result = asyncio.run(tool.execute({"path": "docs", "limit": 2}, tmp_path))
+    def run(arguments):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(arguments)))
+        code = script.main()
+        return code, capsys.readouterr().out
 
-    assert result.is_error and "продолжит с места остановки" in result.content
-    assert (tmp_path / "testgen/test_cases/docs/a.md").exists()
+    assert run({"mode": "delete", "path": "docs"})[0] == 2
+    assert run({"path": "docs", "limit": 0})[0] == 2
+    assert run({"path": "../"})[0] == 2
+    code, out = run({"path": "docs"})
+    assert code == 2 and "MEEPO_LLM_URL" in out
 
 
-def test_extra_runs_on_model_of_current_turn(tmp_path):
-    from local_agent.core.tool import CURRENT_TURN
-    from local_agent.llm.registry import LLMRegistry
-    from local_agent.tools.testgen.tool import TestCasesExtra
+def test_model_talks_to_openai_compatible_server_and_drops_rejected_option(monkeypatch):
+    requests = []
 
-    provider = FakeProvider({"test_cases": [CASE]})
-    tool = TestCasesExtra(LLMRegistry({"p": provider}))
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    (docs / "a.md").write_text("# Страница\n\n" + BODY, encoding="utf-8")
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 — имя метода задаёт http.server
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests.append({"path": self.path, "auth": self.headers.get("Authorization"), "body": body})
+            status = 400 if len(requests) == 1 else 200
+            reply = {"error": "unknown field"} if status == 400 else {"choices": [{"message": {"content": "<think>x</think>ответ"}}]}
+            data = json.dumps(reply).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
-    unbound = asyncio.run(tool.execute({"path": "docs"}, tmp_path))
-    token = CURRENT_TURN.set({"provider_id": "p", "model": "gemma"})
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("MEEPO_LLM_URL", f"http://127.0.0.1:{server.server_port}/v1")
+    monkeypatch.setenv("MEEPO_LLM_MODEL", "gemma")
+    monkeypatch.setenv("MEEPO_LLM_KEY", "sk-1")
     try:
-        bound = asyncio.run(tool.execute({"path": "docs", "limit": 1}, tmp_path))
+        model = script.Model()
+        with pytest.raises(script.ModelError, match="HTTP 400"):
+            model.chat("система", "вопрос")
+        answer = model.chat("система", "вопрос")
     finally:
-        CURRENT_TURN.reset(token)
+        server.shutdown()
 
-    assert unbound.is_error
-    assert not bound.is_error and (tmp_path / "testgen/test_cases/docs/a.md").exists()
+    first, second = requests
+    assert first["path"] == "/v1/chat/completions" and first["auth"] == "Bearer sk-1"
+    assert first["body"]["reasoning_effort"] == "none" and first["body"]["model"] == "gemma"
+    # Сервер не принял reasoning_effort — дальше запросы без него; рассуждения в начале ответа отрезаны.
+    assert "reasoning_effort" not in second["body"] and answer == "ответ"

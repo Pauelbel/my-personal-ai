@@ -17,7 +17,6 @@ from local_agent.config.settings import Settings
 def test_live_lm_studio_turn(tmp_path) -> None:
     model = os.environ["LM_STUDIO_TEST_MODEL"]
     settings = Settings(
-        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory",
@@ -45,7 +44,6 @@ def test_live_lm_studio_turn(tmp_path) -> None:
 def test_live_memory_update(tmp_path) -> None:
     model = os.environ["LM_STUDIO_TEST_MODEL"]
     settings = Settings(
-        agents_path=tmp_path / "agents",
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory",
