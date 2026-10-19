@@ -4,8 +4,8 @@ from fastapi.testclient import TestClient
 from tests.fakes import ScriptedProvider, call, events_of, post_session
 from tests.test_graph_flow import settings
 
-from local_agent.api.app import create_app
-from local_agent.memory.search import entry_chunks
+from api.app import create_app
+from memory.search import entry_chunks
 
 MEMORY = {
     "profile.md": "# Профиль\n\n## Имя\n\n- Зовут Павел\n",

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from local_agent.tools.git import GitLogTool, GitShowTool, GitTool
+from tools.git import GitLogTool, GitShowTool, GitTool
 
 
 def git(repo: Path, *arguments: str) -> str:

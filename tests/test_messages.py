@@ -3,8 +3,8 @@
 from fastapi.testclient import TestClient
 from tests.fakes import post_session
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
+from api.app import create_app
+from config.settings import Settings
 
 
 def test_messages_persist_after_app_restart(tmp_path) -> None:

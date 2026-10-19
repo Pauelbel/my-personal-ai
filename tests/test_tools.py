@@ -5,9 +5,9 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
-from local_agent.tools.files import EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool
+from api.app import create_app
+from config.settings import Settings
+from tools.files import EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool
 
 
 def test_file_tools_drop_markdown_wrapping_from_path(tmp_path):

@@ -2,8 +2,8 @@
 
 from fastapi.testclient import TestClient
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
+from api.app import create_app
+from config.settings import Settings
 
 
 def test_health(tmp_path) -> None:

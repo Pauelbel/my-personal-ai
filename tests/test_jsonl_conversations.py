@@ -2,9 +2,9 @@
 
 import json
 
-from local_agent.memory.conversation import ConversationService
-from local_agent.memory.models import MessageStats
-from local_agent.storage.jsonl.conversation import JsonlConversationStore
+from memory.conversation import ConversationService
+from memory.models import MessageStats
+from storage.jsonl.conversation import JsonlConversationStore
 
 
 def test_jsonl_store_uses_one_file_per_session(tmp_path) -> None:

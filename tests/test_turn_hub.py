@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 from tests.fakes import post_session
 from tests.test_graph_flow import settings
 
-from local_agent.api.app import create_app
-from local_agent.llm.models import ChatResult
+from api.app import create_app
+from llm.models import ChatResult
 
 
 class GatedProvider:

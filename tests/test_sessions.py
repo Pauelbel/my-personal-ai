@@ -3,8 +3,8 @@
 from fastapi.testclient import TestClient
 from tests.fakes import post_session
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
+from api.app import create_app
+from config.settings import Settings
 
 
 def test_session_persists_after_app_restart(tmp_path) -> None:
@@ -20,7 +20,6 @@ def test_session_persists_after_app_restart(tmp_path) -> None:
         assert created.status_code == 201
         session = created.json()
         assert session["title"] == "Первый проект"
-        assert session["agent_id"] == "main"
         assert session["project_id"] == project["id"]
         # Папка у сессии одна — папка проекта; своей папки сессия в API не отдаёт.
         assert "workspace" not in session

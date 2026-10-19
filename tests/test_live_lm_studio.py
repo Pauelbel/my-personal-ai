@@ -6,8 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.fakes import post_session
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
+from api.app import create_app
+from config.settings import Settings
 
 
 @pytest.mark.skipif(

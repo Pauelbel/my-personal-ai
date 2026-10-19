@@ -6,15 +6,14 @@ from fastapi.testclient import TestClient
 from tests.fakes import ScriptedProvider, call, events_of, post_session
 from tests.test_graph_flow import project_session, settings
 
-from local_agent.api.app import create_app
-from local_agent.connectors.sandbox import bwrap_path
+from api.app import create_app
+from connectors.sandbox import bwrap_path
 
 GREET = 'import json, sys\nargs = json.load(sys.stdin)\nprint(f"Привет, {args[\'name\']}")\n'
 PROPOSE_TOOL = call(
     "propose", kind="tool", name="greet", title="Приветствие", description="Здоровается по имени",
     reason="Пользователь хочет приветствия", content=GREET,
-    parameters={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
-    requires_approval=False,
+    parameters="- name — имя", hint="Зови, когда просят поздороваться", requires_approval=False,
 )
 
 
@@ -29,13 +28,15 @@ def test_proposed_tool_is_shown_whole_created_on_approval_and_runs_in_sandbox(tm
         card = events_of(client.post(url + "/turns/stream", json={"content": "Сделай приветствие"}))[-1]
         assert card["type"] == "interrupt" and card["pending"]["kind"] == "proposal"
         assert card["pending"]["proposal"]["content"] == GREET and not card["pending"]["update"]
+        assert card["pending"]["proposal"]["parameters"] == "- name — имя"
         assert not (tmp_path / "tools" / "greet").exists()
         client.post(url + "/resume", json={"action": "approve"})
         events = events_of(client.post(url + "/turns/stream", json={"content": "Поздоровайся с Павлом"}))
         overview = client.get("/api/capabilities").json()
 
     folder = tmp_path / "tools" / "greet"
-    assert {path.name for path in folder.iterdir()} == {"tool.md", "parameters.json", "script.py"}
+    assert {path.name for path in folder.iterdir()} == {"tool.md", "script.py"}
+    assert "## Параметры\n- name — имя\n\n## Подсказка модели\nЗови, когда просят поздороваться" in (folder / "tool.md").read_text(encoding="utf-8")
     [result] = [event["message"] for event in events if event["type"] == "tool_result"]
     assert result["content"] == "Привет, Павел" and not result["is_error"]
     # Скрипт из data/tools — коннектор, даже без доступов: «настроить» у него нет, полей формы тоже.
@@ -66,37 +67,8 @@ def test_small_model_omissions_in_proposal_are_repaired(tmp_path):
 
     proposal = card["pending"]["proposal"]
     assert card["type"] == "interrupt" and proposal["description"] == "Подсчёт строк"
-    assert proposal["parameters"] == {"type": "object", "properties": {"mask": {"type": "string"}}, "required": ["mask"]}
-
-
-def test_skill_is_created_archived_and_restored(tmp_path):
-    provider = ScriptedProvider(
-        call("propose", kind="skill", name="test-cases", title="Тест-кейсы", description="Как писать тест-кейсы",
-             reason="Задача повторяется", content="1. Прочитай требования.\n2. Выпиши проверки."),
-        call("archive", action="archive", kind="skill", name="test-cases", reason="Больше не нужен"),
-        call("archive", action="restore", kind="skill", name="test-cases", reason="Снова нужен"),
-        "Готово",
-    )
-    with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = post_session(client, {"model": "test"}).json()
-        url = f"/api/sessions/{session['id']}"
-        cards = [events_of(client.post(url + "/turns/stream", json={"content": "Оформи"}))[-1]]
-        for _ in range(2):
-            cards.append(events_of(client.post(url + "/resume", json={"action": "approve"}))[-1])
-        last = events_of(client.post(url + "/resume", json={"action": "approve"}))[-1]
-        overview = client.get("/api/capabilities").json()
-
-    assert [card["pending"]["title"].split(" ")[0] for card in cards] == ["Создать", "Убрать", "Вернуть"]
-    assert last["type"] == "done"
-    assert (tmp_path / "skills" / "test-cases" / "SKILL.md").exists()
-    assert [skill["id"] for skill in overview["skills"]] == ["test-cases"] and "agents" not in overview
-    assert not list((tmp_path / "skills" / ".deleted").iterdir())
-    # Новый скилл сразу виден в реестре следующего запроса; агентов, кроме основного, нет.
-    prompt = provider.system_prompt()
-    assert "- test-cases — Как писать тест-кейсы" in prompt and "Агенты" not in prompt
-    [propose] = [item for item in provider.requests[0]["tools"] if item["function"]["name"] == "propose"]
-    assert propose["function"]["parameters"]["properties"]["kind"]["enum"] == ["tool", "skill"]
-    assert "learn" not in provider.tool_names(0)
+    # Схему объектом, по привычке, переводим в список; кривой required — значит, обязательных нет.
+    assert proposal["parameters"] == "- mask (необязательно)"
 
 
 def test_reply_to_proposal_lets_agent_revise_it(tmp_path):
@@ -111,34 +83,6 @@ def test_reply_to_proposal_lets_agent_revise_it(tmp_path):
         assert events_of(client.post(url + "/resume", json={"action": "reject"}))[-1]["type"] == "done"
 
     assert not (tmp_path / "tools" / "greet").exists()
-
-
-def test_library_skill_is_offered_and_enabled_through_archive(tmp_path):
-    provider = ScriptedProvider(call("archive", action="restore", kind="skill", name="test-cases", reason="Нужны тест-кейсы"), "Включил")
-    with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = post_session(client, {"model": "test"}).json()
-        url = f"/api/sessions/{session['id']}"
-        card = events_of(client.post(url + "/turns/stream", json={"content": "Подключи тест-кейсы"}))[-1]
-        assert "- скилл test-cases — " in provider.system_prompt(0) and "(готовый)" in provider.system_prompt(0)
-        client.post(url + "/resume", json={"action": "approve"})
-        skills = {skill["id"]: skill for skill in client.get("/api/capabilities").json()["skills"]}
-
-    assert card["pending"]["title"] == "Включить готовый скилл test-cases"
-    assert skills["test-cases"]["files"] == ["SKILL.md", "steps.md", "scripts/testcases.py"]
-    assert (tmp_path / "skills" / "test-cases" / "scripts" / "testcases.py").is_file()
-
-
-def test_api_archive_and_restore_skill(tmp_path):
-    (tmp_path / "skills" / "notes").mkdir(parents=True)
-    (tmp_path / "skills" / "notes" / "SKILL.md").write_text("---\nname: Заметки\ndescription: d\n---\nШаг\n", encoding="utf-8")
-    with TestClient(create_app(settings(tmp_path), llm_provider=ScriptedProvider())) as client:
-        assert client.post("/api/capabilities/skill/notes/archive").status_code == 204
-        [entry] = [item for item in client.get("/api/capabilities").json()["archive"] if item["kind"] == "skill"]
-        restored = client.post(f"/api/capabilities/skill/restore/{entry['archive_id']}")
-        source = client.get("/api/capabilities/skill/notes").json()
-
-    assert restored.json() == {"id": "notes"}
-    assert "Шаг" in source["files"]["SKILL.md"] and source["path"].endswith("skills/notes")
 
 
 def test_user_rules_are_set_in_settings_and_reach_the_prompt(tmp_path):

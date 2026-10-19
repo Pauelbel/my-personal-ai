@@ -6,9 +6,9 @@ import sys
 
 import pytest
 
-from local_agent.core.registry import ToolRegistry
-from local_agent.mcp.manager import MCPManager, sanitize
-from local_agent.tools.web import check_public_url, html_to_text
+from core.registry import ToolRegistry
+from mcp_runtime.manager import MCPManager, sanitize
+from tools.web import check_public_url, html_to_text
 
 
 def test_html_is_reduced_to_text():
@@ -50,7 +50,7 @@ def test_default_config_is_written_once(tmp_path):
 
 
 def test_mcp_server_sees_display_but_not_secrets(monkeypatch):
-    from local_agent.mcp.manager import server_environment
+    from mcp_runtime.manager import server_environment
 
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
@@ -63,7 +63,7 @@ def test_mcp_server_sees_display_but_not_secrets(monkeypatch):
 def test_mcp_element_ref_copied_from_snapshot_is_unwrapped():
     from types import SimpleNamespace
 
-    from local_agent.mcp.manager import MCPTool
+    from mcp_runtime.manager import MCPTool
 
     sent = []
 
@@ -83,7 +83,7 @@ def test_mcp_element_ref_copied_from_snapshot_is_unwrapped():
 def test_mcp_tool_description_is_translated_from_config():
     from types import SimpleNamespace
 
-    from local_agent.mcp.manager import BROWSER_DESCRIPTIONS, MCPTool
+    from mcp_runtime.manager import BROWSER_DESCRIPTIONS, MCPTool
 
     def tool(name, description):
         return SimpleNamespace(name=name, title=None, description=description, input_schema={}, annotations=None)
@@ -98,8 +98,8 @@ def test_mcp_tool_description_is_translated_from_config():
 def test_open_browser_page_is_reminded_on_next_turn():
     from datetime import UTC, datetime
 
-    from local_agent.core.context import browser_state, build_system_prompt
-    from local_agent.memory.models import Message
+    from core.context import browser_state, build_system_prompt
+    from memory.models import Message
 
     def tool(name, content):
         return Message(id=name, session_id="s", role="tool", content=content, created_at=datetime.now(UTC), tool_name=name)
@@ -118,8 +118,8 @@ def test_open_browser_page_is_reminded_on_next_turn():
 def test_pointer_actions_pause_only_in_visible_browser(monkeypatch):
     from types import SimpleNamespace
 
-    from local_agent.mcp import manager as mcp
-    from local_agent.mcp.manager import POINTER_PAUSE_SECONDS, MCPTool
+    from mcp_runtime import manager as mcp
+    from mcp_runtime.manager import POINTER_PAUSE_SECONDS, MCPTool
 
     pauses = []
 
@@ -146,7 +146,7 @@ def test_pointer_actions_pause_only_in_visible_browser(monkeypatch):
 def _browser_tool(name, text, **options):
     from types import SimpleNamespace
 
-    from local_agent.mcp.manager import MCPTool
+    from mcp_runtime.manager import MCPTool
 
     class Session:
         async def call_tool(self, remote, arguments):
@@ -157,7 +157,7 @@ def _browser_tool(name, text, **options):
 
 
 def test_snapshot_file_is_inlined_and_long_result_says_it_is_cut(tmp_path):
-    from local_agent.mcp.manager import MAX_RESULT_CHARS
+    from mcp_runtime.manager import MAX_RESULT_CHARS
 
     snapshots = tmp_path / ".playwright-mcp"
     snapshots.mkdir()
@@ -177,7 +177,7 @@ def test_snapshot_file_is_inlined_and_long_result_says_it_is_cut(tmp_path):
 
 
 def test_browser_kit_is_bound_together_without_taking_slots():
-    from local_agent.core.toolbox import MAX_ACTIVE_TOOLS, Toolbox
+    from core.toolbox import MAX_ACTIVE_TOOLS, Toolbox
 
     browser = [_browser_tool(name, "ok") for name in ("browser_navigate", "browser_hover", "browser_wait_for", "browser_tabs")]
     others = [SimpleTool(f"tool_{number}") for number in range(MAX_ACTIVE_TOOLS)]
@@ -200,8 +200,8 @@ class SimpleTool:
 
 
 def test_only_latest_page_snapshot_stays_in_turn_context():
-    from local_agent.core.context import drop_stale_snapshots
-    from local_agent.llm.models import ChatMessage
+    from core.context import drop_stale_snapshots
+    from llm.models import ChatMessage
 
     def snapshot(url, body):
         return f"### Ran Playwright code\nawait page.goto('{url}');\n### Page\n- Page URL: {url}\n### Snapshot\n```yaml\n{body}\n```"
@@ -273,7 +273,7 @@ def test_mcp_server_and_its_tools_are_switched_without_restart(tmp_path):
 
     first, second, off, back = asyncio.run(scenario())
 
-    # Выключенного инструмента нет в реестре — ни модель, ни шаги скиллов его не видят.
+    # Выключенного инструмента нет в реестре — ни модель, ни шаги агентов его не видят.
     assert first == ["demo_ping"] and second == ["demo_echo"]
     assert off == ([], "выключен") and back == ["demo_echo"]
     saved = json.loads(config.read_text(encoding="utf-8"))["servers"]["Demo"]
@@ -284,7 +284,7 @@ def test_mcp_switches_need_mcp_enabled_in_env(tmp_path):
     from fastapi.testclient import TestClient
     from tests.test_graph_flow import settings
 
-    from local_agent.api.app import create_app
+    from api.app import create_app
 
     with TestClient(create_app(settings(tmp_path))) as client:
         overview = client.get("/api/capabilities").json()

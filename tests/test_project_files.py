@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from tests.test_projects import folder, settings
 
-from local_agent.api.app import create_app
+from api.app import create_app
 
 
 def test_project_files_are_listed_and_read_inside_workspace(tmp_path: Path):

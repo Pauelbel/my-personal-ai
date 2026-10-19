@@ -1,4 +1,4 @@
-"""Скрипт тест-кейсов скилла test-cases: разбор страниц, куски, генерация с продолжением, ревью по кускам, запуск."""
+"""Генератор тест-кейсов агента test-cases: разбор страниц, куски, генерация с продолжением, ревью по кускам, запуск."""
 
 import importlib.util
 import io
@@ -6,12 +6,11 @@ import json
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
-from local_agent.skills.files import LIBRARY
-
-SPEC = importlib.util.spec_from_file_location("testcases_script", LIBRARY / "test-cases" / "scripts" / "testcases.py")
+SPEC = importlib.util.spec_from_file_location("testcases_script", Path(__file__).parents[1] / "src/qa/testcases.py")
 script = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = script
 SPEC.loader.exec_module(script)
@@ -168,6 +167,23 @@ def test_page_with_failed_chunk_is_not_written_and_stays_pending(tmp_path):
     assert "осталось без тест-кейсов: 1" in text and not (tmp_path / "testgen/test_cases/docs/a.md").exists()
 
 
+def test_batch_with_one_failed_page_returns_failure_and_keeps_published_page(tmp_path):
+    page(tmp_path, "docs/a.md", BODY)
+    page(tmp_path, "docs/b.md", BODY)
+    model = FakeModel({"test_cases": [CASE]}, *[script.ModelError("ошибка модели")] * script.ATTEMPTS)
+
+    summary, ok = script.generate(model, tmp_path, tmp_path / "docs", 5, False)
+
+    published = tmp_path / "testgen/test_cases/docs/a.md"
+    original = published.read_bytes()
+    assert not ok and "testgen/test_cases/docs/a.md: кейсов 1" in summary
+    assert "docs/b.md: кусок 1/1: ошибка модели" in summary and "осталось без тест-кейсов: 1" in summary
+    assert not (tmp_path / "testgen/test_cases/docs/b.md").exists()
+    retry = FakeModel()
+    _, ok = script.generate(retry, tmp_path, tmp_path / "docs", 5, False)
+    assert ok and len(retry.calls) == 1 and published.read_bytes() == original
+
+
 def test_big_file_is_skipped_in_folder_but_processed_by_path_and_resumed(tmp_path, monkeypatch):
     monkeypatch.setattr(script, "MAX_PAGE_BYTES", 3000)
     monkeypatch.setattr(script, "CHUNK_CHARS", 1500)
@@ -188,6 +204,116 @@ def test_big_file_is_skipped_in_folder_but_processed_by_path_and_resumed(tmp_pat
     parts = len(script.chunks(script.parse_page(big, tmp_path).text, 1500))
     assert parts == 4 and len(resumed.calls) == parts - 2
     assert done_ok and "testgen/test_cases/docs/all.md: кейсов 4, кусков 4" in done
+
+
+@pytest.mark.parametrize("changed", ["instructions", "rules", "example", "schema", "generator", "source", "agent"])
+def test_changed_generation_inputs_restart_all_chunks(tmp_path, monkeypatch, changed):
+    monkeypatch.setattr(script, "CHUNK_CHARS", 1500)
+    document = "".join(f"## Раздел {n}\n\n" + "Задайте адрес сервера и сохраните. " * 30 + "\n\n" for n in range(2))
+    source = page(tmp_path, "docs/a.md", document)
+    old = {**CASE, "title": "Старые инструкции"}
+    new = {**CASE, "title": "Новые инструкции"}
+    _, first_ok = script.generate(
+        FakeModel({"test_cases": [old]}, script.Unavailable("нет соединения")), tmp_path, source, 5, False,
+    )
+    assert not first_ok
+    config = tmp_path / "testgen"
+    if changed == "instructions":
+        monkeypatch.setattr(script, "SYSTEM", script.SYSTEM + "\nНовое правило.")
+    elif changed == "rules":
+        (config / "rules.md").write_text("Проверяйте адрес IPv6.", encoding="utf-8")
+    elif changed == "example":
+        (config / "example.json").write_text(json.dumps(new), encoding="utf-8")
+    elif changed == "schema":
+        monkeypatch.setattr(script, "RESPONSE_FORMAT", {**script.RESPONSE_FORMAT, "extra": True})
+    elif changed == "generator":
+        monkeypatch.setattr(script, "GENERATOR_VERSION", script.GENERATOR_VERSION + 1)
+    elif changed == "source":
+        monkeypatch.setattr(script, "GENERATOR_SOURCE_HASH", "changed-source")
+    else:
+        monkeypatch.setenv("MEEPO_AGENT_REVISION", "repaired-agent")
+
+    resumed = FakeModel({"test_cases": [new]}, {"test_cases": [new]})
+    _, ok = script.generate(resumed, tmp_path, source, 5, False)
+
+    output = (tmp_path / "testgen/test_cases/docs/a.md").read_text(encoding="utf-8")
+    assert ok and len(resumed.calls) == 2
+    assert "Новые инструкции" in output and "Старые инструкции" not in output
+
+
+def test_changed_revision_keeps_old_output_until_complete_and_then_resumes(tmp_path, monkeypatch):
+    monkeypatch.setattr(script, "CHUNK_CHARS", 1500)
+    text = "".join(f"## Раздел {n}\n\n" + "Задайте адрес сервера и сохраните. " * 30 + "\n\n" for n in range(2))
+    source = page(tmp_path, "docs/a.md", text)
+    script.generate(FakeModel(), tmp_path, source, 5, False)
+    output = tmp_path / "testgen/test_cases/docs/a.md"
+    original = output.read_bytes()
+    monkeypatch.setenv("MEEPO_AGENT_REVISION", "revision-2")
+    replacement = {**CASE, "title": "Исправленный агент"}
+    partial = FakeModel({"test_cases": [replacement]}, script.Unavailable("нет соединения"))
+
+    summary, ok = script.generate(partial, tmp_path, source, 5, False)
+    reviewer = FakeModel()
+    review_summary, reviewed = script.review(reviewer, tmp_path, source, 5)
+
+    assert not ok and "осталось без тест-кейсов: 1" in summary
+    assert output.read_bytes() == original
+    assert not reviewed and not reviewer.calls and "сгенерируйте кейсы заново" in review_summary
+    resumed = FakeModel({"test_cases": [replacement]})
+    _, ok = script.generate(resumed, tmp_path, source, 5, False)
+    assert ok and len(resumed.calls) == 1
+    assert "Исправленный агент" in output.read_text(encoding="utf-8")
+    assert "Настройка адреса сервера" not in output.read_text(encoding="utf-8")
+
+
+def test_existing_output_is_invalidated_when_rules_change(tmp_path):
+    source = page(tmp_path, "docs/a.md", BODY)
+    script.generate(FakeModel(), tmp_path, source, 5, False)
+    (tmp_path / "testgen/rules.md").write_text("Только адреса IPv6.", encoding="utf-8")
+    replacement = {**CASE, "title": "Новые правила"}
+    model = FakeModel({"test_cases": [replacement]})
+
+    _, ok = script.generate(model, tmp_path, source, 5, False)
+
+    assert ok and len(model.calls) == 1
+    assert "Новые правила" in (tmp_path / "testgen/test_cases/docs/a.md").read_text(encoding="utf-8")
+
+
+def test_legacy_output_without_fingerprint_is_regenerated(tmp_path):
+    source = page(tmp_path, "docs/a.md", BODY)
+    parsed = script.parse_page(source, tmp_path)
+    output = tmp_path / "testgen/test_cases/docs/a.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("Старый результат", encoding="utf-8")
+    script.save_work(tmp_path, parsed, {"hash": "legacy", "chunks": [[CASE]], "review": [None]})
+    model = FakeModel()
+
+    _, ok = script.generate(model, tmp_path, source, 5, False)
+
+    assert ok and len(model.calls) == 1
+    assert "Старый результат" not in output.read_text(encoding="utf-8")
+
+
+def test_output_publication_uses_atomic_replace(tmp_path, monkeypatch):
+    source = page(tmp_path, "docs/a.md", BODY)
+    script.generate(FakeModel(), tmp_path, source, 5, False)
+    output = tmp_path / "testgen/test_cases/docs/a.md"
+    original = output.read_bytes()
+    replace = Path.replace
+
+    def fail_output_replace(path, target):
+        if target == output:
+            assert output.read_bytes() == original
+            assert "Новый результат" in path.read_text(encoding="utf-8")
+            raise OSError("ошибка публикации")
+        return replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_output_replace)
+    monkeypatch.setenv("MEEPO_AGENT_REVISION", "revision-2")
+    with pytest.raises(OSError, match="ошибка публикации"):
+        script.generate(FakeModel({"test_cases": [{**CASE, "title": "Новый результат"}]}), tmp_path, source, 5, False)
+    assert output.read_bytes() == original
+    assert list(output.parent.iterdir()) == [output]
 
 
 def test_review_checks_each_chunk_with_its_own_cases(tmp_path, monkeypatch):
@@ -212,6 +338,27 @@ def test_review_checks_each_chunk_with_its_own_cases(tmp_path, monkeypatch):
     assert ok and "testgen/review/docs/a.md — Вывод: поправить TC-001.; Вывод: можно отдавать." in summary
     # Повторное ревью ничего не спрашивает: куски уже проверены.
     assert len(model.calls) == 2 and "testgen/review/docs/a.md" in again
+
+
+def test_review_agent_revision_is_separate_from_author_and_invalidates_only_review(tmp_path, monkeypatch):
+    source = page(tmp_path, "docs/a.md", BODY)
+    monkeypatch.setenv("MEEPO_AGENT_REVISION", "author-1")
+    script.generate(FakeModel(), tmp_path, source, 5, False)
+    output = tmp_path / "testgen/test_cases/docs/a.md"
+    original = output.read_bytes()
+    monkeypatch.setenv("MEEPO_AGENT_REVISION", "reviewer-1")
+    first = FakeModel("Вывод: проверено первым ревьюером.")
+    _, ok = script.review(first, tmp_path, source, 5)
+    assert ok and len(first.calls) == 1
+    unchanged = FakeModel()
+    script.review(unchanged, tmp_path, source, 5)
+    assert not unchanged.calls
+
+    monkeypatch.setenv("MEEPO_AGENT_REVISION", "reviewer-2")
+    second = FakeModel("Вывод: проверено после исправления ревьюера.")
+    summary, ok = script.review(second, tmp_path, source, 5)
+    assert ok and len(second.calls) == 1 and "после исправления" in summary
+    assert output.read_bytes() == original
 
 
 def test_main_checks_arguments_and_needs_the_model(tmp_path, monkeypatch, capsys):

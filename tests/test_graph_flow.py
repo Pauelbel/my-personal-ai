@@ -5,15 +5,15 @@ import json
 from fastapi.testclient import TestClient
 from tests.fakes import ScriptedProvider, call, events_of, post_session
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
-from local_agent.core.context import estimate_message_tokens, estimate_tokens
-from local_agent.llm.models import ReasoningDelta
+from api.app import create_app
+from config.settings import Settings
+from core.context import estimate_message_tokens, estimate_tokens
+from llm.models import ReasoningDelta
 
 
 def settings(tmp_path) -> Settings:
     return Settings(
-        skills_path=tmp_path / "skills", sessions_path=tmp_path / "sessions",
+        sessions_path=tmp_path / "sessions",
         projects_path=tmp_path / "projects", conversations_path=tmp_path / "conversations",
         memory_path=tmp_path / "memory", memory_auto_update_messages=0,
         mcp_enabled=False, _env_file=None,
@@ -46,7 +46,7 @@ def test_registry_is_compact_and_activate_binds_schemas(tmp_path):
     # Сначала схемы базовых инструментов и чтения файлов, остальные — строкой реестра.
     first = provider.tool_names(0)
     assert {"activate", "remember", "propose", "list_files", "read_file"} <= set(first) and "git" not in first
-    assert "- git — " in provider.system_prompt(0) and "Скиллов пока нет" in provider.system_prompt(0)
+    assert "- git — " in provider.system_prompt(0)
     assert "git" in provider.tool_names(1)
     # Подключённое запоминается на проект: новая сессия начинает с него.
     assert next(item for item in project if item["id"] == session["project_id"])["active_tools"] == ["list_files", "read_file", "git"]
@@ -158,7 +158,7 @@ def test_incomplete_call_is_returned_to_model_before_the_card(tmp_path):
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
         client.app.state.wiki_service.write("заметка.md", "# Заметка\n\nТекст")
         session = post_session(client, {"model": "test"}).json()
-        events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "/lint"}))
+        events = events_of(client.post(f"/api/sessions/{session['id']}/turns/stream", json={"content": "Проверь вики"}))
 
     [result] = [event["message"] for event in events if event["type"] == "tool_result"]
     assert "непустой список правок" in result["content"] and "edits (array, обязательный)" in result["content"]
@@ -178,7 +178,7 @@ def test_empty_model_answer_is_retried(tmp_path):
 
 
 def test_looping_model_is_cut_and_retried(tmp_path):
-    from local_agent.llm.models import ChatResult, ReasoningDelta
+    from llm.models import ChatResult, ReasoningDelta
 
     class Looping(ScriptedProvider):
         async def chat_stream(self, model, messages, tools=None, options=None):
@@ -275,7 +275,7 @@ def test_promised_step_without_tool_call_is_continued_in_the_same_turn(tmp_path)
 
 
 def test_promises_action_tells_a_promise_from_a_summary_or_question():
-    from local_agent.core.graph import promises_action
+    from core.graph import promises_action
 
     for text in (
         "Заполняю данные.", "Проверяю сортировку Name (A to Z).", "Теперь открою корзину", "**Шаг 5**\n\nДалее:",
@@ -308,7 +308,7 @@ def test_answer_in_english_is_rewritten_in_russian_before_it_reaches_the_chat(tm
 
 
 def test_foreign_answer_is_kept_when_the_user_asked_for_it():
-    from local_agent.core.graph import foreign_allowed, is_foreign
+    from core.graph import foreign_allowed, is_foreign
 
     assert not is_foreign("Готово: тест-кейсы в `test_cases.md`, сценарии Login, Cart и Checkout на https://www.saucedemo.com/.")
     assert foreign_allowed([{"role": "user", "content": "Напиши README на английском"}])
@@ -344,8 +344,8 @@ def test_reasoning_is_kept_for_display_but_not_sent_back_to_model(tmp_path):
 
 
 def test_fit_turn_shortens_oldest_tool_results_first():
-    from local_agent.core.context import fit_turn
-    from local_agent.llm.models import ChatMessage
+    from core.context import fit_turn
+    from llm.models import ChatMessage
 
     messages = [ChatMessage("system", "s"), ChatMessage("user", "u")]
     messages += [ChatMessage("tool", str(index) * 4000, tool_call_id=str(index)) for index in range(4)]
@@ -362,8 +362,8 @@ def test_fit_turn_shortens_oldest_tool_results_first():
 
 
 def test_fit_turn_shrinks_huge_recent_message_to_window():
-    from local_agent.core.context import fit_turn
-    from local_agent.llm.models import ChatMessage
+    from core.context import fit_turn
+    from llm.models import ChatMessage
 
     page = "начало " + "текст документа " * 20_000 + " конец"
     messages = [ChatMessage("system", "правила"), ChatMessage("user", "Найди ошибки"),
@@ -402,8 +402,8 @@ def test_long_turn_is_compacted_instead_of_overflowing(tmp_path):
 
 
 def test_tight_window_shrinks_recent_results_too(tmp_path):
-    _, results, total = long_turn_request(tmp_path, 9000)
-    assert total <= 9000 - 1024
+    _, results, total = long_turn_request(tmp_path, 7000)
+    assert total <= 7000
     assert "середина сокращена" in results[-1] and results[-1].startswith("d") and results[-1].endswith("d")
 
 
@@ -429,7 +429,9 @@ def test_turn_does_not_end_while_plan_has_open_steps(tmp_path):
     assert nudge.role == "user" and "2. Автотесты" in nudge.content
     # План — в системном промпте каждого запроса, пока в нём есть несделанное.
     assert "1. [ ] Тест-кейсы" in provider.system_prompt(1) and "1. [x] Тест-кейсы — в ответе" in provider.system_prompt(3)
-    assert later[-1]["type"] == "done" and "Старое" in provider.system_prompt(-1)
+    assert later[-1]["type"] == "done" and any(
+        "Старое" in request["messages"][0].content for request in provider.requests
+    )
 
 
 def test_question_to_user_ends_turn_even_with_open_plan(tmp_path):

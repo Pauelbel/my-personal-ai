@@ -6,11 +6,11 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.fakes import post_session
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
-from local_agent.llm.models import ChatMessage, ChatResult
-from local_agent.memory.markdown import MarkdownMemoryStore
-from local_agent.memory.operations import MemoryPatch
+from api.app import create_app
+from config.settings import Settings
+from llm.models import ChatMessage, ChatResult
+from memory.markdown import MarkdownMemoryStore
+from memory.operations import MemoryPatch
 
 
 class MemoryProvider:
@@ -346,33 +346,6 @@ def test_manual_edit_has_technical_log_without_content(tmp_path) -> None:
     event = json.loads(store.log_path.read_text(encoding="utf-8").splitlines()[0])
     assert event["event"] == {"kind": "manual_edit", "files": ["preferences.md"]}
     assert "Секретная" not in json.dumps(event, ensure_ascii=False)
-
-
-def test_legacy_ids_are_removed_without_changing_text_or_checkpoint(tmp_path) -> None:
-    root = tmp_path / "memory"
-    root.mkdir()
-    (root / "preferences.md").write_text(
-        "# Предпочтения\n\n## Общение\n\n"
-        "- <!-- memory:id=508bc36068c154d39e8b3a9f78457e52 --> Обращаться к пользователю дружище\n"
-        "- Ручная запись\n",
-        encoding="utf-8",
-    )
-    (root / ".state.json").write_text(
-        json.dumps({"version": 1, "sessions": {"session-1": {"last_processed_message_id": "message-1"}}}),
-        encoding="utf-8",
-    )
-
-    store = MarkdownMemoryStore(root)
-    store.initialize()
-    content = store.read("preferences.md").content
-    assert "- Обращаться к пользователю дружище\n" in content
-    assert "- Ручная запись\n" in content
-    assert "memory:id=" not in content
-    assert store.checkpoint("session-1") == "message-1"
-    store.initialize()
-    events = [json.loads(line) for line in store.log_path.read_text(encoding="utf-8").splitlines()]
-    assert len(events) == 1
-    assert events[0]["event"]["kind"] == "remove_legacy_ids"
 
 
 def test_concurrent_manual_edit_is_not_overwritten(tmp_path, monkeypatch) -> None:

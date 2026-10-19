@@ -5,9 +5,9 @@ from fastapi.testclient import TestClient
 from tests.fakes import ScriptedProvider, call, events_of, post_session
 from tests.test_graph_flow import settings
 
-from local_agent.api.app import create_app
-from local_agent.wiki import notes
-from local_agent.wiki.service import NoteFields, WikiService
+from api.app import create_app
+from wiki import notes
+from wiki.service import NoteFields, WikiService
 
 
 def wiki(tmp_path) -> WikiService:
@@ -67,7 +67,7 @@ def test_new_text_extends_note_with_two_shared_keywords(tmp_path):
     assert [entry.keywords for entry in service.index()] == [("rag", "поиск", "эмбеддинги", "чанки")]
     assert "**Источник:** https://x.org" in service.read("rag_основы.md")
     # Прежняя версия пересобранной заметки сохранена.
-    assert len(list((tmp_path / "wiki-history").glob("rag_основы.*.md"))) == 1
+    assert len(list((tmp_path / "wiki" / "history").glob("rag_основы.*.md"))) == 1
     # Абзац вместо описания сокращается до первой фразы: строка индекса остаётся короткой.
     long = "Как модель ищет куски документов. " + "Подробности " * 30
     service.save_note(NoteFields(**{**fields().__dict__, "description": long}), path="rag_основы.md")
@@ -181,12 +181,14 @@ def test_lint_applies_only_checked_edits(tmp_path):
         (tmp_path / "wiki" / "b.md").write_text("# B\n\nRAG v1\n\n## Ключевые слова\n\nrag, поиск\n", encoding="utf-8")
         session = post_session(client, {"model": "test"}).json()
         url = f"/api/sessions/{session['id']}"
-        events = events_of(client.post(url + "/turns/stream", json={"content": "/lint"}))
+        events = events_of(client.post(url + "/turns/stream", json={"content": "Проверь вики"}))
         card = events[-1]
         resumed = events_of(client.post(url + "/resume", json={"action": "approve", "selected": [2]}))
 
     [material] = [event["message"]["content"] for event in events if event["type"] == "tool_result"]
     assert "a.md + b.md: rag, поиск" in material and "=== b.md ===" in material
+    # Что искать — просьба пользователя: она в конце материала, модель читает её последней.
+    assert material.rstrip().endswith("так и скажи.") and "Пользователь просит: «Проверь вики»" in material
     assert card["type"] == "interrupt" and card["pending"]["kind"] == "wiki_lint"
     assert [edit["kind"] for edit in card["pending"]["edits"]] == ["merge", "outdated"]
     [result] = [event["message"]["content"] for event in resumed if event["type"] == "tool_result"]
@@ -232,7 +234,7 @@ def test_lint_in_wiki_chat_card_stays_out_of_the_attention_panel(tmp_path):
     with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
         client.app.state.wiki_service.save_note(fields(title="A", keywords=("rag", "поиск")))
         wiki_id = client.post("/api/wiki/chat", json={"model": "test"}).json()["session"]["id"]
-        events = events_of(client.post(f"/api/sessions/{wiki_id}/turns/stream", json={"content": "/lint — проверь вики"}))
+        events = events_of(client.post(f"/api/sessions/{wiki_id}/turns/stream", json={"content": "Проверь вики"}))
         attention = client.get("/api/attention").json()
         pending = client.get("/api/wiki/chat").json()["session"]["pending"]
         resumed = events_of(client.post(f"/api/sessions/{wiki_id}/resume", json={"action": "approve", "selected": [1]}))
@@ -266,7 +268,7 @@ def test_summary_put_into_description_is_kept_in_details(tmp_path):
 def test_tags_find_notes_and_variants_of_one_word_merge(tmp_path):
     import asyncio
 
-    from local_agent.tools.wiki import WikiLintTool, WikiMatchTool
+    from tools.wiki import WikiLintTool, WikiMatchTool
 
     service = wiki(tmp_path)
     service.save_note(fields(tags=("тестирование", "методологии")))
@@ -311,3 +313,26 @@ def test_images_spread_through_details_keep_their_folder(tmp_path):
     with pytest.raises(ValueError, match="Картинок нет: images/ccc333.png.*images/aaa111.png"):
         service.save_note(NoteFields(**{**fields(title="Сетапы").__dict__, "details": "![Опечатка](images/ccc333.png)"}),
                           path="сетапы.md")
+
+
+def test_wiki_actions_menu_is_saved_and_validated(tmp_path):
+    with TestClient(create_app(settings(tmp_path))) as client:
+        builtin = client.get("/api/wiki/actions").json()["actions"]
+        actions = [
+            {"title": "Проверить вики", "text": "найди противоречия"},
+            {"title": "Заметки без тегов", "text": "найди заметки без тегов\nи предложи теги"},
+        ]
+        saved = client.put("/api/wiki/actions", json={"actions": actions})
+        read = client.get("/api/wiki/actions").json()["actions"]
+        empty = client.put("/api/wiki/actions", json={"actions": [{"title": "Пустое", "text": " "}]})
+        twice = client.put("/api/wiki/actions", json={"actions": [actions[0], actions[0]]})
+        heading = client.put("/api/wiki/actions", json={"actions": [{"title": "X", "text": "## раздел"}]})
+        cleared = client.put("/api/wiki/actions", json={"actions": []}).json()["actions"]
+        after = client.get("/api/wiki/actions").json()["actions"]
+
+    assert [action["title"] for action in builtin] == ["Проверить вики"] and "дубли" in builtin[0]["text"]
+    assert saved.status_code == 200 and read == actions
+    assert (empty.status_code, twice.status_code, heading.status_code) == (400, 400, 400)
+    assert "уже есть" in twice.json()["detail"]
+    # Все действия удалены — меню пустое, встроенное не возвращается само.
+    assert cleared == [] and after == []

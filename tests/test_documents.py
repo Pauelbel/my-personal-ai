@@ -14,14 +14,14 @@ from fastapi.testclient import TestClient
 from tests.fakes import ScriptedProvider, call, events_of
 from tests.test_graph_flow import project_session, settings
 
-from local_agent.api.app import create_app
-from local_agent.connectors.scripts import LIBRARY, _list, library_tools
-from local_agent.llm.base import LLMProviderError
-from local_agent.shared.document import outline, split_parts, tokens
-from local_agent.steps.engine import PARTS_DIR, RunContext, StepRunner, Toolkit
-from local_agent.steps.files import parse_steps
-from local_agent.tools.documents import PROCESS_SKILL
-from local_agent.tools.files import ReadFileTool, SearchFilesTool
+from api.app import create_app
+from connectors.scripts import LIBRARY, _list, library_tools
+from llm.base import LLMProviderError
+from shared.document import outline, split_parts, tokens
+from steps.engine import PARTS_DIR, RunContext, StepRunner, Toolkit
+from steps.files import parse_steps
+from tools.documents import PROCESS_WORKFLOW
+from tools.files import ReadFileTool, SearchFilesTool
 
 SECTION = "Пользователь вводит логин и пароль, система проверяет их и открывает личный кабинет. "
 
@@ -153,7 +153,7 @@ class FlakyProvider(ScriptedProvider):
 
 def run_parts(provider, folder, window=3000):
     runner = StepRunner(
-        PROCESS_SKILL, {"документ": "docs/spec.md", "задание": "Выпиши требования", "сохранить": "out/req.md"},
+        PROCESS_WORKFLOW, {"документ": "docs/spec.md", "задание": "Выпиши требования", "сохранить": "out/req.md"},
         RunContext(provider, "test", folder, window, Toolkit(tool=lambda name: None, tools=list)),
     )
     return asyncio.run(runner.run())
@@ -208,7 +208,7 @@ def test_process_document_runs_from_card_with_edited_fields(tmp_path):
     assert (folder / "docs" / "req.md").read_text(encoding="utf-8") == "Р1\n\nР2\n\nР3\n"
     assert not (folder / "docs" / "spec-result.md").exists()
     [result] = [event["message"] for event in events if event["type"] == "tool_result"]
-    assert not result["is_error"] and result["meta"]["steps"]["skill"] == "process_document"
+    assert not result["is_error"] and result["meta"]["steps"]["workflow"] == "process_document"
     assert "записано в docs/req.md" in result["content"] and "заново не обрабатывай" in result["content"]
     progress = [event["run"]["steps"][0]["detail"] for event in events if event["type"] == "steps"]
     assert any(detail.startswith("часть 2 из 3") for detail in progress)
@@ -307,7 +307,7 @@ def test_connector_missing_packages_are_shown_and_install_checks_names(tmp_path)
 
 
 def test_packages_needed_by_a_connector_include_dependencies_of_its_extras(tmp_path):
-    from local_agent.connectors.pyenv import PythonEnv
+    from connectors.pyenv import PythonEnv
 
     site = tmp_path / "env" / "lib" / "python3.14" / "site-packages"
     for name, requires in {
@@ -327,8 +327,8 @@ def test_packages_needed_by_a_connector_include_dependencies_of_its_extras(tmp_p
 def test_sandbox_env_given_by_relative_path_works_from_project_folder(tmp_path, monkeypatch):
     import os
 
-    from local_agent.connectors.pyenv import PythonEnv
-    from local_agent.connectors.sandbox import SandboxPolicy, run_script
+    from connectors.pyenv import PythonEnv
+    from connectors.sandbox import SandboxPolicy, run_script
 
     (tmp_path / "data" / "sandbox-env" / "bin").mkdir(parents=True)
     # Как у настоящего окружения: bin/python — ссылка на системный интерпретатор (домашняя папка в песочнице скрыта).

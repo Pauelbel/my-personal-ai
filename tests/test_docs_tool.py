@@ -5,9 +5,9 @@ import os
 
 import pytest
 
-from local_agent.shared.markdown_index import CHUNK_CHARS
-from local_agent.shared.markdown_index import chunks as _chunks
-from local_agent.tools.docs import SearchDocsTool
+from shared.markdown_index import CHUNK_CHARS
+from shared.markdown_index import chunks as _chunks
+from tools.docs import SearchDocsTool
 
 
 def search(tool, workspace, **arguments):

@@ -3,10 +3,10 @@
 from fastapi.testclient import TestClient
 from tests.fakes import post_session
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
-from local_agent.llm.base import LLMProviderUnavailable
-from local_agent.llm.models import ChatMessage, ChatResult
+from api.app import create_app
+from config.settings import Settings
+from llm.base import LLMProviderUnavailable
+from llm.models import ChatMessage, ChatResult
 
 
 class FakeProvider:

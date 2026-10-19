@@ -6,11 +6,11 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.test_graph_flow import settings
 
-from local_agent.api.app import create_app
-from local_agent.connectors.pyenv import PythonEnv, check_requirements, requirement_name
-from local_agent.connectors.sandbox import bwrap_path
-from local_agent.connectors.scripts import read_script_tool, write_script_tool
-from local_agent.tools.growth.propose import InstallPackagesTool
+from api.app import create_app
+from connectors.pyenv import PythonEnv, check_requirements, requirement_name
+from connectors.sandbox import bwrap_path
+from connectors.scripts import read_script_tool, write_script_tool
+from tools.growth.propose import InstallPackagesTool
 
 USES_PACKAGE = "import hello_pkg\nprint(hello_pkg.GREETING)\n"
 
@@ -29,7 +29,7 @@ def test_only_pypi_names_are_accepted():
 def test_requires_is_saved_and_missing_package_stops_the_call(tmp_path):
     env = PythonEnv(tmp_path / "env")
     tool = write_script_tool(
-        tmp_path / "tools", "read_pdf", name="PDF", description="Читает PDF", reason="r", parameters={"type": "object"},
+        tmp_path / "tools", "read_pdf", name="PDF", description="Читает PDF", reason="r",
         code=USES_PACKAGE, requires_approval=False, network=False, requires=["hello-pkg"],
     )
     assert "requires: hello-pkg" in (tool.folder / "tool.md").read_text(encoding="utf-8")
@@ -42,7 +42,7 @@ def test_requires_is_saved_and_missing_package_stops_the_call(tmp_path):
 
 def test_bad_requires_in_tool_md_is_rejected(tmp_path):
     tool = write_script_tool(
-        tmp_path / "tools", "bad_req", name="x", description="x", reason="r", parameters={"type": "object"},
+        tmp_path / "tools", "bad_req", name="x", description="x", reason="r",
         code="print(1)", requires_approval=False, network=False,
     )
     text = (tool.folder / "tool.md").read_text(encoding="utf-8").replace("timeout:", "requires: git+https://x\ntimeout:")
@@ -64,7 +64,7 @@ def test_script_imports_package_from_sandbox_env(tmp_path):
     assert env.packages() == {"hello-pkg": "1.0"}
 
     tool = write_script_tool(
-        tmp_path / "tools", "greet_pkg", name="x", description="x", reason="r", parameters={"type": "object"},
+        tmp_path / "tools", "greet_pkg", name="x", description="x", reason="r",
         code=USES_PACKAGE, requires_approval=False, network=False, requires=["hello-pkg"],
     )
     tool.env = env

@@ -3,7 +3,7 @@
 import json
 import tempfile
 
-from local_agent.llm.models import ChatResult, ToolCall
+from llm.models import ChatResult, ToolCall
 
 
 def post_session(client, body: dict | None = None):

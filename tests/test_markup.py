@@ -5,9 +5,9 @@ import json
 
 import httpx
 
-from local_agent.llm.markup import ThinkingRouter, clean_reasoning, recover_tool_calls
-from local_agent.llm.models import ChatMessage, ChatResult, ReasoningDelta
-from local_agent.llm.openai_compatible import OpenAICompatibleProvider
+from llm.markup import ThinkingRouter, clean_reasoning, recover_tool_calls
+from llm.models import ChatMessage, ChatResult, ReasoningDelta
+from llm.openai_compatible import OpenAICompatibleProvider
 
 TOOLS = [{"type": "function", "function": {"name": "browser_browser_type", "parameters": {"type": "object"}}}]
 
@@ -91,7 +91,7 @@ LEAKED = (
 
 
 def test_bare_json_arguments_become_the_matching_tool_call():
-    from local_agent.llm.markup import recover_json_call
+    from llm.markup import recover_json_call
 
     call, rest = recover_json_call(LEAKED, [PROPOSE, READ])
     assert call.name == "propose" and json.loads(call.arguments)["content"] == "import sys\nprint(1)"
@@ -102,7 +102,7 @@ def test_bare_json_arguments_become_the_matching_tool_call():
 
 
 def test_json_example_in_answer_is_not_a_call():
-    from local_agent.llm.markup import recover_json_call
+    from llm.markup import recover_json_call
 
     fenced = "Пример:\n```json\n" + LEAKED.split("पायल ")[1] + "\n```"
     assert recover_json_call(fenced, [PROPOSE, READ]) == (None, fenced)

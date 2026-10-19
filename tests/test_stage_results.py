@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 from tests.fakes import ScriptedProvider, call, events_of, post_session, say
 from tests.test_graph_flow import settings
 
-from local_agent.api.app import create_app
-from local_agent.core.plan import stage_messages, stage_result
-from local_agent.memory.models import Message, StoredToolCall
+from api.app import create_app
+from core.plan import stage_messages, stage_result
+from memory.models import Message, StoredToolCall
 
 CHECKLIST = "### Чек-лист\n" + "\n".join(f"- [P1] Проверка {index}: вход и каталог" for index in range(12))
 BUGS = "### Найденные дефекты\n" + "\n".join(f"{index}. У problem_user не та картинка товара {index}" for index in range(1, 6))
@@ -28,7 +28,7 @@ def message(index, role, content="", calls=()):
 def test_result_is_the_text_written_with_the_stage_mark():
     history = [
         message(1, "user", "Тестовое задание"), message(2, "assistant", "", ["plan"]), message(3, "tool", "план"),
-        message(4, "assistant", "Приступаю к кейсам.", ["use_skill"]), message(5, "tool", "скилл"),
+        message(4, "assistant", "Приступаю к кейсам.", ["delegate_agent"]), message(5, "tool", "результат агента"),
         message(6, "assistant", CHECKLIST, ["plan"]),
     ]
     assert stage_result(stage_messages(history)).id == "m6"

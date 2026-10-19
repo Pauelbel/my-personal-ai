@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from local_agent.memory.models import Message
-from local_agent.memory.operations import AddOperation, DeleteOperation, UpdateOperation
-from local_agent.memory.validator import MemoryPatchRejected, validate_patch
+from memory.models import Message
+from memory.operations import AddOperation, DeleteOperation, UpdateOperation
+from memory.validator import MemoryPatchRejected, validate_patch
 
 SESSION = "session-1"
 PREFERENCE = "Предпочитает небольшие изменения."

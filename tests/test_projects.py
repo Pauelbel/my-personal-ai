@@ -1,21 +1,20 @@
 """Проекты: папка и инструменты общие для сессий проекта, доступ к файлам не утекает за его пределы."""
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 from tests.fakes import post_session
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
+from api.app import create_app
+from config.settings import Settings
 
 
 def settings(tmp_path: Path) -> Settings:
     return Settings(
         sessions_path=tmp_path / "sessions",
         conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory",
-        projects_path=tmp_path / "projects", skills_path=tmp_path / "skills", _env_file=None,
+        projects_path=tmp_path / "projects", _env_file=None,
     )
 
 
@@ -69,14 +68,7 @@ def test_deleting_project_deletes_its_sessions_but_not_the_folder(tmp_path):
     assert workspace.exists()
 
 
-def test_no_system_projects_and_empty_legacy_drafts_are_dropped(tmp_path):
-    with TestClient(create_app(settings(tmp_path))) as client:
-        assert client.get("/api/projects").json() == []
-    # Пустые «Черновики» из прежней версии при старте убираются, с сессиями — остаются обычным проектом.
-    now = datetime.now(UTC).isoformat()
-    (tmp_path / "projects" / "drafts.json").write_text(json.dumps({
-        "id": "drafts", "name": "drafts", "workspace": str(folder(tmp_path, "drafts")), "created_at": now, "updated_at": now,
-    }), encoding="utf-8")
+def test_no_system_projects(tmp_path):
     with TestClient(create_app(settings(tmp_path))) as client:
         assert client.get("/api/projects").json() == []
 
@@ -94,47 +86,6 @@ def test_session_folder_is_not_changed_from_session_config(tmp_path):
     # Папку меняют только в настройках проекта: сессия остаётся в своём проекте, нового проекта нет.
     assert configured["project_id"] == session["project_id"] and configured["model"] == "m"
     assert [item["id"] for item in projects] == [session["project_id"]]
-
-
-def write_session(tmp_path: Path, session_id: str, **fields) -> None:
-    now = datetime.now(UTC).isoformat()
-    (tmp_path / "sessions").mkdir(exist_ok=True)
-    (tmp_path / "sessions" / f"{session_id}.json").write_text(json.dumps({
-        "id": session_id, "title": session_id, "created_at": now, "updated_at": now, "agent_id": "default",
-        "model": "m", "provider": "lm_studio", "enabled_tools": [], **fields,
-    }), encoding="utf-8")
-
-
-def test_legacy_sessions_get_a_project_on_start(tmp_path):
-    workspace = folder(tmp_path)
-    # 1. Своя папка → проект этой папки, с инструментами сессии.
-    write_session(tmp_path, "with-folder", workspace=str(workspace), enabled_tools=["read_file"])
-    # 2. Ни проекта, ни папки → последний изменённый проект.
-    write_session(tmp_path, "plain", workspace=None)
-    # 3. Проекта, на который ссылается сессия, больше нет → тоже он.
-    write_session(tmp_path, "orphan", workspace=None, project_id="gone")
-    # Своя папка, которой уже нет на диске, тоже не теряет сессию.
-    write_session(tmp_path, "lost-folder", workspace=str(tmp_path / "removed"))
-    # Скрытая сессия агента с холста идёт за своей сессией-хозяйкой.
-    write_session(tmp_path, "node", workspace=None, parent_id="with-folder", node_id="qa", hidden=True)
-
-    with TestClient(create_app(settings(tmp_path))) as client:
-        sessions = {item["id"]: item for item in client.get("/api/sessions", params={"include_hidden": True}).json()}
-        projects = client.get("/api/projects").json()
-    with TestClient(create_app(settings(tmp_path))) as client:
-        again = client.get("/api/projects").json()
-
-    [project] = projects
-    assert project["workspace"] == str(workspace.resolve())
-    assert {key: item["project_id"] for key, item in sessions.items()} == {
-        "with-folder": project["id"], "plain": project["id"], "orphan": project["id"], "lost-folder": project["id"],
-        "node": project["id"],
-    }
-    assert again == projects
-    # Устаревшая папка сессии не отдаётся в API и стирается из файла при миграции.
-    assert all("workspace" not in item for item in sessions.values())
-    stored = json.loads((tmp_path / "sessions" / "with-folder.json").read_text(encoding="utf-8"))
-    assert "workspace" not in stored
 
 
 def test_folder_browser_lists_only_folders(tmp_path):
@@ -164,10 +115,5 @@ def test_project_is_named_after_its_folder_by_default(tmp_path):
     with TestClient(create_app(settings(tmp_path))) as client:
         created = client.post("/api/projects", json={"workspace": str(workspace)}).json()
         renamed = client.put(f"/api/projects/{created['id']}", json={"name": "  ", "workspace": str(other)}).json()
-        # Подпись домашней папки из выбора папки — не название: при старте оно меняется на имя папки.
-        legacy = client.post("/api/projects", json={"name": f"Домашняя папка ({Path.home().name})", "workspace": str(workspace)}).json()
-    with TestClient(create_app(settings(tmp_path))) as client:
-        names = {item["id"]: item["name"] for item in client.get("/api/projects").json()}
 
     assert created["name"] == "job_wifi" and renamed["name"] == "my-personal-ai"
-    assert names[legacy["id"]] == "job_wifi"

@@ -22,7 +22,7 @@ globalThis.document = {
 };
 globalThis.window = { location: { href: "http://localhost:8000/" } };
 
-const source = readFileSync(new URL("../src/local_agent/ui/js/markdown.js", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/ui/js/markdown.js", import.meta.url), "utf8");
 const { appendMarkdown } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 
 function find(node, tag) {

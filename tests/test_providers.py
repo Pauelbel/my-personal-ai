@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from tests.fakes import ScriptedProvider
 from tests.test_graph_flow import settings
 
-from local_agent.api.app import create_app
+from api.app import create_app
 
 
 def server(seen):
@@ -74,7 +74,7 @@ def test_ollama_without_key_sends_no_authorization(tmp_path):
 
 
 def test_probe_uses_ssl_verification_setting(tmp_path, monkeypatch):
-    import local_agent.llm.openai_compatible as adapter
+    import llm.openai_compatible as adapter
 
     real_client = adapter.httpx.AsyncClient
     verification_options = []

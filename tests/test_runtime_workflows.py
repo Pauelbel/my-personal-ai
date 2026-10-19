@@ -1,27 +1,19 @@
 """Сквозные проверки записи инструкций и восстановления хода с управляемым провайдером."""
 
 import asyncio
-import json
-import shutil
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from tests.fakes import post_session
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
-from local_agent.llm.base import LLMProviderUnavailable
-from local_agent.llm.models import ChatResult, ToolCall
-
-RULE = "Тестовые отчёты этого проекта называются «Проверка Маяк»."
-RULE_PATH = ".github/instructions/learnings.instructions.md"
-EXTRAS_SKILLS = Path(__file__).resolve().parents[1] / "src/local_agent/skills/library"
+from api.app import create_app
+from config.settings import Settings
+from llm.base import LLMProviderUnavailable
+from llm.models import ChatResult, ToolCall
 
 
 def settings(tmp_path):
     return Settings(
-        skills_path=tmp_path / "skills",
         sessions_path=tmp_path / "sessions", projects_path=tmp_path / "projects",
         conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory",
         memory_auto_update_messages=0, _env_file=None,
@@ -31,77 +23,6 @@ def settings(tmp_path):
 def project_session(client, workspace):
     project = client.post("/api/projects", json={"name": "Проект", "workspace": str(workspace)}).json()
     return post_session(client, {"model": "test", "project_id": project["id"]}).json()
-
-
-class WorkflowProvider:
-    def __init__(self):
-        self.step = 0
-        self.messages = []
-
-    async def chat(self, model, messages, tools=None):
-        self.messages.append(list(messages))
-        steps = (
-            ("use_skill", {"name": "update-skills"}),
-            ("write_file", {"path": RULE_PATH, "content": RULE}),
-            ("read_file", {"path": RULE_PATH}),
-        )
-        if self.step < len(steps):
-            name, arguments = steps[self.step]
-            self.step += 1
-            return ChatResult(content=None, tool_calls=(ToolCall(
-                f"call-{self.step}", name, json.dumps(arguments, ensure_ascii=False),
-            ),))
-        return ChatResult(content="Готово")
-
-    async def close(self):
-        pass
-
-
-@pytest.mark.parametrize("approved", [True, False])
-def test_skill_write_approval_and_new_dialog(tmp_path, approved):
-    workspace = tmp_path / "project"
-    workspace.mkdir()
-    provider = WorkflowProvider()
-    # Стартовых скиллов нет: нужный берём из готовых (skills/library).
-    shutil.copytree(EXTRAS_SKILLS / "update-skills", tmp_path / "skills" / "update-skills")
-    with TestClient(create_app(settings(tmp_path), llm_provider=provider)) as client:
-        session = project_session(client, workspace)
-        session_id = session["id"]
-        runtime = client.app.state.agent_runtime
-        events = []
-
-        async def exercise():
-            async for event in runtime.stream_turn(session_id, "Запомни для проекта", "test"):
-                events.append(event)
-            # Ход остановился на подтверждении: файла ещё нет, решение ждёт в сессии.
-            assert events[-1]["type"] == "interrupt"
-            assert events[-1]["pending"]["call"]["name"] == "write_file"
-            assert not (workspace / RULE_PATH).exists()
-            assert client.app.state.session_service.get(session_id).pending is not None
-            decision = {"action": "approve" if approved else "reject"}
-            async for event in runtime.resume(session_id, decision, "test"):
-                events.append(event)
-
-        client.portal.call(exercise)
-        assert sum(event["type"] == "interrupt" for event in events) == 1
-        assert client.app.state.session_service.get(session_id).pending is None
-        results = [event["message"] for event in events if event["type"] == "tool_result"]
-        assert "Обновление инструкций" in results[0].content
-        assert (workspace / RULE_PATH).exists() is approved
-        if approved:
-            assert (workspace / RULE_PATH).read_text(encoding="utf-8") == RULE
-            assert results[-1].content == RULE
-        else:
-            assert "отклонил" in results[1].content
-        assert not runtime.is_busy(session_id)
-        fresh = post_session(client, {
-            "project_id": session["project_id"], "model": "test",
-        }).json()
-        assert client.post(f"/api/sessions/{fresh['id']}/turns", json={
-            "content": "Как называется тестовый отчёт?",
-        }).status_code == 200
-        assert (RULE in provider.messages[-1][0].content) is approved
-        assert len(provider.messages[-1]) == 2
 
 
 class RecoveryProvider:
@@ -125,6 +46,7 @@ class RecoveryProvider:
 
     async def close(self):
         pass
+
 
 
 def test_interrupted_answer_is_saved_and_next_turn_is_available(tmp_path):

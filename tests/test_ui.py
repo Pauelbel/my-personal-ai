@@ -5,9 +5,9 @@ import re
 from fastapi.testclient import TestClient
 from tests.test_graph_flow import settings
 
-from local_agent.api.app import create_app
+from api.app import create_app
 
-MODULES = ("app.js", "api.js", "chat.js", "panel.js", "pages.js", "files.js", "markdown.js", "highlight.js", "tree.js", "diff.js", "graph.js", "wikichat.js", "resize.js", "attach.js", "diagrams.js", "marks.js", "providers.js", "steps.js", "util.js")
+MODULES = ("app.js", "api.js", "chat.js", "panel.js", "pages.js", "files.js", "markdown.js", "highlight.js", "tree.js", "diff.js", "graph.js", "wikichat.js", "wikiactions.js", "resize.js", "attach.js", "diagrams.js", "marks.js", "providers.js", "steps.js", "util.js")
 
 
 def test_ui_is_served_without_build_and_external_resources(tmp_path) -> None:

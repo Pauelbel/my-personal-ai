@@ -5,9 +5,9 @@ import json
 
 import httpx
 
-from local_agent.llm.base import LLMProviderError
-from local_agent.llm.models import ChatMessage, ToolCall
-from local_agent.llm.openai_compatible import OpenAICompatibleProvider
+from llm.base import LLMProviderError
+from llm.models import ChatMessage, ToolCall
+from llm.openai_compatible import OpenAICompatibleProvider
 
 
 def test_openai_compatible_provider() -> None:
@@ -180,8 +180,8 @@ async def _drain(stream):
 def test_looping_stream_is_cut_and_closed() -> None:
     import pytest
 
-    from local_agent.llm.base import LLMRepetition, stream_chat
-    from local_agent.llm.models import ChatResult, ReasoningDelta
+    from llm.base import LLMRepetition, stream_chat
+    from llm.models import ChatResult, ReasoningDelta
 
     plan = (
         "I'll click \"Add to cart\" for Sauce Labs Onesie (e102).\nI'll click on the Cart (e32).\n"
@@ -218,8 +218,8 @@ def test_looping_stream_is_cut_and_closed() -> None:
 def test_thinking_leaked_as_text_is_cut_from_answer() -> None:
     import pytest
 
-    from local_agent.llm.base import LLMEmptyResponse, stream_chat
-    from local_agent.llm.models import ChatResult
+    from llm.base import LLMEmptyResponse, stream_chat
+    from llm.models import ChatResult
 
     call = ToolCall(id="c1", name="browser_browser_hover", arguments='{"target": "e1"}')
 
@@ -245,7 +245,7 @@ def test_thinking_leaked_as_text_is_cut_from_answer() -> None:
 
 
 def test_repetition_guard_catches_monotone_token_loop_but_not_tables():
-    from local_agent.llm.base import RepetitionGuard
+    from llm.base import RepetitionGuard
 
     # gemma4 иногда без конца пишет служебные токены канала в рассуждения: разных «слов» там одно.
     stuck = RepetitionGuard()

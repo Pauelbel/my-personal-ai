@@ -6,11 +6,11 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.fakes import post_session
 
-from local_agent.api.app import create_app
-from local_agent.config.settings import Settings
-from local_agent.core.context import build_system_prompt
-from local_agent.core.project_instructions import load_project_instructions
-from local_agent.llm.models import ChatResult
+from api.app import create_app
+from config.settings import Settings
+from core.context import build_system_prompt
+from core.project_instructions import load_project_instructions
+from llm.models import ChatResult
 
 
 def test_only_explicit_files_inside_workspace(tmp_path):
@@ -87,7 +87,6 @@ def test_next_turn_reloads_and_workspace_switch_does_not_leak(tmp_path):
     rule.write_text("ПЕРВОЕ_ПРАВИЛО", encoding="utf-8")
     (second / "AGENTS.md").write_text("ДРУГОЙ_ПРОЕКТ", encoding="utf-8")
     settings = Settings(
-        skills_path=tmp_path / "skills",
         sessions_path=tmp_path / "sessions", projects_path=tmp_path / "projects",
         conversations_path=tmp_path / "conversations", memory_path=tmp_path / "memory",
         memory_auto_update_messages=0, _env_file=None,
@@ -106,8 +105,10 @@ def test_next_turn_reloads_and_workspace_switch_does_not_leak(tmp_path):
                 }).json()
                 sessions[workspace] = session["id"]
             url = f"/api/sessions/{sessions[workspace]}"
+            before = len(provider.prompts)
             assert client.post(url + "/turns", json={"content": "Проверка"}).status_code == 200
-            return provider.prompts[-1]
+            # После ответа в фоне может прийти отдельный запрос суммаризации; нужен промпт самого хода.
+            return next(prompt for prompt in provider.prompts[before:] if prompt.startswith("Ты Meepo"))
 
         assert "ПЕРВОЕ_ПРАВИЛО" in turn(first)
         rule.write_text("ОБНОВЛЁННОЕ_ПРАВИЛО", encoding="utf-8")

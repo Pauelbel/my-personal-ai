@@ -8,13 +8,13 @@ from fastapi.testclient import TestClient
 from tests.fakes import ScriptedProvider, call, events_of, post_session
 from tests.test_graph_flow import settings
 
-from local_agent.api.app import create_app
-from local_agent.core.context import IMAGE_MESSAGES, build_context
-from local_agent.llm.models import ChatMessage
-from local_agent.llm.openai_compatible import OpenAICompatibleProvider
-from local_agent.memory.attachments import AttachmentStore
-from local_agent.memory.models import Message
-from local_agent.wiki.service import NoteFields
+from api.app import create_app
+from core.context import IMAGE_MESSAGES, build_context
+from llm.models import ChatMessage
+from llm.openai_compatible import OpenAICompatibleProvider
+from memory.attachments import AttachmentStore
+from memory.models import Message
+from wiki.service import NoteFields
 
 PIXEL = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
 PIXEL_URL = "data:image/png;base64," + base64.b64encode(PIXEL).decode()
