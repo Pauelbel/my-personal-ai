@@ -1,0 +1,465 @@
+/* Интерфейс: проекты и сессии слева, чат по центру; карточки решений — в чате над полем ввода.
+   Цвета — только токены из theme.css. Моноширинный шрифт — для служебных строк: статусов, метрик, имён инструментов. */
+:root {
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+  --radius: 8px;
+  --topbar: 48px;
+  --sidebar: 264px;
+  --column: 780px;
+  --gutter: max(16px, calc((100% - var(--column)) / 2));
+  --frame-bg: var(--bg);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans); display: flex; flex-direction: column; }
+button, input, select, textarea { font: inherit; color: inherit; }
+code, pre, textarea.code { font-family: var(--mono); font-size: 13px; }
+[hidden] { display: none !important; }
+
+button {
+  border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius);
+  padding: 4px 10px; cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+button.ghost { border-color: transparent; background: transparent; }
+button.ghost:hover:not(:disabled) { background: var(--surface-2); }
+button.icon { width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; flex: none; }
+button.small { font-size: 12px; padding: 2px 8px; }
+input, select, textarea {
+  border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); padding: 6px 8px;
+}
+input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.hint { color: var(--muted); font-size: 13px; margin: 4px 0; }
+.error { color: var(--danger); font-size: 13px; min-height: 1em; }
+.sidebar h3 {
+  font: 600 11px/1.4 var(--sans); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0;
+}
+
+/* Шапка */
+.topbar {
+  min-height: var(--topbar); flex: none; display: flex; align-items: center; gap: 12px; padding: 0 10px;
+  border-bottom: 1px solid var(--line); background: var(--surface);
+}
+.topbar-left, .topbar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.topbar-left { flex: 1; }
+#sessions-toggle { width: 36px; height: 36px; font-size: 20px; }
+.brand { display: inline-flex; align-items: center; gap: 7px; font-weight: 700; flex: none; }
+.brand img { width: 24px; height: 24px; }
+.crumbs { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 14px; margin-left: 6px; }
+.crumb {
+  border: 0; background: transparent; color: var(--muted); padding: 2px 6px; max-width: 260px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.crumb:hover:not(:disabled) { color: var(--fg); background: var(--surface-2); }
+.crumb-sep { color: var(--line-strong); }
+.session-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; padding: 0 4px; }
+.offline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--danger); white-space: nowrap; }
+.offline::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: pulse 1s infinite alternate; }
+.tabs { display: flex; gap: 2px; }
+.tabs button { border-color: transparent; background: transparent; color: var(--muted); }
+.tabs button:hover:not(:disabled) { color: var(--fg); }
+.tabs button[aria-pressed="true"] { background: var(--surface-2); border-color: var(--line); color: var(--fg); }
+
+/* Раскладка */
+.layout { display: flex; flex: 1; min-height: 0; }
+.view { flex: 1; min-width: 0; min-height: 0; }
+.chat-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* Проекты и сессии — навигация, а не дерево терминала: крупные строки, цветной значок проекта,
+   открытая сессия — плашкой. Сессии выровнены по названию проекта. */
+.sidebar {
+  width: var(--sidebar); flex: none; display: flex; flex-direction: column; gap: 2px; padding: 10px 8px;
+  border-right: 1px solid var(--line); background: var(--surface); overflow: auto; font: 14px/1.4 var(--sans);
+}
+.sidebar-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 2px 4px 10px; }
+.sidebar .sidebar-head h3 { font: 500 13px/1.4 var(--sans); text-transform: none; letter-spacing: 0; }
+.sidebar-head button.icon { width: 32px; height: 32px; color: var(--muted); font-size: 20px; }
+.sidebar-head button.icon:hover:not(:disabled) { color: var(--fg); }
+/* Граница сайдбара тянется; скрытому сайдбару разделитель не нужен. */
+.layout > .resizer { flex: none; width: 0; }
+.sidebar[hidden] + .resizer { display: none; }
+/* Повторные щелчки по строке не выделяют текст: двойной щелчок — переименование. */
+.nav-tree { display: flex; flex-direction: column; gap: 1px; user-select: none; }
+.nav-tree .trow { min-height: 34px; border-radius: var(--radius); }
+.nav-tree .trow-main { align-self: stretch; gap: 10px; padding: 6px 10px; border-radius: var(--radius); }
+/* Контур фокуса — только с клавиатуры и внутри строки, чтобы не вылезал за плашку. */
+.nav-tree .trow-main:focus-visible { outline-offset: -2px; }
+.nav-tree .trow-label { font-weight: 400; }
+.nav-tree .trow.group .trow-label { font-weight: 500; color: var(--fg); }
+.nav-tree .trow.group .trow-mark {
+  width: 20px; height: 20px; display: grid; place-items: center; border-radius: 6px;
+  background: var(--tone, var(--marker)); color: var(--surface); font: 700 11px/1 var(--sans);
+}
+.nav-tree .trow.group .trow-mark:is(.running, .waiting) { color: var(--surface); box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px currentColor; }
+.nav-tree .trow.group .trow-mark.running { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--accent); }
+.nav-tree .trow.group .trow-mark.waiting { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--warn); }
+/* Сессия: 24px отступа + точка 6px + зазор 10px = название под названием проекта. Точка видна, только пока сессия занята. */
+.nav-tree .trow:not(.group) .trow-main { padding-left: 24px; }
+.nav-tree .trow:not(.group) .trow-mark { width: 6px; height: 6px; border-radius: 50%; color: transparent; background: currentColor; }
+.nav-tree .trow:not(.group) .trow-mark.running { color: var(--accent); }
+.nav-tree .trow:not(.group) .trow-mark.waiting { color: var(--warn); }
+.nav-tree .trow:not(.group) .trow-label { color: var(--muted); }
+.nav-tree .trow.current:not(.group) { background: var(--surface-2); }
+.nav-tree .trow.current:not(.group) .trow-label { color: var(--fg); font-weight: 500; }
+.nav-tree .trow.marked .trow-label { color: var(--fg); font-weight: 500; }
+.nav-tree .trow-note { flex-shrink: 0; font: 12px/1 var(--sans); }
+/* Кнопки строки в сайдбаре не занимают места, пока не нужны: без наведения название идёт на всю ширину. */
+.nav-tree .trow-action {
+  width: 28px; height: 28px; display: none; place-items: center; margin-right: 2px; padding: 0;
+  border-radius: 6px; font: 16px/1 var(--sans);
+}
+.nav-tree .trow:is(:hover, :focus-within) .trow-action { display: inline-grid; }
+.nav-tree .trow-action:hover:not(:disabled) { background: var(--line); color: var(--fg); }
+/* Переименование: поле на месте названия — та же высота и шрифт, одна тонкая рамка вместо рамки с контуром. */
+.nav-tree .trow-main.editing { padding-top: 3px; padding-bottom: 3px; }
+.nav-tree .trow-input {
+  height: 28px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 6px;
+  background: var(--bg); font: 14px/1 var(--sans); user-select: text;
+}
+.nav-tree .trow-input:focus { outline: none; border-color: var(--accent-2); }
+.nav-tree .trow:has(.editing) .trow-action { display: none; }
+
+/* Значок состояния — те же ○ и ●, что в деревьях: пустой — свободен, закрашенный — занят, цвет — чем */
+.trow-mark.running { color: var(--accent); animation: pulse 1s infinite alternate; }
+.trow-mark.waiting, .trow-note.waiting { color: var(--warn); }
+@keyframes pulse { from { opacity: .3; } to { opacity: 1; } }
+
+/* Сообщения */
+/* Лента и поле ввода — в моноширинном шрифте, как в терминале; рамки с подписями на кромке.
+   Фон под подписью на кромке — --frame-bg: тот же, что у контейнера рамки. */
+.messages { flex: 1; overflow: auto; padding: 20px var(--gutter) 8px; font: 14px/1.6 var(--mono); }
+.messages code, .messages pre { font-size: 13px; }
+/* Ответы и ходы за пределами экрана не раскладываются и не рисуются: длинная лента не тормозит ввод.
+   Только у них: content-visibility обрезает всё, что выходит за край. */
+.messages > :is(.msg.assistant, .work) { content-visibility: auto; contain-intrinsic-size: auto 120px; }
+.msg { margin: 0 0 18px; }
+.msg.user { display: flex; justify-content: flex-end; }
+.msg.user .bubble {
+  background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 12px;
+  max-width: 85%; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+/* Длинное задание свёрнуто до нескольких строк; «Показать полностью» — под текстом. */
+.msg.user.folded .bubble-text { max-height: 9.6em; overflow: hidden; mask-image: linear-gradient(to bottom, black 55%, transparent); }
+.msg.user .fold { display: block; margin: 4px 0 0 auto; padding: 0; font: 12px var(--mono); white-space: normal; }
+.msg.assistant .text { overflow-wrap: anywhere; line-height: 1.6; }
+.msg .text > :first-child { margin-top: 0; }
+.msg .text > :last-child { margin-bottom: 0; }
+/* Ход работы: инструменты и промежуточные реплики модели свёрнуты в одну строку над итогом. */
+.work { margin: 0 0 14px; font-size: 13px; }
+.work-head {
+  display: flex; align-items: baseline; gap: 10px; cursor: pointer; list-style: none; color: var(--muted);
+  font: 12px/1.6 var(--mono); padding: 2px 0;
+}
+.work-head::-webkit-details-marker { display: none; }
+/* Щелчок по строке не оставляет рамку фокуса; с клавиатуры фокус виден. */
+.work-head:focus { outline: none; }
+.work-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* Заголовок хода — что модель делала («Работал в браузере»): спокойный серый, процесс не спорит с ответом. */
+.work-title { font-weight: 500; color: var(--muted); }
+.live .work-title { color: var(--fg); }
+.work-head:hover .work-title { color: var(--fg); }
+.work-caret { display: inline-block; transition: transform .15s; }
+.work:not([open]) .work-caret { transform: rotate(-90deg); }
+.work-body { padding: 6px 0 2px; }
+.work-icon { color: var(--accent-2); }
+.work-note { color: var(--muted); margin: 6px 0; overflow-wrap: anywhere; }
+.work-note > :first-child { margin-top: 0; }
+.work-note > :last-child { margin-bottom: 0; }
+.msg-foot { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; margin-top: 6px; font: 12px/1.5 var(--mono); color: var(--muted); }
+.msg-foot .stats::before { content: "■ "; }
+.msg-action.push::before { content: "⧉ "; }
+.msg-action.push { color: var(--accent-2); }
+.msg-foot.bare { opacity: 0; transition: opacity .15s; }
+.msg:hover .msg-foot.bare, .msg-foot.bare:focus-within { opacity: 1; }
+.msg-action { border: 0; background: transparent; color: var(--muted); font: inherit; padding: 0 4px; }
+.msg-action.push { margin-left: auto; }
+.msg-action.fold { color: var(--accent-2); }
+.msg-action:hover:not(:disabled) { color: var(--fg); background: transparent; }
+@media (hover: none) { .msg-foot.bare { opacity: 1; } }
+
+/* Шаги хода — одна рамка, строка на шаг: «✓ Открыта страница  saucedemo.com  1,2 с ›»; раскрыть — подробности. */
+.steps { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
+.steps > .step + .step { border-top: 1px solid var(--line); }
+.step { font: 13px/1.6 var(--mono); color: var(--muted); }
+.step summary {
+  display: grid; grid-template-columns: 1.4em auto minmax(0, 1fr) auto 1ch; align-items: baseline; gap: 10px;
+  padding: 5px 10px; cursor: pointer; list-style: none;
+}
+.step summary::-webkit-details-marker { display: none; }
+.step summary::after { content: "›"; color: var(--muted); transition: transform .15s; }
+.step[open] summary::after { transform: rotate(90deg); }
+.step summary:hover, .step[open] summary { background: var(--surface-2); color: var(--fg); }
+.step-icon { text-align: center; color: var(--ok); }
+.step.failed :is(.step-icon, .step-name, .step-meta) { color: var(--danger); }
+.step.pending .step-icon { color: var(--accent); animation: pulse 1s infinite alternate; }
+.step-name { color: var(--muted); white-space: nowrap; }
+.step-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.step-meta { text-align: right; white-space: nowrap; }
+/* Размышления и промежуточные реплики — приглушённые строки среди шагов. */
+.step:is(.thought, .note) .step-icon { color: var(--muted); }
+.step:is(.thought, .note) .step-target { color: var(--muted); }
+.step.thought .step-target { font-style: italic; }
+.step pre {
+  white-space: pre-wrap; max-height: 280px; overflow: auto; margin: 0; padding: 8px 12px; color: var(--fg);
+  background: var(--bg); border-top: 1px solid var(--line); font-size: 12px;
+}
+.step .step-text { padding: 8px 12px; border-top: 1px solid var(--line); background: var(--bg); font-size: 13px; }
+
+/* Markdown: ответы в чате, вики и просмотр файлов */
+:is(.msg .text, .reader) a { color: var(--accent-2); text-decoration: none; }
+:is(.msg .text, .reader) a:hover { text-decoration: underline; }
+:is(.msg .text, .reader) :is(h1, h2, h3, h4, h5, h6) { line-height: 1.3; margin: 1.1em 0 .45em; }
+:is(.msg .text, .reader) h1 { font-size: 1.4em; }
+:is(.msg .text, .reader) h2 { font-size: 1.22em; }
+:is(.msg .text, .reader) h3 { font-size: 1.08em; }
+:is(.msg .text, .reader) :is(h4, h5, h6) { font-size: 1em; }
+/* Маркер должен помещаться в отступ списка: сообщение обрезает всё, что выходит за его край (content-visibility). */
+:is(.msg .text, .reader) ul { padding-left: 1.8em; list-style-type: "– "; }
+:is(.msg .text, .reader) ol { padding-left: 2.4em; }
+:is(.msg .text, .reader) ul ul { list-style-type: "· "; }
+:is(.msg .text, .reader) li::marker { color: var(--marker); }
+:is(.msg .text, .reader) ol > li::marker { font: .9em var(--mono); }
+:is(.msg .text, .reader) li + li { margin-top: 3px; }
+:is(.msg .text, .reader) code { color: var(--accent-2); background: var(--surface-2); border-radius: 4px; padding: 1px 4px; font-size: .88em; }
+:is(.msg .text, .reader) pre {
+  position: relative; overflow: auto; padding: 10px 12px; line-height: 1.45;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+}
+:is(.msg .text, .reader) pre code { color: inherit; background: none; padding: 0; font-size: 13px; }
+:is(.msg .text, .reader) blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+:is(.msg .text, .reader) hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+:is(.msg .text, .reader) .markdown-table-container { overflow: auto; margin: 10px 0; }
+:is(.msg .text, .reader) table { border-collapse: collapse; font-size: .94em; }
+/* Слова в ячейках не рвутся посередине: широкая таблица прокручивается, а не сжимает колонки до пары букв. */
+:is(.msg .text, .reader) :is(th, td) { border: 1px solid var(--line); padding: 4px 10px; text-align: left; vertical-align: top; overflow-wrap: normal; }
+:is(.msg .text, .reader) th { background: var(--surface-2); font-weight: 600; }
+.path-link { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.path-link:hover { color: var(--fg); text-decoration-style: solid; }
+.copy { position: absolute; top: 4px; right: 4px; font-size: 11px; padding: 0 6px; color: var(--muted); opacity: 0; transition: opacity .15s; }
+pre:hover > .copy, .copy:focus-visible { opacity: 1; }
+@media (hover: none) { .copy { opacity: 1; } }
+
+/* Идущий ход — та же строка «ход работы», только с колесом: внутри шаги, рассуждения, текст и журнал. */
+.live-head { align-items: center; }
+.live-head .work-title { flex: none; white-space: nowrap; }
+/* Строка хода всегда в одну строку: длинное название этапа обрезается многоточием. */
+.live-head .work-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spinner {
+  width: 11px; height: 11px; border-radius: 50%; flex: none;
+  border: 2px solid color-mix(in srgb, var(--agent) 25%, transparent); border-top-color: var(--agent);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+.work-thought, .live-log pre {
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; margin: 6px 0;
+  padding: 6px 10px; border-left: 2px solid var(--line); font: 12px/1.5 var(--mono); color: var(--muted);
+}
+.live-log { margin: 6px 0 2px; }
+.live-log > summary { cursor: pointer; font: 11px var(--mono); color: var(--muted); }
+.live-log > summary:hover { color: var(--fg); }
+.empty { display: flex; flex-direction: column; align-items: center; gap: 2px; margin-top: 12vh; color: var(--muted); text-align: center; }
+.empty img { width: 112px; height: 112px; margin-bottom: 10px; filter: drop-shadow(0 8px 18px var(--shadow)); }
+.empty strong { font-size: 22px; color: var(--fg); }
+.empty button { margin-top: 14px; }
+
+/* Низ чата: карточки и поле ввода */
+.chat-bottom { flex: none; padding: 14px var(--gutter) 16px; }
+/* Поле ввода в рамке: модель, права и контекст — на верхней кромке, подсказки — на нижней */
+.frame { position: relative; border: 1px solid var(--line-strong); border-radius: 6px; transition: border-color .15s; }
+.frame:focus-within { border-color: var(--accent-2); }
+.frame-head, .frame-foot {
+  position: absolute; left: 10px; right: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  font: 12px/1.6 var(--mono); color: var(--muted); pointer-events: none;
+}
+.frame-head { top: -0.8em; }
+.frame-foot { bottom: -0.8em; justify-content: flex-end; }
+.frame-head > *, .frame-foot > * { background: var(--frame-bg); padding: 0 6px; white-space: nowrap; pointer-events: auto; min-width: 0; }
+.frame-left { display: flex; align-items: center; gap: 2px; overflow: hidden; }
+.frame-label, .model-name { font-weight: 600; color: var(--fg); }
+.frame-label { color: var(--accent-2); margin-right: 6px; }
+.model-name { overflow: hidden; text-overflow: ellipsis; }
+.composer-box { padding: 16px 8px 14px; container-type: inline-size; }
+/* Имя модели не сжимается в «g…»: тесно — сначала уходят подпись «контекст» и скорость, потом вся шкала. */
+.composer-box .frame-left { flex-shrink: 0; max-width: 100%; }
+.composer-box .usage { overflow: hidden; }
+@container (max-width: 560px) { .usage-label, .usage .speed { display: none; } }
+@container (max-width: 400px) { .usage { display: none; } }
+.composer-row { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.prompt-mark { flex: none; color: var(--ok); font: 13px/28px var(--mono); padding-left: 4px; }
+.composer textarea {
+  flex: 1; min-width: 0; min-height: 28px; max-height: 40vh; resize: none; border: 0; background: transparent; padding: 4px 0;
+  font: 14px/1.45 var(--mono);
+}
+.composer textarea:focus { outline: none; }
+/* Полоса прокрутки в поле ввода съедает место: прячем её, прокрутка колёсиком и клавишами остаётся. */
+.composer textarea { scrollbar-width: none; }
+.composer textarea::-webkit-scrollbar { display: none; }
+.usage { display: flex; align-items: center; gap: 6px; color: var(--ok); }
+.usage:empty { display: none; }
+.meter-text { letter-spacing: -1px; }
+.meter-text.warn { color: var(--warn); }
+.meter-text.full { color: var(--danger); }
+.stop-hint { color: var(--danger); }
+.send {
+  flex: none; width: 30px; height: 28px; padding: 0; border-radius: 4px; font: 14px var(--mono);
+  border-color: var(--line-strong); background: transparent; color: var(--accent-2);
+}
+.send:hover:not(:disabled) { border-color: var(--accent-2); background: transparent; }
+.diagram { position: relative; margin: 10px 0; padding: 12px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.diagram-source { position: absolute; top: 6px; right: 6px; padding: 1px 8px; font: 12px var(--mono); color: var(--muted); background: var(--surface); }
+.md-image img { display: block; max-width: 100%; max-height: 480px; margin: 8px 0; border-radius: 6px; border: 1px solid var(--line); }
+.composer-note { font-size: 13px; color: var(--warn); margin: 0 0 6px; }
+.composer-retry { font-size: 13px; color: var(--danger); margin: 0 0 6px; }
+
+/* Панель внимания */
+/* Карточки решений — в чате над полем ввода; длинные (разница файла) прокручиваются внутри, не вытесняя ввод. */
+.chat-cards { max-height: 48vh; overflow: auto; margin-bottom: 4px; }
+.chat-cards .card { margin-bottom: 8px; }
+.cards-elsewhere {
+  display: block; margin: 0 0 8px; padding: 2px 0; border: 0; background: transparent; color: var(--warn);
+  font-size: 13px; text-align: left;
+}
+.cards-elsewhere:hover:not(:disabled) { background: transparent; text-decoration: underline; }
+.card {
+  border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 10px 10px 10px 12px; margin-bottom: 10px;
+  background: var(--bg); box-shadow: inset 3px 0 var(--warn);
+}
+.card .where { font: 12px var(--mono); color: var(--muted); }
+.card .title { font-weight: 600; margin: 2px 0 6px; overflow-wrap: anywhere; }
+.card .reason { font-size: 13px; margin: 0 0 6px; }
+.card details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.card pre { white-space: pre-wrap; max-height: 260px; overflow: auto; font-size: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px; margin: 4px 0; }
+.card .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.card .actions button, .card > button { font-size: 13px; padding: 3px 10px; }
+.card .actions select { font-size: 13px; padding: 3px 6px; width: auto; }
+.diff { margin: 4px 0; max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font: 12px/1.5 var(--mono); }
+.diff-summary { position: sticky; top: 0; padding: 2px 8px; background: var(--surface-2); color: var(--muted); }
+.diff-line { display: flex; min-width: max-content; }
+.diff-number { flex: none; width: 4ch; padding-right: 6px; text-align: right; color: var(--muted); user-select: none; }
+.diff-sign { flex: none; width: 2ch; text-align: center; user-select: none; }
+.diff-text { white-space: pre; padding-right: 8px; }
+.diff-line.added { background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.diff-line.added .diff-sign { color: var(--ok); }
+.diff-line.removed { background: color-mix(in srgb, var(--danger) 16%, transparent); }
+.diff-line.removed .diff-sign { color: var(--danger); }
+.diff-skip { padding: 0 8px; color: var(--muted); background: var(--bg); }
+.card textarea { width: 100%; margin-top: 6px; resize: vertical; min-height: 54px; }
+/* Страницы: вики, возможности, память */
+.page { overflow: auto; padding: 16px 24px; }
+.page-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.page-head input[type="search"] { flex: 0 1 240px; min-width: 0; }
+.page-head button { white-space: nowrap; }
+.page-head h2 { margin: 0; flex: 1; font-size: 20px; }
+.split { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; margin-top: 12px; min-height: 60vh; }
+.list { list-style: none; margin: 0; padding: 0; border-right: 1px solid var(--line); }
+.reader { min-width: 0; overflow-wrap: anywhere; line-height: 1.6; }
+.editor { display: flex; flex-direction: column; gap: 8px; }
+.editor textarea { min-height: 55vh; font-family: var(--mono); font-size: 13px; }
+.editor-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
+/* Деревья в стиле терминала: файлы, вики, память, возможности */
+.tree-list { font: 13px/1.65 var(--mono); }
+.trow { display: flex; align-items: center; min-width: 0; border-radius: 4px; }
+.trow:hover { background: var(--surface-2); }
+.trow-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; border: 0; background: transparent; border-radius: 4px;
+  padding: 0 6px; text-align: left; font: inherit; color: var(--fg);
+}
+button.trow-main:hover:not(:disabled) { background: transparent; }
+.trow-guide { flex: none; white-space: pre; color: var(--line-strong); }
+.trow-mark { flex: none; width: 2ch; color: var(--muted); }
+.trow.group .trow-mark { color: var(--marker); }
+.trow.group .trow-label { font-weight: 700; }
+.trow-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trow.current .trow-mark, .trow.current .trow-label { color: var(--accent-2); font-weight: 700; }
+.trow.failed .trow-note { color: var(--danger); }
+.trow-input {
+  flex: 1; min-width: 0; padding: 0 4px; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg);
+  font: inherit; color: var(--fg);
+}
+.trow-note { flex: 0 3 auto; min-width: 0; margin-left: auto; padding-left: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.trow-action { flex: none; border: 0; background: transparent; color: var(--muted); font: 12px var(--mono); padding: 0 6px; visibility: hidden; }
+.trow-action:hover:not(:disabled) { color: var(--fg); background: transparent; }
+.trow:hover .trow-action, .trow-action:focus-visible, .trow-action.shown { visibility: visible; }
+/* Постоянные действия строки («код», «править», «в архив»…) — маленькие кнопки с рамкой, чтобы не путались с текстом. */
+.trow-action.shown {
+  margin-left: 6px; padding: 0 8px; line-height: 20px; border: 1px solid var(--line-strong); border-radius: 5px;
+  background: var(--surface); color: var(--fg); font-family: var(--sans); white-space: nowrap;
+}
+.trow-action.shown:hover:not(:disabled) { border-color: var(--accent-2); color: var(--accent-2); background: var(--surface-2); }
+.trow-action.shown.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+.trow-detail { display: flex; padding: 0 6px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.trow-text { min-width: 0; font-family: var(--sans); padding-bottom: 4px; }
+.trow-block:hover { background: var(--surface-2); border-radius: 4px; }
+.trow-block .trow:hover { background: transparent; }
+.subtabs { display: flex; gap: 2px; margin: 14px 0 10px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.subtabs button {
+  display: inline-flex; align-items: center; gap: 7px; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  background: transparent; padding: 6px 12px; color: var(--muted); white-space: nowrap;
+}
+.subtabs button:hover:not(:disabled) { background: transparent; color: var(--fg); }
+.subtabs button[aria-pressed="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+.subtabs .count { font: 11px var(--mono); color: var(--muted); }
+/* Окна */
+dialog { border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--fg); width: min(560px, calc(100vw - 32px)); box-shadow: 0 16px 40px var(--shadow); }
+dialog::backdrop { background: rgb(0 0 0 / .35); }
+dialog form, .source { display: flex; flex-direction: column; gap: 10px; }
+dialog h3 { margin: 0; }
+dialog.wide { width: min(680px, calc(100vw - 32px)); }
+dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.dialog-actions { display: flex; gap: 8px; }
+dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 12px var(--mono); }
+.dialog-actions span { flex: 1; }
+.folders { border: 1px solid var(--line); border-radius: var(--radius); max-height: 220px; overflow: auto; }
+.folders-head { display: flex; gap: 8px; align-items: center; padding: 4px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.folders ul { list-style: none; margin: 0; padding: 4px; }
+.folders li button { width: 100%; text-align: left; border-color: transparent; background: transparent; padding: 2px 6px; }
+/* Переключатель вкл/выкл в строке дерева (серверы и инструменты MCP). */
+.switch {
+  flex: none; position: relative; width: 30px; height: 16px; padding: 0; margin: 0 6px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: var(--surface-2);
+}
+.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--muted); transition: transform .15s;
+}
+.switch.on { background: color-mix(in srgb, var(--ok) 25%, transparent); border-color: var(--ok); }
+.switch.on::after { transform: translateX(14px); background: var(--ok); }
+.switch:hover:not(:disabled) { border-color: var(--accent-2); }
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 30; max-width: min(560px, calc(100vw - 32px));
+  background: var(--danger); color: var(--accent-fg); padding: 8px 14px; border-radius: var(--radius); box-shadow: 0 8px 24px var(--shadow);
+}
+
+/* Подсветка кода */
+.tok-comment { color: var(--muted); font-style: italic; }
+.tok-string { color: var(--ok); }
+.tok-keyword { color: var(--accent); }
+.tok-number { color: var(--warn); }
+.tok-func, .tok-meta { color: var(--agent); }
+
+@media (max-width: 900px) {
+  .topbar { flex-wrap: wrap; row-gap: 4px; padding: 6px 10px; }
+  .tabs { order: 3; width: 100%; overflow-x: auto; }
+  .tabs button { padding: 4px 8px; flex: none; }
+  .crumbs { display: none; }
+  .layout { flex-direction: column; }
+  .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 20; width: min(320px, 88vw); box-shadow: 4px 0 24px var(--shadow); }
+  .messages { padding: 14px 12px 6px; }
+  .chat-bottom { padding: 14px 10px 10px; }
+  .meter-text, .usage .speed, .stop-hint, .frame-foot { display: none; }
+  .split { grid-template-columns: 1fr; }
+  .list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 30vh; overflow: auto; }
+  .trow-action { visibility: visible; }
+  .nav-tree .trow-action { display: inline-grid; }
+  .page { padding: 12px 16px; }
+}
+
+/* Карточка подтверждения: галочка доверия на сессию — в строке кнопок. */
+.card .trust { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--mono); color: var(--muted); margin-left: auto; }

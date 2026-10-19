@@ -1,28 +1,95 @@
 """Сборка FastAPI: сервисы, роуты и статика интерфейса."""
 
+from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from meepo.settings import Env
+from meepo.agent.approvals import Approvals, reset_pending
+from meepo.agent.loop import Agent
+from meepo.agent.tools import files, plan, search
+from meepo.agent.turns import TurnHub
+from meepo.api import chat
+from meepo.api import settings as settings_api
+from meepo.llm.client import LLMClient
+from meepo.settings import Env, UserSettings
+from meepo.storage.projects import ProjectStore
+from meepo.storage.sessions import SessionStore
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
+LOCAL_HOSTS = {"127.0.0.1", "localhost"}
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
-def create_app(env: Env | None = None) -> FastAPI:
+class Services:
+    """Всё, что живёт столько же, сколько сервер. llm — фейковая модель в тестах; иначе клиент по настройкам."""
+
+    def __init__(self, env: Env, llm=None) -> None:
+        self.env = env
+        self.settings_path = env.data_path / "settings.json"
+        self.sessions = SessionStore(env.data_path)
+        self.projects = ProjectStore(env.data_path)
+        self.approvals = Approvals(self.sessions)
+        self.turns = TurnHub()
+        self._fixed_llm = llm
+        self._client: LLMClient | None = None
+        self.agent = Agent(
+            sessions=self.sessions, projects=self.projects, approvals=self.approvals, llm=self.llm,
+            settings=self.settings, tools=[*files.TOOLS, *search.TOOLS, *plan.TOOLS], default_model=env.default_model,
+        )
+
+    def settings(self) -> UserSettings:
+        return UserSettings.load(self.settings_path)
+
+    def llm(self):
+        if self._fixed_llm is not None:
+            return self._fixed_llm
+        base_url = self.settings().llm_base_url or self.env.llm_base_url
+        # Сервер модели сменили в настройках — клиент пересоздаётся (старый закроется при остановке сервера).
+        if self._client is None or self._client.base_url != base_url.rstrip("/"):
+            self._client = LLMClient(base_url, api_key=self.env.llm_api_key, timeout=self.env.llm_timeout_seconds,
+                                     verify_ssl=self.env.llm_verify_ssl)
+        return self._client
+
+    async def close(self) -> None:
+        await self.turns.close()
+        if self._client is not None:
+            await self._client.close()
+
+
+def create_app(env: Env | None = None, llm=None) -> FastAPI:
     env = env or Env.load()
-    app = FastAPI(title="Meepo", version="2.0.0")
-    app.state.env = env
+    services = Services(env, llm)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        reset_pending(services.sessions)
+        yield
+        await services.close()
+
+    app = FastAPI(title="Meepo", version="2.0.0", lifespan=lifespan)
+    app.state.services = services
 
     @app.middleware("http")
-    async def no_cache_ui(request: Request, call_next):
+    async def local_only(request: Request, call_next):
+        # Чужой Host — DNS rebinding; изменяющий запрос со сторонней страницы — CSRF. Агент пишет файлы и
+        # запускает команды, поэтому сервер слушается только своих страниц.
+        if urlsplit(f"//{request.headers.get('host', '')}").hostname not in LOCAL_HOSTS | {env.host}:
+            return PlainTextResponse("Недопустимый заголовок Host", status_code=400)
+        origin = request.headers.get("origin")
+        if request.method not in SAFE_METHODS and origin and urlsplit(origin).hostname not in LOCAL_HOSTS | {env.host}:
+            return PlainTextResponse("Запрос со сторонней страницы отклонён", status_code=403)
         response = await call_next(request)
         # HTML и модули должны обновляться вместе, иначе браузер смешивает версии интерфейса.
         if request.url.path == "/" or request.url.path.startswith("/ui/"):
             response.headers["Cache-Control"] = "no-cache"
         return response
+
+    app.include_router(chat.router)
+    app.include_router(settings_api.router)
 
     app.mount("/ui", StaticFiles(directory=UI_DIR), name="ui")
 

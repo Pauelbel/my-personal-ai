@@ -1,0 +1,369 @@
+// Чат: история сессии и идущий ход. Разговор идёт ходами: реплика пользователя, под ней одна свёрнутая строка
+// «ход работы» (рассуждения, промежуточные реплики, вызовы инструментов, журнал), затем итоговый ответ.
+// Пока ход идёт, в чате только его строка: результатов ещё нет, и наружу ничего не выходит.
+import { renderDiagrams } from "./diagrams.js";
+import { highlightCode } from "./highlight.js";
+import { appendMarkdown } from "./markdown.js";
+import { el, parse, plural } from "./util.js";
+
+const FLUSH_MS = 80;
+const STEP_ICON = { done: "✓", failed: "✕", pending: "◌" };
+const USER_FOLD_CHARS = 600;
+const USER_FOLD_LINES = 10;
+const STOPPED_TEXT = "_(ход остановлен)_";
+// Раскрытые строки остаются раскрытыми после перерисовки.
+const opened = new Set();
+const unfolded = new Set();
+let liveOpen = false;
+
+// Шаги хода человеческими словами: [что сделано, группа для заголовка строки хода].
+const TOOL_STEPS = {
+  list_dir: ["Содержимое папки", "files"], read_file: ["Прочитан файл", "files"], search_files: ["Поиск по файлам", "files"],
+  write_file: ["Записан файл", "files"], edit_file: ["Изменён файл", "files"], delete_path: ["Удалено", "files"],
+  move_path: ["Перемещено", "files"], make_dir: ["Создана папка", "files"], plan: ["План задачи", null],
+  read_skill: ["Прочитан скилл", "skills"], create_skill: ["Создан скилл", "skills"], update_skill: ["Изменён скилл", "skills"],
+  run_skill: ["Запуск скилла", "skills"], run_command: ["Команда", "command"], browser: ["Браузер", "browser"],
+  remember: ["Запомнено", "memory"],
+};
+const ACTIVITY = {
+  files: ["Работаю с файлами", "Работал с файлами"], skills: ["Работаю со скиллами", "Работал со скиллами"],
+  command: ["Выполняю команды", "Выполнял команды"], browser: ["Работаю в браузере", "Работал в браузере"],
+  memory: ["Вспоминаю", "Обращался к памяти"], other: ["Выполняю шаги", "Выполнил шаги"],
+};
+
+function describe(name) {
+  return TOOL_STEPS[name] ?? [name, "other"];
+}
+
+// Заголовок строки хода: чем модель была занята больше всего. Без вызовов — «Думаю».
+function activityOf(names, now) {
+  const counts = new Map();
+  for (const name of names) {
+    const group = describe(name)[1];
+    if (group) counts.set(group, (counts.get(group) ?? 0) + 1);
+  }
+  if (!counts.size) return names.length ? ACTIVITY.other[now ? 0 : 1] : now ? "Думаю" : "Думал";
+  const [top] = [...counts].sort((a, b) => b[1] - a[1])[0];
+  return ACTIVITY[top][now ? 0 : 1];
+}
+
+// running — ход в последней реплике ещё идёт: его процесс показывает строка идущего хода (Live), а не история.
+export function renderMessages(container, messages, { running = false } = {}) {
+  container.replaceChildren();
+  if (!messages.length) {
+    const empty = el("div", "empty");
+    const mascot = el("img");
+    Object.assign(mascot, { src: "/ui/assets/meepo-mascot.png", alt: "" });
+    empty.append(mascot, el("strong", "", "Привет! Я Мипо."), "Опишите задачу — я сделаю её в папке проекта.");
+    container.append(empty);
+    return;
+  }
+  const results = new Map(messages.filter((item) => item.role === "tool").map((item) => [item.tool_call_id, item]));
+  const all = turns(messages);
+  all.forEach((turn, index) => {
+    if (turn.head) container.append(userNode(turn.head));
+    if (!(running && index === all.length - 1)) renderTurn(container, turn, results, index === all.length - 1);
+  });
+}
+
+// Ход начинается репликой пользователя; ответ на карточку словами (card_reply) — часть того же хода.
+function turns(messages) {
+  const list = [];
+  let turn = null;
+  for (const message of messages) {
+    if (message.role === "tool") continue;
+    if (message.role === "user" && !message.card_reply) {
+      list.push(turn = { head: message, items: [] });
+      continue;
+    }
+    if (!turn) list.push(turn = { head: null, items: [] });
+    turn.items.push(message);
+  }
+  return list;
+}
+
+function renderTurn(container, turn, results, last) {
+  const tail = turn.items.at(-1);
+  const final = tail?.role === "assistant" && !tail.tool_calls?.length ? tail : null;
+  const work = [];
+  for (const item of turn.items) {
+    if (item.reasoning) work.push({ thought: item });
+    if (item === final) continue;
+    if (item.role === "user") work.push({ reply: item });
+    else if (item.content?.trim()) work.push({ note: item });
+    if (item.tool_calls?.length) work.push({ calls: item.tool_calls, message: item });
+  }
+  const log = final?.log ?? [];
+  if (work.length || log.length) container.append(workNode(work, results, log, last && !final ? "прервано" : ""));
+  if (final) container.append(assistantNode(final, last));
+}
+
+function workNode(work, results, log, state) {
+  const key = `work:${(work[0]?.thought ?? work[0]?.note ?? work[0]?.message ?? work[0]?.reply)?.id ?? log[0]}`;
+  const node = el("details", "work");
+  remember(node, key);
+  const names = work.flatMap((part) => (part.calls ?? []).map((call) => call.name));
+  const head = el("summary", "work-head");
+  head.append(el("span", "work-icon", "◇"), el("span", "work-title", activityOf(names, false)),
+    el("span", "work-meta", meta([names.length && `${names.length} ${plural(names.length, "шаг", "шага", "шагов")}`, state])),
+    el("span", "work-caret", "▾"));
+  const body = el("div", "work-body");
+  const steps = el("div", "steps");
+  for (const part of work) {
+    if (part.thought) steps.append(thoughtNode(part.thought.id, part.thought.reasoning));
+    else if (part.note) steps.append(noteNode(part.note.id, part.note.content));
+    else if (part.reply) steps.append(replyNode(part.reply.content));
+    else for (const call of part.calls) steps.append(stepNode(call, results.get(call.id)));
+  }
+  if (steps.childElementCount) body.append(steps);
+  if (log.length) body.append(logNode(log.join("\n")));
+  node.append(head, body);
+  return node;
+}
+
+function meta(parts) {
+  const text = parts.filter(Boolean).join(" · ");
+  return text ? `· ${text}` : "";
+}
+
+function preview(text, limit = 110) {
+  const line = text.replace(/[#*_`>|]|-{3,}|:-+:?/g, " ").replace(/\s+/g, " ").trim();
+  return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
+}
+
+function remember(node, key) {
+  node.open = opened.has(key);
+  node.addEventListener("toggle", () => (node.open ? opened.add(key) : opened.delete(key)));
+}
+
+function row(className, key, icon, name, target, metaText, body) {
+  const node = el("details", `step ${className}`);
+  remember(node, key);
+  const summary = el("summary");
+  summary.append(el("span", "step-icon", icon), el("span", "step-name", name), el("span", "step-target", target),
+    el("span", "step-meta", metaText));
+  node.append(summary, body);
+  return node;
+}
+
+function thoughtNode(id, text) {
+  return row("thought", `thought:${id}`, "∴", "Размышление", preview(text), `${text.length} симв.`, el("pre", "", text));
+}
+
+function noteNode(id, text) {
+  const body = el("div", "text step-text");
+  renderMarkdown(body, text);
+  return row("note", `note:${id}`, "›", "Заметка", preview(text), "", body);
+}
+
+function replyNode(text) {
+  return row("note", `reply:${text}`, "↳", "Ваш ответ", preview(text), "", el("pre", "", text));
+}
+
+function stepNode(call, result) {
+  const state = !result ? "pending" : result.is_error ? "failed" : "done";
+  const args = parse(call.arguments);
+  const target = args.path || args.name || args.query || args.url || args.command || args.action || "";
+  const body = el("pre");
+  body.textContent = `${call.name} ${JSON.stringify(args, null, 2)}\n\n→ ${result?.content ?? "—"}`;
+  const metaText = state === "failed" ? "ошибка" : state === "pending" ? "…" : "";
+  const node = row(state, `call:${call.id}`, STEP_ICON[state], describe(call.name)[0], String(target), metaText, body);
+  node.querySelector(".step-name").title = call.name;
+  return node;
+}
+
+function logNode(text) {
+  const node = el("details", "live-log");
+  node.append(el("summary", "", "журнал"), el("pre", "", text));
+  return node;
+}
+
+function userNode(message) {
+  const node = el("article", "msg user");
+  const bubble = el("div", "bubble");
+  bubble.append(el("div", "bubble-text", message.content));
+  node.append(bubble);
+  if (message.content.length > USER_FOLD_CHARS || message.content.split("\n").length > USER_FOLD_LINES) {
+    const fold = el("button", "msg-action fold");
+    fold.type = "button";
+    const sync = () => {
+      const open = unfolded.has(message.id);
+      node.classList.toggle("folded", !open);
+      fold.textContent = open ? "Свернуть" : "Показать полностью";
+    };
+    fold.addEventListener("click", () => {
+      if (!unfolded.delete(message.id)) unfolded.add(message.id);
+      sync();
+    });
+    sync();
+    bubble.append(fold);
+  }
+  return node;
+}
+
+function assistantNode(message, last) {
+  const node = el("article", "msg assistant");
+  const body = el("div", "text");
+  renderMarkdown(body, message.content);
+  node.append(body);
+  if (message.content.trim() === STOPPED_TEXT) return node;
+  const foot = el("div", `msg-foot${message.stats && last ? "" : " bare"}`);
+  if (message.stats) foot.append(el("span", "stats", statsText(message.stats)));
+  foot.append(copyButton("msg-action push", () => message.content));
+  node.append(foot);
+  return node;
+}
+
+function statsText(stats) {
+  return [
+    duration(stats.seconds), stats.input_tokens != null && `вход ${compact(stats.input_tokens)}`,
+    stats.output_tokens != null && `выход ${compact(stats.output_tokens)}`, stats.rounds > 1 && `запросов: ${stats.rounds}`,
+  ].filter(Boolean).join(" · ");
+}
+
+export function compact(value) {
+  if (value < 1000) return String(value);
+  return value < 1e4 ? `${(value / 1e3).toFixed(1).replace(/\.0$/, "").replace(".", ",")}k` : `${Math.round(value / 1e3)}k`;
+}
+
+function duration(seconds) {
+  if (seconds < 60) return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1).replace(".", ",")} с`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes} мин ${Math.round(seconds - minutes * 60)} с`;
+}
+
+function copyButton(className, text) {
+  const button = el("button", className, "Копировать");
+  button.type = "button";
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text());
+      button.textContent = "Скопировано";
+    } catch {
+      button.textContent = "Не удалось";
+    }
+    setTimeout(() => { button.textContent = "Копировать"; }, 1500);
+  });
+  return button;
+}
+
+export function renderMarkdown(target, text, withTools = true) {
+  appendMarkdown(target, text);
+  // Чужие картинки не грузим: картинка из интернета выдала бы, что страницу открыли.
+  for (const image of target.querySelectorAll("img[data-src]")) {
+    image.replaceWith(document.createTextNode(`[картинка: ${image.alt || image.dataset.src}]`));
+  }
+  for (const code of target.querySelectorAll("pre > code")) {
+    highlightCode(code, code.dataset.language);
+    if (withTools) code.parentElement.append(copyButton("copy", () => code.textContent));
+  }
+  // Диаграммы — только в готовом тексте: пока ответ печатается, блок ещё не дописан.
+  if (withTools) renderDiagrams(target);
+}
+
+export function scrollDown(container) {
+  container.scrollTop = container.scrollHeight;
+}
+
+// Идущий ход — одна строка «◌ Работаю с файлами · 4 шага · 17 с ›». Внутри — шаги, размышление и текст текущего
+// запроса, журнал. Строится из событий хода, поэтому после перезагрузки страницы восстанавливается их повтором.
+export class Live {
+  constructor(container) {
+    this.container = container;
+    this.node = el("article", "msg assistant streaming");
+    this.details = el("details", "work live");
+    this.details.open = liveOpen;
+    this.details.addEventListener("toggle", () => { liveOpen = this.details.open; });
+    const head = el("summary", "work-head live-head");
+    this.title = el("span", "work-title");
+    this.meta = el("span", "work-meta");
+    head.append(el("span", "spinner"), this.title, this.meta, el("span", "work-caret", "▾"));
+    this.steps = el("div", "steps");
+    this.steps.hidden = true;
+    this.reasoning = el("pre", "work-thought");
+    this.reasoning.hidden = true;
+    this.textNode = el("div", "work-note text");
+    this.textNode.hidden = true;
+    this.log = logNode("");
+    const body = el("div", "work-body");
+    body.append(this.steps, this.reasoning, this.textNode, this.log);
+    this.details.append(head, body);
+    this.node.append(this.details);
+    this.calls = new Map();
+    this.names = [];
+    this.text = "";
+    this.thought = "";
+    this.state = "";
+    this.progress = "";
+    this.timer = null;
+    this.started = Date.now();
+    this.ticker = setInterval(() => this.#status(), 1000);
+    this.#status();
+    container.append(this.node);
+  }
+
+  // Одно событие хода: delta, reasoning, tool_call, tool_result, progress, approval, log.
+  handle(event) {
+    if (event.type === "delta") this.#write(event.text);
+    else if (event.type === "reasoning") {
+      this.thought += event.text;
+      this.reasoning.hidden = false;
+      this.reasoning.textContent = this.thought;
+    } else if (event.type === "tool_call") this.#call(event.call);
+    else if (event.type === "tool_result") this.#result(event);
+    else if (event.type === "progress") this.progress = event.text;
+    else if (event.type === "approval") this.state = "ждёт решения";
+    else if (event.type === "log") this.log.querySelector("pre").textContent += `${event.text}\n`;
+    this.#status();
+  }
+
+  finish() {
+    clearTimeout(this.timer);
+    clearInterval(this.ticker);
+    this.node.remove();
+  }
+
+  #write(text) {
+    this.text += text;
+    this.timer ??= setTimeout(() => {
+      this.timer = null;
+      this.textNode.hidden = !this.text.trim();
+      this.textNode.replaceChildren();
+      renderMarkdown(this.textNode, this.text, false);
+    }, FLUSH_MS);
+  }
+
+  // Модель позвала инструмент: её текст и рассуждения этого запроса становятся строками хода.
+  #call(call) {
+    this.steps.hidden = false;
+    if (this.thought.trim()) this.steps.append(thoughtNode(`live-${this.names.length}`, this.thought));
+    if (this.text.trim()) this.steps.append(noteNode(`live-${this.names.length}`, this.text));
+    this.thought = this.text = "";
+    this.reasoning.hidden = this.textNode.hidden = true;
+    const node = stepNode(call, null);
+    this.calls.set(call.id, { call, node });
+    this.names.push(call.name);
+    this.steps.append(node);
+  }
+
+  #result(event) {
+    const entry = this.calls.get(event.call_id);
+    if (!entry) return;
+    const result = { content: event.content, is_error: event.is_error };
+    const node = stepNode(entry.call, result);
+    entry.node.replaceWith(node);
+    entry.node = node;
+    this.state = "";
+    this.progress = "";
+  }
+
+  #status() {
+    const seconds = Math.floor((Date.now() - this.started) / 1000);
+    const now = this.names.length && this.calls.size && [...this.calls.values()].at(-1).node.classList.contains("pending");
+    this.title.textContent = now || this.names.length ? activityOf(this.names, true) : this.text ? "Пишу ответ" : "Думаю";
+    this.meta.textContent = meta([
+      this.names.length && `${this.names.length} ${plural(this.names.length, "шаг", "шага", "шагов")}`,
+      this.progress, seconds && duration(seconds), this.state,
+    ]);
+  }
+}

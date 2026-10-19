@@ -1,18 +1,93 @@
 <!doctype html>
-<html lang="ru" data-theme="dark">
+<html lang="ru">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Своя тёмная тема есть: расширение Dark Reader страницу не перекрашивает. -->
     <meta name="darkreader-lock" />
     <title>Meepo</title>
     <link rel="icon" type="image/png" href="/ui/assets/meepo-mascot.png" />
+    <script>
+      try { document.documentElement.dataset.theme = localStorage.getItem("app-theme") || "dark"; }
+      catch { document.documentElement.dataset.theme = "dark"; }
+    </script>
     <link rel="stylesheet" href="/ui/css/theme.css" />
-    <style>
-      body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
-      header { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
-    </style>
+    <link rel="stylesheet" href="/ui/css/app.css" />
+    <script type="module" src="/ui/js/app.js"></script>
   </head>
   <body>
-    <header><img src="/ui/assets/meepo-mascot.png" alt="" width="24" height="24" /><strong>Meepo</strong></header>
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="ghost icon" id="sessions-toggle" type="button" title="Проекты и сессии">☰</button>
+        <span class="brand"><img src="/ui/assets/meepo-mascot.png" alt="" width="24" height="24" />Meepo</span>
+        <nav class="crumbs" aria-label="Открытая сессия">
+          <button class="crumb" id="project-chip" type="button" title="Настройки проекта"></button>
+          <span class="crumb-sep" aria-hidden="true">/</span>
+          <span class="session-title" id="session-title">—</span>
+        </nav>
+      </div>
+      <nav class="tabs" aria-label="Разделы">
+        <button type="button" data-view="chat" aria-pressed="true">Чат</button>
+      </nav>
+      <div class="topbar-right">
+        <button class="ghost icon" id="theme-toggle" type="button" title="Светлая или тёмная тема">☾</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar" id="sidebar" aria-label="Проекты и сессии">
+        <div class="sidebar-head">
+          <h3>Проекты</h3>
+          <button class="ghost icon" id="new-project" type="button" title="Новый проект: папка, в которой работает агент" aria-label="Новый проект">＋</button>
+        </div>
+        <div class="nav-tree" id="session-list"></div>
+      </aside>
+
+      <main class="view chat-pane" id="view-chat">
+        <div class="messages" id="messages" aria-live="polite"></div>
+        <div class="chat-bottom">
+          <section class="chat-cards" id="cards" aria-label="Ждёт вашего решения" hidden></section>
+          <form class="composer" id="composer">
+            <p class="composer-retry" id="composer-error" hidden></p>
+            <div class="composer-box frame">
+              <div class="frame-head">
+                <span class="frame-left"><span class="model-name" id="model-name" title="Модель — в настройках"></span></span>
+                <span class="usage" id="usage"></span>
+              </div>
+              <div class="composer-row">
+                <span class="prompt-mark" aria-hidden="true">◆</span>
+                <textarea id="input" rows="1" placeholder="Задача для Мипо" aria-label="Сообщение"></textarea>
+                <button class="send" id="send" type="submit" title="Отправить">↵</button>
+              </div>
+              <div class="frame-foot">
+                <span class="stop-hint" id="stop-hint" hidden>Esc — стоп</span>
+                <span>Enter — отправить · Shift+Enter — строка</span>
+              </div>
+            </div>
+          </form>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="project-dialog">
+      <form method="dialog" id="project-form">
+        <h3 id="project-dialog-title">Проект</h3>
+        <label>Название<input id="project-name" maxlength="100" placeholder="по умолчанию — имя папки" /></label>
+        <label>Папка<input id="project-path" required placeholder="полный путь к папке" /></label>
+        <div class="folders">
+          <div class="folders-head"><button type="button" id="folder-up">↑</button><span id="folder-current"></span></div>
+          <ul id="folder-list"></ul>
+        </div>
+        <p class="error" id="project-error"></p>
+        <div class="dialog-actions">
+          <button type="button" id="project-delete" hidden>Удалить проект</button>
+          <span></span>
+          <button type="button" id="project-cancel">Отмена</button>
+          <button class="primary" type="submit">Сохранить</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="alert" hidden></div>
   </body>
 </html>

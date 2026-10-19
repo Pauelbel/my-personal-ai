@@ -7,7 +7,7 @@ from meepo.settings import Env, UserSettings
 
 
 def test_index_page(tmp_path):
-    client = TestClient(create_app(Env(data_path=tmp_path)))
+    client = TestClient(create_app(Env(data_path=tmp_path)), base_url="http://127.0.0.1")
     response = client.get("/")
     assert response.status_code == 200
     assert "<title>Meepo</title>" in response.text
@@ -32,3 +32,25 @@ def test_user_settings_roundtrip(tmp_path):
     loaded = UserSettings.load(path)
     assert loaded.model == "m"
     assert loaded.guards == {"language": False, "promise": True, "plan": True, "retry": True}
+
+
+def test_chat_api_turn_stream(tmp_path):
+    import json
+
+    from meepo.llm.fake import FakeLLM
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    app = create_app(Env(data_path=tmp_path / "data", default_model="fake"), FakeLLM(["Привет!"]))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        assert client.post("/api/projects", json={"path": "relative"}).status_code == 400
+        project = client.post("/api/projects", json={"name": "П", "path": str(project_dir)}).json()
+        session = client.post("/api/sessions", json={"project_id": project["id"]}).json()
+        with client.stream("POST", f"/api/sessions/{session['id']}/turn", json={"content": "привет"}) as response:
+            events = [json.loads(line[6:]) for line in response.iter_lines() if line.startswith("data: ")]
+        assert [event["type"] for event in events if event["type"] != "log"] == ["delta", "done"]
+        messages = client.get(f"/api/sessions/{session['id']}/messages").json()
+        assert [m["content"] for m in messages] == ["привет", "Привет!"]
+        # Изменяющий запрос со сторонней страницы отклоняется.
+        assert client.post("/api/sessions", json={"project_id": project["id"]},
+                           headers={"Origin": "http://evil.example"}).status_code == 403
