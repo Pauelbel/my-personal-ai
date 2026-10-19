@@ -38,6 +38,8 @@ class Harness:
                 asyncio.get_running_loop().call_soon(self.services.approvals.decide, self.sid, decision)
 
         await self.services.agent.run(self.sid, text, "req-1", emit)
+        # Фоновое обновление памяти после хода дожидаемся здесь: иначе цикл событий закроется раньше.
+        await asyncio.gather(*self.services.memory_updater._tasks)
         self.events += events
         return events
 

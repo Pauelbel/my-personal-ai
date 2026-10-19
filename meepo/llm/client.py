@@ -93,12 +93,15 @@ class LLMClient:
         self._context_cache: dict[str, tuple[float, int]] = {}
 
     async def stream(
-        self, model: str, messages: list[dict], tools: list[dict] | None = None,
+        self, model: str, messages: list[dict], tools: list[dict] | None = None, response_format: dict | None = None,
     ) -> AsyncIterator[tuple[str, str] | Reply]:
+        """response_format — строгий JSON-ответ по схеме ({"type": "json_schema", …}): для служебных запросов (память)."""
         payload = {"model": model, "messages": [_message_payload(item) for item in messages], "stream": True,
                    "stream_options": {"include_usage": True}}
         if tools:
             payload["tools"] = tools
+        if response_format:
+            payload["response_format"] = response_format
         parts: list[str] = []
         thoughts: list[str] = []
         # Рассуждения, которые сервер не отделил и прислал в ответе (метки Gemma, <think>), уходят в рассуждения.

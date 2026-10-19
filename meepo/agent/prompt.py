@@ -30,6 +30,7 @@ BASE_PROMPT = f"""Ты Мипо — личный локальный ассист
 - Команды (pytest, git, python скрипт.py) запускай через run_command в папке проекта; пакеты, поставленные для скиллов, доступны и командам.
 - Браузер: browser open → snapshot (текст и элементы с ref и локаторами) → click/type по ref → снова snapshot. Автотесты пиши по локаторам из snapshot, а не выдумывай их.
 - Большой документ целиком в окно не помещается — read_file покажет оглавление; нужные места читай кусками или ищи через search_files.
+- Пользователь прямо просит запомнить факт о себе, своих предпочтениях или проектах — запиши его через remember.
 - Пиши только о том, что действительно сделал. Помни: всё, что пишешь, — только по-русски."""
 
 SKILLS_RULES = """Скиллы — твои программы для больших и повторяемых задач (тест-кейсы по документации, ревью кейсов, перевод документов и т. п.):
@@ -40,12 +41,13 @@ SKILLS_RULES = """Скиллы — твои программы для больш
 - Секреты (токены, пароли) пользователь вводит сам в разделе «Скиллы»; в чат их не пиши и не проси."""
 
 
-def system_prompt(project: dict, plan: list[dict], *, skills: str = "", today: date | None = None) -> str:
-    """skills — список скиллов строками «- имя — описание»."""
+def system_prompt(project: dict, plan: list[dict], *, skills: str = "", memory: str = "", today: date | None = None) -> str:
+    """skills — список скиллов строками «- имя — описание»; memory — что известно о пользователе (memory/store.py)."""
     today = today or date.today()
     prompt = (
         f"{BASE_PROMPT}\n\n{SKILLS_RULES}\n\nСкиллы:\n{skills or 'пока нет ни одного'}\n\n"
-        f"Проект: {project['name']} (папка {project['path']}).\n"
+        + (f"Что ты знаешь о пользователе (из памяти; его новые слова важнее):\n{memory}\n\n" if memory else "")
+        + f"Проект: {project['name']} (папка {project['path']}).\n"
         f"Сегодня {WEEKDAYS[today.weekday()]}, {today.day} {MONTHS[today.month - 1]} {today.year} года."
     )
     if open_steps(plan):

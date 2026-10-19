@@ -76,6 +76,10 @@ export const api = {
   deleteSecret: (name, secret) => request(`/skills/${encodeURIComponent(name)}/secrets/${secret}`, { method: "DELETE" }),
   rollback: (name, version) => request(`/skills/${encodeURIComponent(name)}/rollback`, json("POST", { version })),
 
+  memory: () => request("/memory"),
+  saveMemory: (name, content) => request(`/memory/${encodeURIComponent(name)}`, json("PUT", { content })),
+  updateMemory: (sessionId) => request(`/sessions/${sessionId}/memory/update`, { method: "POST" }),
+
   settings: () => request("/settings"),
   saveSettings: (fields) => request("/settings", json("PUT", fields)),
   models: () => request("/models"),

@@ -3,7 +3,8 @@
 Ответ в сценарии:
 - строка — текстовый ответ;
 - словарь {"content": "...", "calls": [("write_file", {"path": "a.md", "content": "x"}), ...]} — вызовы инструментов;
-- исключение — будет брошено вместо ответа (LLMEmpty, LLMRepetition, …).
+- исключение — будет брошено вместо ответа (LLMEmpty, LLMRepetition, …);
+- функция messages → одно из перечисленного: ответ, зависящий от запроса.
 Каждый запрос запоминается в `requests`: сообщения и были ли предложены инструменты.
 """
 
@@ -21,11 +22,16 @@ class FakeLLM:
         self.base_url = "http://fake/v1"
         self.api_key = ""
 
-    async def stream(self, model: str, messages: list[dict], tools: list[dict] | None = None) -> AsyncIterator:
-        self.requests.append({"model": model, "messages": [dict(item) for item in messages], "tools": tools})
+    async def stream(self, model: str, messages: list[dict], tools: list[dict] | None = None,
+                     response_format: dict | None = None) -> AsyncIterator:
+        self.requests.append({"model": model, "messages": [dict(item) for item in messages], "tools": tools,
+                              "response_format": response_format})
         if not self.script:
             raise AssertionError("Фейковой модели не хватило ответов сценария")
         item = self.script.pop(0)
+        if callable(item):
+            # Ответ, который зависит от запроса: например, операции памяти со ссылкой на id сообщения.
+            item = item(messages)
         if isinstance(item, Exception):
             raise item
         if isinstance(item, str):

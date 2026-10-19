@@ -5,6 +5,7 @@ import { compact, renderMessages, scrollDown } from "./chat.js";
 import { Live } from "./live.js";
 import { initProjects, openProject } from "./projects.js";
 import { initial, tone } from "./marks.js";
+import { initMemory, showMemory } from "./memory.js";
 import { showSettings } from "./settings.js";
 import { showSkills } from "./skills.js";
 import { editLabel, rowAction, treeRow } from "./tree.js";
@@ -316,6 +317,7 @@ function showView(view) {
   for (const button of document.querySelectorAll(".tabs button")) button.setAttribute("aria-pressed", String(button.dataset.view === view));
   for (const node of document.querySelectorAll("main.view")) node.hidden = node.id !== `view-${view}`;
   if (view === "skills") void showSkills(toast);
+  if (view === "memory") void showMemory(toast);
   if (view === "settings") void showSettings(toast, (saved) => { $("#model-name").textContent = saved.active_model || "модель не выбрана"; });
 }
 
@@ -336,6 +338,7 @@ function bind() {
     if (event.key === "Escape" && state.live && !document.querySelector("dialog[open]")) void stop();
   });
   for (const button of document.querySelectorAll(".tabs button")) button.addEventListener("click", () => showView(button.dataset.view));
+  initMemory(toast, current);
   $("#new-project").addEventListener("click", () => openProject());
   $("#project-chip").addEventListener("click", () => openProject(projectOf(current())));
   initProjects({

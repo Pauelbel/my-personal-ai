@@ -69,6 +69,8 @@ class TurnState:
     # Во сколько раз реальные токены сервера меньше грубой оценки (байты / 4): по русскому тексту оценка завышена.
     # Уточняется по каждому ответу с input_tokens, чтобы не сжимать контекст раньше времени.
     scale: float = 1.0
+    # Что известно о пользователе — по реплике, с которой начался ход; в промпт каждого запроса.
+    memory: str = ""
 
     def note(self, text: str) -> None:
         """Строка лога хода: видна под ответом и сохраняется с ним."""
@@ -109,6 +111,8 @@ class Agent:
         state = TurnState(session_id, request_id, project, model, window, context.build("", history),
                           settings.max_tool_rounds, emit, guards=dict(settings.guards),
                           session=lambda: self.sessions.get(session_id))
+        if memory := self.services.get("memory"):
+            state.memory = memory.prompt_context(text)
         ctx = ToolContext(Path(project["path"]), session_id, self.sessions, request_id, emit, self.services)
         try:
             await self._loop(state, ctx)
@@ -173,7 +177,8 @@ class Agent:
         # Промпт пересобирается каждый раунд: план мог измениться посреди хода.
         registry = self.services.get("registry")
         skills = registry.prompt_list() if registry else ""
-        state.messages[0] = {"role": "system", "content": system_prompt(state.project, session["plan"], skills=skills)}
+        state.messages[0] = {"role": "system",
+                             "content": system_prompt(state.project, session["plan"], skills=skills, memory=state.memory)}
         messages = state.messages + ([{"role": "user", "content": STOP_NOTE}] if state.stopped else [])
         schemas = context.estimate_tokens(json.dumps(tools, ensure_ascii=False)) if tools else 0
         budget = int((state.window - context.reserve(state.window)) / state.scale) - schemas
@@ -302,6 +307,8 @@ class Agent:
         message = self.sessions.add_message(state.session_id, "assistant", text, reasoning=reply.reasoning,
                                             stats=stats, log=state.log)
         state.emit({"type": "done", "message": message})
+        if updater := self.services.get("memory_updater"):
+            updater.after_turn(state.session_id)
 
     def _save_stopped(self, state: TurnState) -> None:
         text = state.partial.strip()

@@ -29,6 +29,7 @@
       <nav class="tabs" aria-label="Разделы">
         <button type="button" data-view="chat" aria-pressed="true">Чат</button>
         <button type="button" data-view="skills" aria-pressed="false">Скиллы</button>
+        <button type="button" data-view="memory" aria-pressed="false">Память</button>
         <button type="button" data-view="settings" aria-pressed="false">Настройки</button>
       </nav>
       <div class="topbar-right">
@@ -76,6 +77,21 @@
         <div class="split">
           <div class="list tree-list" id="skill-list"></div>
           <div class="skill-card" id="skill-card"></div>
+        </div>
+      </main>
+
+      <main class="view page" id="view-memory" hidden>
+        <div class="page-head">
+          <h2>Память</h2>
+          <button id="memory-update" type="button" title="Разобрать новые сообщения открытой сессии">Обновить из разговора</button>
+        </div>
+        <p class="hint">Факты о вас. В промпт попадают профиль и предпочтения целиком и строки других файлов, найденные по вашему сообщению. Обновляется сама каждые N ваших сообщений (см. «Настройки»).</p>
+        <div class="split">
+          <div class="list tree-list" id="memory-list"></div>
+          <div class="editor">
+            <textarea id="memory-text" spellcheck="false" aria-label="Текст файла памяти"></textarea>
+            <div class="editor-actions"><span class="hint" id="memory-status"></span><button class="primary" id="memory-save" type="button">Сохранить</button></div>
+          </div>
         </div>
       </main>
 

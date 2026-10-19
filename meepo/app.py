@@ -10,14 +10,17 @@ from fastapi.staticfiles import StaticFiles
 
 from meepo.agent.approvals import Approvals, reset_pending
 from meepo.agent.loop import Agent
-from meepo.agent.tools import command, files, plan, search, skills
+from meepo.agent.tools import command, files, memory, plan, search, skills
 from meepo.agent.tools.browser import TOOLS as BROWSER_TOOLS
 from meepo.agent.tools.browser import BrowserPool
 from meepo.agent.turns import TurnHub
 from meepo.api import chat
+from meepo.api import memory as memory_api
 from meepo.api import settings as settings_api
 from meepo.api import skills as skills_api
 from meepo.llm.client import LLMClient
+from meepo.memory.store import MemoryStore
+from meepo.memory.updater import MemoryUpdater
 from meepo.settings import Env, UserSettings
 from meepo.skills.env import SkillsEnv
 from meepo.skills.history import SkillHistory
@@ -47,15 +50,21 @@ class Services:
         self.secrets = SecretStore(env.data_path / "secrets")
         self.history = SkillHistory(env.data_path / "skills")
         self.browsers = BrowserPool(lambda: self.settings().browser_headed)
+        self.memory = MemoryStore(env.data_path / "memory")
+        self.memory_updater = MemoryUpdater(
+            self.memory, self.sessions, self.llm, lambda: self.settings().model or env.default_model,
+            lambda: self.settings().memory_auto_update_messages)
         self._fixed_llm = llm
         self._client: LLMClient | None = None
         self.agent = Agent(
             sessions=self.sessions, projects=self.projects, approvals=self.approvals, llm=self.llm,
             settings=self.settings,
-            tools=[*files.TOOLS, *search.TOOLS, *plan.TOOLS, *skills.TOOLS, *command.TOOLS, *BROWSER_TOOLS],
+            tools=[*files.TOOLS, *search.TOOLS, *plan.TOOLS, *skills.TOOLS, *command.TOOLS, *BROWSER_TOOLS,
+                   *memory.TOOLS],
             default_model=env.default_model,
             services={"registry": self.skills, "env": self.skills_env, "secrets": self.secrets,
-                      "history": self.history, "llm_info": self.llm_info, "browsers": self.browsers},
+                      "history": self.history, "llm_info": self.llm_info, "browsers": self.browsers,
+                      "memory": self.memory, "memory_updater": self.memory_updater},
         )
 
     def settings(self) -> UserSettings:
@@ -92,6 +101,7 @@ def create_app(env: Env | None = None, llm=None) -> FastAPI:
     async def lifespan(app: FastAPI):
         reset_pending(services.sessions)
         services.skills.install_builtin()
+        services.memory.initialize()
         yield
         await services.close()
 
@@ -116,6 +126,7 @@ def create_app(env: Env | None = None, llm=None) -> FastAPI:
     app.include_router(chat.router)
     app.include_router(settings_api.router)
     app.include_router(skills_api.router)
+    app.include_router(memory_api.router)
 
     app.mount("/ui", StaticFiles(directory=UI_DIR), name="ui")
 
