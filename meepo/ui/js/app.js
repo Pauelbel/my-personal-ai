@@ -4,14 +4,12 @@ import { renderCard } from "./cards.js";
 import { compact, renderMessages, scrollDown } from "./chat.js";
 import { Live } from "./live.js";
 import { initProjects, openProject } from "./projects.js";
-import { initial, tone } from "./marks.js";
 import { initMemory, showMemory } from "./memory.js";
-import { makeResizable } from "./resize.js";
-import { showWiki, wikiKeys } from "./wiki.js";
-import { initWikiChat, refreshWikiChat } from "./wikichat.js";
+import { initWikiPage, showWiki } from "./wiki.js";
+import { refreshWikiChat } from "./wikichat.js";
 import { showSettings } from "./settings.js";
 import { showSkills } from "./skills.js";
-import { editLabel, rowAction, treeRow } from "./tree.js";
+import { renderSidebar as renderSidebarTree } from "./sidebar.js";
 import { el, fitInput, recall, remember } from "./util.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -70,50 +68,13 @@ async function newSession(projectId) {
   }
 }
 
-function renderSidebar() {
-  if ($("#session-list .trow-input")) return;
-  const rows = state.projects.flatMap((project) => {
-    const sessions = state.sessions.filter((session) => session.project_id === project.id);
-    const open = !state.collapsed.has(project.id);
-    const head = treeRow({
-      label: project.name, group: true, open, mark: initial(project.name), title: project.path,
-      note: !open && sessions.length ? String(sessions.length) : "",
-      onClick: () => (sessions.length ? toggleProject(project.id) : void newSession(project.id)),
-      extra: [
-        rowAction("＋", "Новая сессия в проекте", () => newSession(project.id)),
-        rowAction("⚙", "Настройки проекта", () => openProject(project)),
-      ],
-    });
-    head.querySelector(".trow-mark").style.setProperty("--tone", tone(project.id));
-    return open ? [head, ...sessions.map(sessionRow)] : [head];
-  });
-  $("#session-list").replaceChildren(...(rows.length ? rows : [treeRow({ label: "проектов пока нет", mark: "" })]));
-}
-
-function sessionRow(session) {
-  const waiting = Boolean(session.pending);
-  const running = state.live && session.id === state.current;
-  const row = treeRow({
-    label: session.title, title: `${session.title}\nДвойной щелчок — переименовать`, current: session.id === state.current,
-    mark: "", state: waiting ? "waiting" : running ? "running" : "", note: waiting ? "ждёт" : "", noteClass: "waiting",
-    onClick: () => selectSession(session.id),
-    extra: [
-      rowAction("✎", "Переименовать", () => renameSession(row, session)),
-      rowAction("×", "Удалить сессию", () => deleteSession(session)),
-    ],
-  });
-  row.addEventListener("dblclick", () => renameSession(row, session));
-  return row;
-}
-
-function toggleProject(id) {
-  if (!state.collapsed.delete(id)) state.collapsed.add(id);
-  remember("collapsed-projects", JSON.stringify([...state.collapsed]));
-  renderSidebar();
-}
-
-function renameSession(row, session) {
-  editLabel(row, session.title, async (title) => {
+// Что делает панель проектов по щелчкам (sidebar.js).
+const sidebarActions = {
+  select: (id) => selectSession(id),
+  create: (projectId) => newSession(projectId),
+  configure: (project) => openProject(project),
+  remove: (session) => deleteSession(session),
+  rename: async (session, title) => {
     try {
       await api.renameSession(session.id, title);
       await loadSessions();
@@ -121,7 +82,11 @@ function renameSession(row, session) {
       toast(error);
     }
     render();
-  });
+  },
+};
+
+function renderSidebar() {
+  renderSidebarTree(state, sidebarActions);
 }
 
 async function deleteSession(session) {
@@ -329,32 +294,6 @@ function showView(view) {
   if (view === "settings") void showSettings(toast, (saved) => { $("#model-name").textContent = saved.active_model || "модель не выбрана"; });
 }
 
-function initWiki() {
-  let searchTimer = null;
-  $("#wiki-search").addEventListener("input", () => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => showWiki(toast), 250);
-  });
-  $("#wiki-search").addEventListener("keydown", (event) => wikiKeys(event, toast));
-  $("#wiki-list").addEventListener("keydown", (event) => wikiKeys(event, toast));
-  initWikiChat({ toast });
-  makeResizable($("#wiki-chat-resizer"), { grid: $("#view-wiki"), variables: ["--wiki-chat-w"], min: 280 });
-  makeResizable($("#wiki-list-resizer"), {
-    grid: $("#wiki-split"),
-    variables: ["--wiki-list-w", "--wiki-graph-w"],
-    pick: () => ($("#wiki-split").classList.contains("graph-mode") ? "--wiki-graph-w" : "--wiki-list-w"),
-    min: 160,
-  });
-  // Ctrl+K — найти заметку вики из любого раздела. По коду клавиши: в русской раскладке это «Л».
-  document.addEventListener("keydown", (event) => {
-    if (!(event.ctrlKey || event.metaKey) || event.code !== "KeyK" || document.querySelector("dialog[open]")) return;
-    event.preventDefault();
-    showView("wiki");
-    $("#wiki-search").focus();
-    $("#wiki-search").select();
-  });
-}
-
 function showTheme() {
   $("#theme-toggle").textContent = document.documentElement.dataset.theme === "dark" ? "☀" : "☾";
 }
@@ -373,7 +312,7 @@ function bind() {
   });
   for (const button of document.querySelectorAll(".tabs button")) button.addEventListener("click", () => showView(button.dataset.view));
   initMemory(toast, current);
-  initWiki();
+  initWikiPage(toast, () => showView("wiki"));
   $("#new-project").addEventListener("click", () => openProject());
   $("#project-chip").addEventListener("click", () => openProject(projectOf(current())));
   initProjects({
@@ -403,10 +342,10 @@ async function start() {
   showTheme();
   void showModel();
   try {
+    // После перезагрузки страница открывается на том же разделе: запоминаем его до того, как откроется сессия.
+    const view = recall("view");
     await loadSessions();
     await openFirst();
-    // После перезагрузки страница открывается на том же разделе.
-    const view = recall("view");
     if (view && view !== "chat" && document.querySelector(`#view-${view}`)) showView(view);
   } catch (error) {
     toast(error);

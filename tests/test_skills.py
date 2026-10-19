@@ -207,3 +207,12 @@ def test_secrets_never_leave_server(harness):
     result = [m for m in h.messages() if m["role"] == "tool"][-1]["content"]
     assert "токен: ***" in result
     assert "очень-секретный-токен" not in (h.services.env.data_path / "conversations").joinpath(f"{h.sid}.jsonl").read_text(encoding="utf-8")
+
+
+def test_read_skill_file(harness):
+    h = with_env(harness([{"calls": [("read_skill", {"name": "echo", "file": "scripts/main.py"}),
+                                     ("read_skill", {"name": "echo", "file": "nope.py"})]}, "Прочитал."]))
+    h.services.skills.write("echo", {"SKILL.md": SKILL_MD, "scripts/main.py": ECHO}, replace=False)
+    h.turn("покажи код echo")
+    code, missing = [m for m in h.messages() if m["role"] == "tool"]
+    assert code["content"].startswith("echo/scripts/main.py:\nimport json") and "нет файла nope.py" in missing["content"]

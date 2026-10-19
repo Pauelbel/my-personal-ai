@@ -5,6 +5,8 @@ llm_info() — адрес, модель и ключ для MEEPO_LLM_*. Пров
 не видит, его исправляет модель.
 """
 
+import sys
+
 from meepo.agent.tools.base import Tool, ToolContext, ToolResult
 from meepo.agent.tools.files import diff
 from meepo.skills import runner
@@ -50,6 +52,10 @@ def _session_list(ctx: ToolContext, key: str) -> list:
 
 def read_skill(args: dict, ctx: ToolContext) -> ToolResult:
     skill = _skill(ctx, args["name"])
+    if file := str(args.get("file") or "").strip().lstrip("./"):
+        if file not in skill.files():
+            raise ValueError(f"В скилле {skill.name} нет файла {file}. Есть: {', '.join(skill.files())}")
+        return ToolResult(f"{skill.name}/{file}:\n{(skill.folder / file).read_text(encoding='utf-8', errors='replace')}")
     missing = ctx.services["env"].missing(skill.requires)
     secrets = ctx.services["secrets"].status(skill.name, skill.secrets)
     lines = [f"Скилл {skill.name}" + (f" — СЛОМАН: {skill.error}" if skill.error else ""),
@@ -117,7 +123,10 @@ async def _install(ctx: ToolContext, requirements: list[str]) -> str:
     try:
         return await ctx.services["env"].install(missing)
     except RuntimeError as exc:
-        raise ValueError(f"Не удалось установить пакеты: {exc}") from None
+        version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        tail = str(exc)[-1500:]
+        raise ValueError(f"Не удалось установить пакеты {', '.join(missing)}. Окружение скиллов — Python {version}: "
+                         f"бери версии, которые его поддерживают (обычно свежие, через >=). Вывод установщика:\n{tail}") from None
 
 
 # ---------- update_skill ----------
@@ -209,12 +218,16 @@ PACKAGES = {"type": "array", "items": {"type": "string"},
 SECRETS = {"type": "array", "items": {"type": "string"}, "description": "Имена секретов, например [\"JIRA_TOKEN\"]"}
 
 TOOLS = [
-    Tool("read_skill", "Прочитать скилл целиком: SKILL.md (что делает, аргументы, примеры), файлы, пакеты, секреты. "
-         "Читай перед первым запуском скилла.",
-         {"type": "object", "properties": {"name": NAME}, "required": ["name"], "additionalProperties": False},
+    Tool("read_skill", "Прочитать скилл: SKILL.md (что делает, аргументы, примеры), список файлов, пакеты, секреты. "
+         "Читай перед первым запуском скилла. С file — текст одного файла скилла (код перед правкой через update_skill).",
+         {"type": "object", "properties": {
+             "name": NAME, "file": {"type": "string", "description": "Файл скилла, например scripts/main.py"},
+         }, "required": ["name"], "additionalProperties": False},
          read_skill),
     Tool("create_skill", "Создать новый скилл, когда для задачи нет подходящего: Python-скрипт scripts/main.py "
-         "(аргументы — JSON из stdin, результат — в stdout, прогресс — строками в stderr) и SKILL.md. "
+         "(аргументы — JSON из stdin, результат — в stdout, прогресс — строками в stderr) и SKILL.md. Секреты (токены, "
+         "пароли) — не аргументы: их значения скрипт получает переменными окружения с теми же именами, "
+         "например os.environ[\"JIRA_TOKEN\"]; в secrets перечисли имена. "
          "Большие объёмы обрабатывай по кускам и сохраняй прогресс в meepo_skill.State — повторный запуск продолжит "
          "с места остановки. Пользователь подтверждает карточкой. Шаблон SKILL.md:\n" + SKILL_TEMPLATE,
          {"type": "object", "properties": {

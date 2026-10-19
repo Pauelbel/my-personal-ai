@@ -83,7 +83,11 @@ async def run_command(args: dict, ctx: ToolContext) -> ToolResult:
         f"{text[-TAIL_CHARS:].lstrip()}")
     code = process.returncode
     head = f"$ {command}\nКод возврата: {code}{stopped}"
-    return ToolResult(f"{head}\n\n{shown or '(вывода нет)'}", is_error=bool(stopped) or code != 0, meta={"log": log})
+    hint = ""
+    if code == 127 or "No module named" in text or "is not recognized" in text:
+        hint = ("\n\nНе хватает программы или пакета Python. Пакеты ставятся только скиллами: предложи create_skill "
+                "с нужными пакетами в requires — после установки они доступны и run_command.")
+    return ToolResult(f"{head}\n\n{shown or '(вывода нет)'}{hint}", is_error=bool(stopped) or code != 0, meta={"log": log})
 
 
 def _save_log(project: Path, command: str, text: str) -> str:

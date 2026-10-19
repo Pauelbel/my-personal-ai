@@ -3,8 +3,10 @@
 import { api } from "./api.js";
 import { renderMarkdown } from "./chat.js";
 import { createGraph } from "./graph.js";
+import { makeResizable } from "./resize.js";
 import { guide, stem, treeRow } from "./tree.js";
 import { el, recall, remember } from "./util.js";
+import { initWikiChat } from "./wikichat.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -293,4 +295,31 @@ function wikiPath(from, href) {
     else if (part && part !== ".") parts.push(part);
   }
   return parts.join("/");
+}
+
+// Поиск заметок, чат вики, разделители колонок и Ctrl+K; open() — открыть раздел «Вики».
+export function initWikiPage(toast, open) {
+  let searchTimer = null;
+  $("#wiki-search").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => showWiki(toast), 250);
+  });
+  $("#wiki-search").addEventListener("keydown", (event) => wikiKeys(event, toast));
+  $("#wiki-list").addEventListener("keydown", (event) => wikiKeys(event, toast));
+  initWikiChat({ toast });
+  makeResizable($("#wiki-chat-resizer"), { grid: $("#view-wiki"), variables: ["--wiki-chat-w"], min: 280 });
+  makeResizable($("#wiki-list-resizer"), {
+    grid: $("#wiki-split"),
+    variables: ["--wiki-list-w", "--wiki-graph-w"],
+    pick: () => ($("#wiki-split").classList.contains("graph-mode") ? "--wiki-graph-w" : "--wiki-list-w"),
+    min: 160,
+  });
+  // Ctrl+K — найти заметку вики из любого раздела. По коду клавиши: в русской раскладке это «Л».
+  document.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.code !== "KeyK" || document.querySelector("dialog[open]")) return;
+    event.preventDefault();
+    open();
+    $("#wiki-search").focus();
+    $("#wiki-search").select();
+  });
 }
