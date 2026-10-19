@@ -144,6 +144,7 @@ async def delete_session(session_id: str, request: Request) -> None:
         raise HTTPException(409, "В сессии идёт ход: сначала остановите его")
     if not services.sessions.delete(session_id):
         raise HTTPException(404, "Сессия не найдена")
+    await services.browsers.close(session_id)
 
 
 @router.get("/sessions/{session_id}/messages")

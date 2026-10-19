@@ -14,7 +14,7 @@ class Harness:
 
     def __init__(self, tmp_path, script, window=8192) -> None:
         self.project_dir = tmp_path / "project"
-        self.project_dir.mkdir()
+        self.project_dir.mkdir(exist_ok=True)
         self.llm = FakeLLM(script, window)
         self.services = Services(Env(data_path=tmp_path / "data", default_model="fake"), self.llm)
         self.project = self.services.projects.create("Проект", str(self.project_dir))

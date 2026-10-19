@@ -478,3 +478,5 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 .secret-row .error { min-height: 0; }
 .editor textarea.code { min-height: 0; }
 .card-skill pre { max-height: 320px; }
+.card-command { white-space: pre-wrap; margin: 4px 0; padding: 6px 10px; font: 13px/1.5 var(--mono); color: var(--fg);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }

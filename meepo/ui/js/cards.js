@@ -17,9 +17,10 @@ export function renderCard(root, card, decide) {
   node.append(el("div", "where", card.kind === "limit" ? "лимит шагов" : `✋ ${card.tool}`));
   node.append(el("div", "title", card.title || `Вызвать ${card.tool}`));
   if (card.text) node.append(el("p", "reason", card.text));
+  if (card.command) node.append(el("pre", "card-command", `$ ${card.command}`));
   if (card.skill) node.append(skillNode(card.skill));
   if (card.diff) node.append(diffNode(card.diff));
-  else if (!card.skill && card.arguments && Object.keys(card.arguments).length) {
+  else if (!card.skill && !card.command && card.tool !== "browser" && card.arguments && Object.keys(card.arguments).length) {
     const details = el("details");
     details.append(el("summary", "", "Аргументы"), el("pre", "", JSON.stringify(card.arguments, null, 2)));
     node.append(details);
@@ -48,6 +49,8 @@ export function renderCard(root, card, decide) {
       const label = el("label", "trust");
       trust = el("input");
       trust.type = "checkbox";
+      // Браузер — десятки действий подряд: первая карточка предлагает разрешить его на всю сессию.
+      trust.checked = card.group === "browser";
       label.append(trust, ` разрешать ${GROUPS[card.group] ?? card.group} до конца сессии`);
       actions.append(label);
     }

@@ -10,7 +10,9 @@ from fastapi.staticfiles import StaticFiles
 
 from meepo.agent.approvals import Approvals, reset_pending
 from meepo.agent.loop import Agent
-from meepo.agent.tools import files, plan, search, skills
+from meepo.agent.tools import command, files, plan, search, skills
+from meepo.agent.tools.browser import TOOLS as BROWSER_TOOLS
+from meepo.agent.tools.browser import BrowserPool
 from meepo.agent.turns import TurnHub
 from meepo.api import chat
 from meepo.api import settings as settings_api
@@ -44,14 +46,16 @@ class Services:
         self.skills_env = SkillsEnv(env.data_path / "skills-env")
         self.secrets = SecretStore(env.data_path / "secrets")
         self.history = SkillHistory(env.data_path / "skills")
+        self.browsers = BrowserPool(lambda: self.settings().browser_headed)
         self._fixed_llm = llm
         self._client: LLMClient | None = None
         self.agent = Agent(
             sessions=self.sessions, projects=self.projects, approvals=self.approvals, llm=self.llm,
-            settings=self.settings, tools=[*files.TOOLS, *search.TOOLS, *plan.TOOLS, *skills.TOOLS],
+            settings=self.settings,
+            tools=[*files.TOOLS, *search.TOOLS, *plan.TOOLS, *skills.TOOLS, *command.TOOLS, *BROWSER_TOOLS],
             default_model=env.default_model,
             services={"registry": self.skills, "env": self.skills_env, "secrets": self.secrets,
-                      "history": self.history, "llm_info": self.llm_info},
+                      "history": self.history, "llm_info": self.llm_info, "browsers": self.browsers},
         )
 
     def settings(self) -> UserSettings:
@@ -75,6 +79,7 @@ class Services:
 
     async def close(self) -> None:
         await self.turns.close()
+        await self.browsers.close_all()
         if self._client is not None:
             await self._client.close()
 

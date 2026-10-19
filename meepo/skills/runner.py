@@ -68,11 +68,11 @@ async def run(skill: Skill, arguments: dict, *, project: Path, python: Path, env
             process.stdout.read(), _lines(process, on_progress), process.wait(),
         ), skill.timeout)
     except TimeoutError:
-        await _kill(process)
+        await kill_tree(process)
         return (f"Скилл {skill.name} не уложился в {skill.timeout} с и был остановлен. Повторный запуск продолжит "
                 "с места остановки, если скрипт хранит прогресс в MEEPO_STATE_DIR."), True
     except asyncio.CancelledError:
-        await _kill(process)
+        await kill_tree(process)
         raise
     output = stdout.decode("utf-8", errors="replace").strip()
     if process.returncode != 0:
@@ -117,7 +117,7 @@ async def _lines(process: asyncio.subprocess.Process, on_progress: Callable[[str
     return "\n".join(kept)
 
 
-async def _kill(process: asyncio.subprocess.Process) -> None:
+async def kill_tree(process: asyncio.subprocess.Process) -> None:
     with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
         if os.name == "nt":
             killer = await asyncio.create_subprocess_exec(
