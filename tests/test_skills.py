@@ -176,7 +176,7 @@ def test_update_goes_to_history_and_rollback(harness):
 def test_three_failed_fixes_stop(harness):
     calls = [{"calls": [("update_skill", {"name": "echo", "reason": "r", "files": {"scripts/main.py": ECHO + f"\n# {n}\n"}})]}
              for n in range(4)]
-    h = with_env(harness([{"calls": [("read_skill", {"name": "echo"})]}, *calls, "Спрашиваю."]))
+    h = with_env(harness([{"calls": [("read_skill", {"name": "echo"})]}, *calls, "Три правки не помогли — как быть?"]))
     h.services.skills.write("echo", {"SKILL.md": SKILL_MD, "scripts/main.py": ECHO}, replace=False)
     h.turn("чини", [{"action": "approve", "trust": True}])
     results = [m["content"] for m in h.messages() if m["role"] == "tool"]

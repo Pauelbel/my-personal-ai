@@ -38,7 +38,9 @@ class FakeLLM:
              "arguments": arguments if isinstance(arguments, str) else json.dumps(arguments, ensure_ascii=False)}
             for index, (name, arguments) in enumerate(item.get("calls", []))
         ]
-        yield Reply(content, calls, "", input_tokens=100, output_tokens=10)
+        # Вход — грубо по размеру запроса, как считал бы сервер: так калибровка окна в цикле остаётся около 1.
+        size = len(json.dumps([messages, tools or []], ensure_ascii=False).encode("utf-8")) // 4
+        yield Reply(content, calls, "", input_tokens=size, output_tokens=10)
 
     async def list_models(self) -> list[str]:
         return ["fake"]

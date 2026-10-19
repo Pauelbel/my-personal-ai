@@ -2,7 +2,9 @@
 
 Раунд — один запрос к модели и выполнение её вызовов (не больше MAX_CALLS_PER_ROUND). На лимите раундов —
 карточка «продолжить или остановить»; «остановить» — последний запрос без инструментов: итог.
-События хода уходят в `emit`: delta, reasoning, tool_call, tool_result, approval, log, done.
+События хода уходят в `emit`: delta, reasoning, tool_call, tool_result, progress, approval, log, retry, done.
+retry — guard вернул модель к работе: напечатанный текст запроса уходит в строки хода (keep) или выбрасывается.
+Перед каждым запросом контекст сжимается под окно модели (agent/context.py), ответ проверяют guards (agent/guards/).
 «Стоп» отменяет задачу хода: написанный текст сохраняется с пометкой «(ответ прерван)».
 """
 
@@ -15,11 +17,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from meepo.agent import context
+from meepo.agent import context, guards
 from meepo.agent.approvals import Approvals
 from meepo.agent.prompt import system_prompt
 from meepo.agent.tools.base import Tool, ToolContext, ToolResult, check_arguments, describe_parameters
-from meepo.llm.client import Reply
+from meepo.llm.client import LLMEmpty, LLMRepetition, Reply
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +57,27 @@ class TurnState:
     output_tokens: int = 0
     input_tokens: int | None = None
     log: list[str] = field(default_factory=list)
+    # Для guards: какие включены, сколько раз сработал каждый, проверяемый ответ, подсказки (не реплики пользователя),
+    # сбой последнего запроса и надо ли повторить его без инструментов.
+    guards: dict = field(default_factory=dict)
+    counts: dict = field(default_factory=dict)
+    answer: str = ""
+    hints: set = field(default_factory=set)
+    failure: Exception | None = None
+    without_tools: bool = False
+    session: Callable[[], dict] = dict
+    # Во сколько раз реальные токены сервера меньше грубой оценки (байты / 4): по русскому тексту оценка завышена.
+    # Уточняется по каждому ответу с input_tokens, чтобы не сжимать контекст раньше времени.
+    scale: float = 1.0
 
     def note(self, text: str) -> None:
         """Строка лога хода: видна под ответом и сохраняется с ним."""
         self.log.append(text)
         self.emit({"type": "log", "text": text})
+
+    def user_texts(self) -> list[str]:
+        return [item["content"] or "" for item in self.messages if item["role"] == "user"
+                and item["content"] not in self.hints and item["content"] != STOP_NOTE]
 
 
 class Agent:
@@ -84,11 +102,13 @@ class Agent:
         model = settings.model or self.default_model
         if not model:
             raise TurnError("Модель не выбрана: укажите DEFAULT_MODEL в .env или выберите модель в настройках")
-        self.sessions.add_message(session_id, "user", text)
         window = await self.llm().context_length(model) or settings.default_context_tokens
+        text = context.stash_paste(Path(project["path"]), text, window - context.reserve(window))
+        self.sessions.add_message(session_id, "user", text)
         history = self.sessions.messages(session_id)
         state = TurnState(session_id, request_id, project, model, window, context.build("", history),
-                          settings.max_tool_rounds, emit)
+                          settings.max_tool_rounds, emit, guards=dict(settings.guards),
+                          session=lambda: self.sessions.get(session_id))
         ctx = ToolContext(Path(project["path"]), session_id, self.sessions, request_id, emit, self.services)
         try:
             await self._loop(state, ctx)
@@ -111,16 +131,55 @@ class Agent:
                 # Работу остановили на лимите: инструменты не предлагались, а модель всё равно их зовёт.
                 note = f"Работа остановлена после {state.rounds} шагов. Напишите «продолжай» — продолжу с этого места."
                 text = f"{text}\n\n{note}" if text else note
+            state.answer = text
+            if found := guards.answer_hint(state):
+                self._nudge(state, reply, *found)
+                continue
             self._finish(state, text, reply)
             return
 
+    def _nudge(self, state: TurnState, reply: Reply, name: str, hint: str) -> None:
+        """Guard вернул модель к работе. Ответ не по-русски выбрасывается; остальные остаются в чате промежуточной репликой."""
+        state.counts[name] = state.counts.get(name, 0) + 1
+        state.hints.add(hint)
+        state.note(f"Guard {name}: {guards.LOG[name]}")
+        keep = name != "language"
+        if keep:
+            self.sessions.add_message(state.session_id, "assistant", reply.content, reasoning=reply.reasoning)
+        state.emit({"type": "retry", "keep": keep})
+        state.messages += [{"role": "assistant", "content": reply.content}, {"role": "user", "content": hint}]
+
     async def _ask(self, state: TurnState, tools: list[dict] | None) -> Reply:
+        """Запрос к модели; пустой ответ или зацикливание — guard retry: повтор, затем без инструментов, затем ошибка."""
+        while True:
+            try:
+                reply = await self._request(state, None if state.without_tools else tools)
+            except (LLMEmpty, LLMRepetition) as exc:
+                state.failure = exc
+                hint = guards.retry.check(state) if state.guards.get("retry", True) else None
+                if hint is None:
+                    looped = isinstance(exc, LLMRepetition)
+                    raise TurnError(("Модель зациклилась и повторяла одно и то же" if looped else "Модель вернула пустой ответ")
+                                    + ". Попробуйте переформулировать или начать новую сессию") from None
+                state.counts["retry"] = state.counts.get("retry", 0) + 1
+                state.note(f"Guard retry: {hint}")
+                state.emit({"type": "retry", "keep": False})
+                continue
+            state.counts["retry"], state.without_tools = 0, False
+            return reply
+
+    async def _request(self, state: TurnState, tools: list[dict] | None) -> Reply:
         session = self.sessions.get(state.session_id)
         # Промпт пересобирается каждый раунд: план мог измениться посреди хода.
         registry = self.services.get("registry")
         skills = registry.prompt_list() if registry else ""
         state.messages[0] = {"role": "system", "content": system_prompt(state.project, session["plan"], skills=skills)}
         messages = state.messages + ([{"role": "user", "content": STOP_NOTE}] if state.stopped else [])
+        schemas = context.estimate_tokens(json.dumps(tools, ensure_ascii=False)) if tools else 0
+        budget = int((state.window - context.reserve(state.window)) / state.scale) - schemas
+        messages, compacted = context.fit(messages, budget)
+        if compacted:
+            state.note(f"Сжатие контекста под окно {state.window}: {compacted}")
         state.note(f"Запрос к модели {state.model} · раунд {state.rounds + 1}" + ("" if tools else " · без инструментов"))
         started = time.perf_counter()
         state.partial = ""
@@ -140,7 +199,11 @@ class Agent:
         tokens = f", токенов: вход {reply.input_tokens or '?'}, выход {reply.output_tokens or '?'}"
         calls = f"; вызовы: {', '.join(call['name'] for call in reply.tool_calls)}" if reply.tool_calls else ""
         state.note(f"Модель ответила за {elapsed:.1f} с{tokens}{calls}")
-        self.sessions.update(state.session_id, context_tokens=reply.input_tokens, context_window=state.window)
+        estimated = context.total_tokens(messages) + schemas
+        if reply.input_tokens and estimated:
+            state.scale = min(max(reply.input_tokens / estimated, 0.25), 1.5)
+        used = reply.input_tokens or int(estimated * state.scale)
+        self.sessions.update(state.session_id, context_tokens=used, context_window=state.window)
         return reply
 
     async def _run_calls(self, state: TurnState, ctx: ToolContext, reply: Reply) -> None:
@@ -160,7 +223,7 @@ class Agent:
             self.sessions.add_message(state.session_id, "tool", result.content, tool_call_id=call["id"],
                                       tool_name=call["name"], is_error=result.is_error, meta=result.meta)
             state.messages.append({"role": "tool", "tool_call_id": call["id"], "name": call["name"],
-                                   "content": result.content})
+                                   "about": context.about(call), "content": result.content})
             state.emit({"type": "tool_result", "call_id": call["id"], "name": call["name"],
                         "content": result.content, "is_error": result.is_error, "meta": result.meta})
         for text in replies:

@@ -53,6 +53,7 @@ export class Live {
       this.reasoning.hidden = false;
       this.reasoning.textContent = this.thought;
     } else if (event.type === "tool_call") this.#call(event.call);
+    else if (event.type === "retry") this.#retry(event.keep);
     else if (event.type === "tool_result") this.#result(event);
     else if (event.type === "progress") this.progress = event.text;
     else if (event.type === "log") this.log.querySelector("pre").textContent += `${event.text}\n`;
@@ -86,6 +87,19 @@ export class Live {
     this.calls.set(call.id, { call, node });
     this.names.push(call.name);
     this.steps.append(node);
+  }
+
+  // Guard вернул модель к работе: напечатанное остаётся строкой хода (keep) или выбрасывается (повтор, ответ не по-русски).
+  #retry(keep) {
+    if (keep && this.text.trim()) {
+      this.steps.hidden = false;
+      this.steps.append(noteNode(`live-retry-${this.steps.childElementCount}`, this.text));
+    }
+    clearTimeout(this.timer);
+    this.timer = null;
+    this.thought = this.text = "";
+    this.reasoning.hidden = this.textNode.hidden = true;
+    this.textNode.replaceChildren();
   }
 
   #result(event) {

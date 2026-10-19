@@ -1,10 +1,11 @@
 // Точка входа интерфейса: проекты и сессии слева, чат с идущим ходом, карточки подтверждения, «Стоп».
 import { api } from "./api.js";
 import { renderCard } from "./cards.js";
-import { renderMessages, scrollDown } from "./chat.js";
+import { compact, renderMessages, scrollDown } from "./chat.js";
 import { Live } from "./live.js";
 import { initProjects, openProject } from "./projects.js";
 import { initial, tone } from "./marks.js";
+import { showSettings } from "./settings.js";
 import { showSkills } from "./skills.js";
 import { editLabel, rowAction, treeRow } from "./tree.js";
 import { el, fitInput, recall, remember } from "./util.js";
@@ -282,7 +283,24 @@ function renderChrome() {
   send.title = busy ? "Остановить (Esc)" : "Отправить";
   send.disabled = !session;
   $("#stop-hint").hidden = !busy;
+  renderUsage(session);
   $("#input").disabled = !session;
+}
+
+// Заполненность окна модели по последнему запросу: «контекст ≈3,2k из 8k».
+function renderUsage(session) {
+  const node = $("#usage");
+  const used = session?.context_tokens;
+  const size = session?.context_window;
+  if (!used || !size) {
+    node.replaceChildren();
+    return;
+  }
+  const share = used / size;
+  const text = el("span", `meter-text${share > 0.9 ? " full" : share > 0.7 ? " warn" : ""}`, `≈${compact(used)} из ${compact(size)}`);
+  node.replaceChildren(el("span", "usage-label", "контекст"), text);
+  node.title = `Последний запрос занял ≈${used} токенов из окна модели ${size}. Не влезает — старые результаты `
+    + "инструментов заменяются пометкой, затем выпадают старые сообщения.";
 }
 
 async function showModel() {
@@ -298,6 +316,7 @@ function showView(view) {
   for (const button of document.querySelectorAll(".tabs button")) button.setAttribute("aria-pressed", String(button.dataset.view === view));
   for (const node of document.querySelectorAll("main.view")) node.hidden = node.id !== `view-${view}`;
   if (view === "skills") void showSkills(toast);
+  if (view === "settings") void showSettings(toast, (saved) => { $("#model-name").textContent = saved.active_model || "модель не выбрана"; });
 }
 
 function showTheme() {

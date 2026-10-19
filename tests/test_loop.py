@@ -28,7 +28,7 @@ def test_read_tool_runs_without_card(harness):
     assert tool["content"] == "текст" and not tool.get("is_error")
     # Результат инструмента ушёл модели во втором запросе.
     assert h.llm.requests[1]["messages"][-1] == {"role": "tool", "tool_call_id": "call-1-0", "name": "read_file",
-                                                 "content": "текст"}
+                                                 "about": "read_file a.md", "content": "текст"}
 
 
 def test_write_needs_card_with_diff(harness):

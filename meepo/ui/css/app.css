@@ -480,3 +480,12 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 .card-skill pre { max-height: 320px; }
 .card-command { white-space: pre-wrap; margin: 4px 0; padding: 6px 10px; font: 13px/1.5 var(--mono); color: var(--fg);
   background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+
+/* Настройки: поля столбиком, переключатели guards — галочка, название и пояснение в строку. */
+.settings { max-width: 720px; display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.settings h3 { font: 600 12px/1.4 var(--mono); color: var(--muted); margin: 14px 0 0; text-transform: uppercase; letter-spacing: .06em; }
+.setting { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.setting .hint { margin: 0; font-size: 12px; }
+.setting.check { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; }
+.setting.check .hint { grid-column: 2; }
+.setting-name { font-weight: 500; }
