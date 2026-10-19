@@ -6,6 +6,9 @@ import { Live } from "./live.js";
 import { initProjects, openProject } from "./projects.js";
 import { initial, tone } from "./marks.js";
 import { initMemory, showMemory } from "./memory.js";
+import { makeResizable } from "./resize.js";
+import { showWiki, wikiKeys } from "./wiki.js";
+import { initWikiChat, refreshWikiChat } from "./wikichat.js";
 import { showSettings } from "./settings.js";
 import { showSkills } from "./skills.js";
 import { editLabel, rowAction, treeRow } from "./tree.js";
@@ -316,9 +319,40 @@ async function showModel() {
 function showView(view) {
   for (const button of document.querySelectorAll(".tabs button")) button.setAttribute("aria-pressed", String(button.dataset.view === view));
   for (const node of document.querySelectorAll("main.view")) node.hidden = node.id !== `view-${view}`;
+  remember("view", view);
+  if (view === "wiki") {
+    void showWiki(toast);
+    void refreshWikiChat();
+  }
   if (view === "skills") void showSkills(toast);
   if (view === "memory") void showMemory(toast);
   if (view === "settings") void showSettings(toast, (saved) => { $("#model-name").textContent = saved.active_model || "модель не выбрана"; });
+}
+
+function initWiki() {
+  let searchTimer = null;
+  $("#wiki-search").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => showWiki(toast), 250);
+  });
+  $("#wiki-search").addEventListener("keydown", (event) => wikiKeys(event, toast));
+  $("#wiki-list").addEventListener("keydown", (event) => wikiKeys(event, toast));
+  initWikiChat({ toast });
+  makeResizable($("#wiki-chat-resizer"), { grid: $("#view-wiki"), variables: ["--wiki-chat-w"], min: 280 });
+  makeResizable($("#wiki-list-resizer"), {
+    grid: $("#wiki-split"),
+    variables: ["--wiki-list-w", "--wiki-graph-w"],
+    pick: () => ($("#wiki-split").classList.contains("graph-mode") ? "--wiki-graph-w" : "--wiki-list-w"),
+    min: 160,
+  });
+  // Ctrl+K — найти заметку вики из любого раздела. По коду клавиши: в русской раскладке это «Л».
+  document.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.code !== "KeyK" || document.querySelector("dialog[open]")) return;
+    event.preventDefault();
+    showView("wiki");
+    $("#wiki-search").focus();
+    $("#wiki-search").select();
+  });
 }
 
 function showTheme() {
@@ -335,10 +369,11 @@ function bind() {
   });
   $("#input").addEventListener("input", () => fitInput($("#input")));
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.live && !document.querySelector("dialog[open]")) void stop();
+    if (event.key === "Escape" && state.live && !$("#view-chat").hidden && !document.querySelector("dialog[open]")) void stop();
   });
   for (const button of document.querySelectorAll(".tabs button")) button.addEventListener("click", () => showView(button.dataset.view));
   initMemory(toast, current);
+  initWiki();
   $("#new-project").addEventListener("click", () => openProject());
   $("#project-chip").addEventListener("click", () => openProject(projectOf(current())));
   initProjects({
@@ -370,6 +405,9 @@ async function start() {
   try {
     await loadSessions();
     await openFirst();
+    // После перезагрузки страница открывается на том же разделе.
+    const view = recall("view");
+    if (view && view !== "chat" && document.querySelector(`#view-${view}`)) showView(view);
   } catch (error) {
     toast(error);
   }

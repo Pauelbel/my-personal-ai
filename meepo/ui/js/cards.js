@@ -14,13 +14,15 @@ export function renderCard(root, card, decide) {
   root.hidden = !card;
   if (!card) return;
   const node = el("div", "card");
-  node.append(el("div", "where", card.kind === "limit" ? "лимит шагов" : `✋ ${card.tool}`));
+  node.append(el("div", "where", card.kind === "limit" ? "лимит шагов" : card.kind === "wiki_lint" ? "проверка вики" : `✋ ${card.tool}`));
   node.append(el("div", "title", card.title || `Вызвать ${card.tool}`));
   if (card.text) node.append(el("p", "reason", card.text));
   if (card.command) node.append(el("pre", "card-command", `$ ${card.command}`));
   if (card.skill) node.append(skillNode(card.skill));
+  // Правки вики после проверки: применятся только отмеченные.
+  const checks = card.kind === "wiki_lint" ? editsNode(node, card.edits ?? []) : null;
   if (card.diff) node.append(diffNode(card.diff));
-  else if (!card.skill && !card.command && card.tool !== "browser" && card.arguments && Object.keys(card.arguments).length) {
+  else if (!card.skill && !card.command && !checks && card.tool !== "browser" && card.arguments && Object.keys(card.arguments).length) {
     const details = el("details");
     details.append(el("summary", "", "Аргументы"), el("pre", "", JSON.stringify(card.arguments, null, 2)));
     node.append(details);
@@ -45,7 +47,7 @@ export function renderCard(root, card, decide) {
       }
       if (reply.value.trim()) send({ action: "reply", text: reply.value.trim() });
     });
-    if (card.group) {
+    if (card.group && !checks) {
       const label = el("label", "trust");
       trust = el("input");
       trust.type = "checkbox";
@@ -59,7 +61,10 @@ export function renderCard(root, card, decide) {
     for (const control of node.querySelectorAll("button, input, textarea")) control.disabled = true;
     decide({ ...decision, card_id: card.id });
   };
-  yes.addEventListener("click", () => send({ action: "approve", trust: Boolean(trust?.checked) }));
+  yes.addEventListener("click", () => send({
+    action: "approve", trust: Boolean(trust?.checked),
+    ...(checks ? { selected: checks.flatMap((box, index) => (box.checked ? [index + 1] : [])) } : {}),
+  }));
   no.addEventListener("click", () => send({ action: "reject" }));
   node.append(actions);
   if (reply) node.append(reply);
@@ -116,4 +121,27 @@ function skillNode(skill) {
     box.append(details);
   }
   return box;
+}
+
+const EDIT_KIND = { merge: "слить дубли", contradiction: "противоречие", outdated: "устарело", fix: "исправить" };
+
+function editsNode(node, edits) {
+  const list = el("div", "edits");
+  const boxes = edits.map((edit, index) => {
+    const row = el("label", "edit");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = true;
+    const text = el("div", "edit-text");
+    text.append(
+      el("div", "edit-head", `${index + 1}. ${EDIT_KIND[edit.kind] || edit.kind} · ${edit.notes.join(", ")}`),
+      el("div", "edit-problem", edit.problem),
+      el("div", "edit-change", `→ ${edit.change}`),
+    );
+    row.append(box, text);
+    list.append(row);
+    return box;
+  });
+  node.append(list);
+  return boxes;
 }

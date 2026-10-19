@@ -16,6 +16,7 @@ from meepo.agent.tools.browser import BrowserPool
 from meepo.agent.turns import TurnHub
 from meepo.api import chat
 from meepo.api import memory as memory_api
+from meepo.api import wiki as wiki_api
 from meepo.api import settings as settings_api
 from meepo.api import skills as skills_api
 from meepo.llm.client import LLMClient
@@ -26,8 +27,13 @@ from meepo.skills.env import SkillsEnv
 from meepo.skills.history import SkillHistory
 from meepo.skills.registry import SkillRegistry
 from meepo.skills.secrets import SecretStore
+from meepo.storage.attachments import AttachmentStore
 from meepo.storage.projects import ProjectStore
 from meepo.storage.sessions import SessionStore
+from meepo.wiki import tools as wiki_tools
+from meepo.wiki.actions import WikiActions
+from meepo.wiki.agent import WikiAgent
+from meepo.wiki.service import WikiService
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
 BUILTIN_SKILLS = Path(__file__).resolve().parent / "skills" / "builtin"
@@ -50,6 +56,9 @@ class Services:
         self.secrets = SecretStore(env.data_path / "secrets")
         self.history = SkillHistory(env.data_path / "skills")
         self.browsers = BrowserPool(lambda: self.settings().browser_headed)
+        self.attachments = AttachmentStore(env.data_path / "attachments")
+        self.wiki = WikiService(env.data_path / "wiki", attachments=self.attachments.path)
+        self.wiki_actions = WikiActions(env.data_path / "wiki-actions.md")
         self.memory = MemoryStore(env.data_path / "memory")
         self.memory_updater = MemoryUpdater(
             self.memory, self.sessions, self.llm, lambda: self.settings().model or env.default_model,
@@ -65,6 +74,11 @@ class Services:
             services={"registry": self.skills, "env": self.skills_env, "secrets": self.secrets,
                       "history": self.history, "llm_info": self.llm_info, "browsers": self.browsers,
                       "memory": self.memory, "memory_updater": self.memory_updater},
+        )
+        self.wiki_agent = WikiAgent(
+            env.data_path / "wiki", sessions=self.sessions, projects=self.projects, approvals=self.approvals,
+            llm=self.llm, settings=self.settings, tools=wiki_tools.TOOLS, default_model=env.default_model,
+            services={"wiki": self.wiki, "attachments": self.attachments},
         )
 
     def settings(self) -> UserSettings:
@@ -102,6 +116,7 @@ def create_app(env: Env | None = None, llm=None) -> FastAPI:
         reset_pending(services.sessions)
         services.skills.install_builtin()
         services.memory.initialize()
+        services.wiki.initialize()
         yield
         await services.close()
 
@@ -127,6 +142,7 @@ def create_app(env: Env | None = None, llm=None) -> FastAPI:
     app.include_router(settings_api.router)
     app.include_router(skills_api.router)
     app.include_router(memory_api.router)
+    app.include_router(wiki_api.router)
 
     app.mount("/ui", StaticFiles(directory=UI_DIR), name="ui")
 

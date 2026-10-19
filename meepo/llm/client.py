@@ -5,10 +5,12 @@
 `stream` отдаёт по частям ("delta", текст) и ("reasoning", текст), в конце — Reply.
 """
 
+import base64
 import json
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
@@ -236,8 +238,20 @@ class LLMClient:
         await self._client.aclose()
 
 
+IMAGE_MEDIA = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+
+
 def _message_payload(message: dict) -> dict:
     payload = {"role": message["role"], "content": message.get("content")}
+    if message.get("images"):
+        # Картинки — частями содержимого в формате OpenAI: так их понимают Ollama, LM Studio и vLLM.
+        parts = [{"type": "text", "text": message.get("content") or ""}]
+        for file in map(Path, message["images"]):
+            if file.is_file():
+                media = IMAGE_MEDIA.get(file.suffix.lower(), "image/png")
+                url = f"data:{media};base64,{base64.b64encode(file.read_bytes()).decode()}"
+                parts.append({"type": "image_url", "image_url": {"url": url}})
+        payload["content"] = parts
     if message.get("tool_calls"):
         payload["tool_calls"] = [
             {"id": call["id"], "type": "function", "function": {"name": call["name"], "arguments": call["arguments"]}}

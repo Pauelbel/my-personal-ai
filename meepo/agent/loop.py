@@ -95,24 +95,57 @@ class Agent:
         # Сервисы для инструментов (скиллы, окружение, секреты); registry даёт список скиллов в промпт.
         self.services = services or {}
 
-    async def run(self, session_id: str, text: str, request_id: str, emit: Callable[[dict], None]) -> None:
-        session = self.sessions.get(session_id)
+    # ---------- то, чем агенты различаются (агент вики переопределяет, см. wiki/agent.py) ----------
+
+    # Огромную вставку пользователя — в файл папки хода.
+    stash_pastes = True
+
+    def workspace(self, session: dict | None) -> dict:
+        """Где работают инструменты хода: {"name", "path"} — проект сессии."""
         project = self.projects.get(session["project_id"]) if session else None
         if project is None:
             raise TurnError("Сессия не привязана к проекту: выберите проект")
+        return project
+
+    def select_history(self, history: list[dict]) -> list[dict]:
+        return history
+
+    def system(self, state: "TurnState", session: dict) -> str:
+        # Промпт пересобирается каждый раунд: план и список скиллов могли измениться посреди хода.
+        registry = self.services.get("registry")
+        skills = registry.prompt_list() if registry else ""
+        return system_prompt(state.project, session["plan"], skills=skills, memory=state.memory)
+
+    def memory_context(self, text: str) -> str:
+        memory = self.services.get("memory")
+        return memory.prompt_context(text) if memory else ""
+
+    def finished(self, session_id: str) -> None:
+        if updater := self.services.get("memory_updater"):
+            updater.after_turn(session_id)
+
+    # ---------- ход ----------
+
+    async def run(self, session_id: str, text: str, request_id: str, emit: Callable[[dict], None],
+                  attachments: tuple[str, ...] = ()) -> None:
+        """attachments — имена картинок, присланных с репликой (чат вики)."""
+        session = self.sessions.get(session_id)
+        project = self.workspace(session)
         settings = self.settings()
         model = settings.model or self.default_model
         if not model:
             raise TurnError("Модель не выбрана: укажите DEFAULT_MODEL в .env или выберите модель в настройках")
         window = await self.llm().context_length(model) or settings.default_context_tokens
-        text = context.stash_paste(Path(project["path"]), text, window - context.reserve(window))
-        self.sessions.add_message(session_id, "user", text)
-        history = self.sessions.messages(session_id)
-        state = TurnState(session_id, request_id, project, model, window, context.build("", history),
+        if self.stash_pastes:
+            text = context.stash_paste(Path(project["path"]), text, window - context.reserve(window))
+        self.sessions.add_message(session_id, "user", text, attachments=list(attachments))
+        history = self.select_history(self.sessions.messages(session_id))
+        attachments_store = self.services.get("attachments")
+        messages = context.build("", history, attachments_store.path if attachments_store else None)
+        state = TurnState(session_id, request_id, project, model, window, messages,
                           settings.max_tool_rounds, emit, guards=dict(settings.guards),
                           session=lambda: self.sessions.get(session_id))
-        if memory := self.services.get("memory"):
-            state.memory = memory.prompt_context(text)
+        state.memory = self.memory_context(text)
         ctx = ToolContext(Path(project["path"]), session_id, self.sessions, request_id, emit, self.services)
         try:
             await self._loop(state, ctx)
@@ -173,12 +206,7 @@ class Agent:
             return reply
 
     async def _request(self, state: TurnState, tools: list[dict] | None) -> Reply:
-        session = self.sessions.get(state.session_id)
-        # Промпт пересобирается каждый раунд: план мог измениться посреди хода.
-        registry = self.services.get("registry")
-        skills = registry.prompt_list() if registry else ""
-        state.messages[0] = {"role": "system",
-                             "content": system_prompt(state.project, session["plan"], skills=skills, memory=state.memory)}
+        state.messages[0] = {"role": "system", "content": self.system(state, self.sessions.get(state.session_id))}
         messages = state.messages + ([{"role": "user", "content": STOP_NOTE}] if state.stopped else [])
         schemas = context.estimate_tokens(json.dumps(tools, ensure_ascii=False)) if tools else 0
         budget = int((state.window - context.reserve(state.window)) / state.scale) - schemas
@@ -247,6 +275,8 @@ class Agent:
             arguments = None
         if not isinstance(arguments, dict):
             return ToolResult("Аргументы должны быть JSON-объектом", True), ""
+        if tool.prepare:
+            tool.prepare(arguments)
         # Неполный вызов пользователю не показываем: модель сначала исправит его сама.
         if problem := check_arguments(tool.parameters, arguments):
             return ToolResult(f"{problem}. Параметры {tool.name}: {describe_parameters(tool.parameters)}. "
@@ -268,6 +298,9 @@ class Agent:
             if decision["action"] == "reply":
                 return ToolResult(f"Пользователь не разрешил вызов и ответил: «{decision['text']}». "
                                   "Учти ответ: доработай действие или спроси, как поступить.", True), decision["text"]
+            if "selected" in decision:
+                # Карточка со списком: номера пунктов, которые отметил пользователь, — модель подставить их не может.
+                arguments = {**arguments, "selected": decision["selected"]}
         return await self._execute(state, ctx, tool, arguments), ""
 
     async def _execute(self, state: TurnState, ctx: ToolContext, tool: Tool, arguments: dict) -> ToolResult:
@@ -307,8 +340,7 @@ class Agent:
         message = self.sessions.add_message(state.session_id, "assistant", text, reasoning=reply.reasoning,
                                             stats=stats, log=state.log)
         state.emit({"type": "done", "message": message})
-        if updater := self.services.get("memory_updater"):
-            updater.after_turn(state.session_id)
+        self.finished(state.session_id)
 
     def _save_stopped(self, state: TurnState) -> None:
         text = state.partial.strip()

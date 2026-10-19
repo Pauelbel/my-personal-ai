@@ -22,7 +22,11 @@ def normalize(value: object) -> dict:
         return {"action": "reject", "text": "", "trust": False}
     text = str(value.get("text") or "").strip()
     action = "reject" if value["action"] == "reply" and not text else value["action"]
-    return {"action": action, "text": text, "trust": action == "approve" and value.get("trust") is True}
+    decision = {"action": action, "text": text, "trust": action == "approve" and value.get("trust") is True}
+    # Карточка со списком (правки вики после проверки): номера пунктов, которые отметил пользователь.
+    if action == "approve" and isinstance(value.get("selected"), list):
+        decision["selected"] = [item for item in value["selected"] if isinstance(item, int) and not isinstance(item, bool)]
+    return decision
 
 
 class Approvals:

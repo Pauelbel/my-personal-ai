@@ -12,6 +12,7 @@
 import hashlib
 import json
 import math
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -26,6 +27,10 @@ INBOX = ".meepo/inbox"
 PASTE_TOKENS = 8000
 PASTE_HEAD_CHARS = 1500
 PASTE_TAIL_CHARS = 500
+# Картинки модель видит в последних репликах пользователя — чтобы можно было переспросить о них; у более
+# старых остаются только имена. Картинка стоит модели сотни токенов, оценка — с запасом.
+IMAGE_MESSAGES = 3
+IMAGE_TOKENS = 800
 
 
 def estimate_tokens(text: str | None) -> int:
@@ -35,12 +40,16 @@ def estimate_tokens(text: str | None) -> int:
 
 def message_tokens(message: dict) -> int:
     calls = sum(estimate_tokens(call["name"] + call["arguments"]) for call in message.get("tool_calls") or ())
-    return MESSAGE_OVERHEAD_TOKENS + estimate_tokens(message.get("content")) + calls
+    return MESSAGE_OVERHEAD_TOKENS + estimate_tokens(message.get("content")) + calls + IMAGE_TOKENS * len(message.get("images") or ())
 
 
-def history_messages(history: list[dict]) -> list[dict]:
-    """Сохранённые сообщения → сообщения для модели. Служебные поля (meta, stats, reasoning) модели не нужны."""
+def history_messages(history: list[dict], images: Callable[[str], Path | None] | None = None) -> list[dict]:
+    """Сохранённые сообщения → сообщения для модели. Служебные поля (meta, stats, reasoning) модели не нужны.
+    images — файл картинки по имени (чат вики): имена картинок пишутся в текст реплики, сами картинки модель
+    видит в IMAGE_MESSAGES последних репликах с ними."""
     results = {item["tool_call_id"]: item for item in history if item["role"] == "tool"}
+    with_images = [item["id"] for item in history if item["role"] == "user" and item.get("attachments")]
+    seen = set(with_images[-IMAGE_MESSAGES:])
     messages: list[dict] = []
     for item in history:
         role = item["role"]
@@ -54,7 +63,16 @@ def history_messages(history: list[dict]) -> list[dict]:
                 messages.append({"role": "tool", "tool_call_id": call["id"], "name": call["name"], "about": about(call),
                                  "content": result["content"] if result else INTERRUPTED_CALL})
             continue
-        if role == "user" and messages and messages[-1]["role"] == "user":
+        if role == "user" and item.get("attachments"):
+            files = [str(path) for name in item["attachments"] if images and item["id"] in seen and (path := images(name))]
+            names = ", ".join(item["attachments"])
+            note = f"[Картинки: {names}]" if files else f"[Картинки: {names} — их уже не видно, попроси прислать снова]"
+            message = {"role": "user", "content": f"{item['content']}\n\n{note}".strip()}
+            if files:
+                message["images"] = files
+            messages.append(message)
+            continue
+        if role == "user" and messages and messages[-1]["role"] == "user" and not messages[-1].get("images"):
             # После неудачного хода в истории остаётся реплика без ответа: склеиваем, чтобы роли чередовались.
             messages[-1] = {"role": "user", "content": f"{messages[-1]['content']}\n\n{item['content']}"}
             continue
@@ -62,8 +80,8 @@ def history_messages(history: list[dict]) -> list[dict]:
     return messages
 
 
-def build(system: str, history: list[dict]) -> list[dict]:
-    return [{"role": "system", "content": system}, *history_messages(history)]
+def build(system: str, history: list[dict], images: Callable[[str], Path | None] | None = None) -> list[dict]:
+    return [{"role": "system", "content": system}, *history_messages(history, images)]
 
 
 def total_tokens(messages: list[dict], tools: list[dict] | None = None) -> int:

@@ -63,7 +63,9 @@ export const api = {
   deleteSession: (id) => request(`/sessions/${id}`, { method: "DELETE" }),
   messages: (id) => request(`/sessions/${id}/messages`),
 
-  send: (id, content, signal, onEvent) => stream(`/sessions/${id}/turn`, { content }, signal, onEvent),
+  send: (id, content, signal, onEvent, attachments = []) => stream(`/sessions/${id}/turn`, { content, attachments }, signal, onEvent),
+  // Картинка как data URL → её имя для сообщения (чат вики).
+  attach: (data) => request("/attachments", json("POST", { data })),
   turn: (id) => request(`/sessions/${id}/turn`),
   follow: (id, start, signal, onEvent) => stream(`/sessions/${id}/turn/stream?${q({ start })}`, null, signal, onEvent),
   stop: (id) => request(`/sessions/${id}/turn/stop`, { method: "POST" }),
@@ -75,6 +77,17 @@ export const api = {
   setSecret: (name, secret, value) => request(`/skills/${encodeURIComponent(name)}/secrets/${secret}`, json("PUT", { value })),
   deleteSecret: (name, secret) => request(`/skills/${encodeURIComponent(name)}/secrets/${secret}`, { method: "DELETE" }),
   rollback: (name, version) => request(`/skills/${encodeURIComponent(name)}/rollback`, json("POST", { version })),
+
+  wiki: () => request("/wiki"),
+  wikiSearch: (query) => request(`/wiki/search?${q({ q: query })}`),
+  wikiPage: (path) => request(`/wiki/page?${q({ path })}`),
+  wikiGraph: () => request("/wiki/graph"),
+  // Чат вики — служебная сессия вне проектов: её сообщения, ход и карточки — обычными запросами сессии.
+  wikiChat: () => request("/wiki/chat"),
+  ensureWikiChat: () => request("/wiki/chat", { method: "POST" }),
+  clearWikiChat: () => request("/wiki/chat", { method: "DELETE" }),
+  wikiActions: () => request("/wiki/actions"),
+  saveWikiActions: (actions) => request("/wiki/actions", json("PUT", { actions })),
 
   memory: () => request("/memory"),
   saveMemory: (name, content) => request(`/memory/${encodeURIComponent(name)}`, json("PUT", { content })),

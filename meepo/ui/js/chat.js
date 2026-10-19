@@ -180,6 +180,7 @@ function userNode(message) {
   const node = el("article", "msg user");
   const bubble = el("div", "bubble");
   bubble.append(el("div", "bubble-text", message.content));
+  if (message.attachments?.length) bubble.prepend(imagesNode(message.attachments));
   node.append(bubble);
   if (message.content.length > USER_FOLD_CHARS || message.content.split("\n").length > USER_FOLD_LINES) {
     const fold = el("button", "msg-action fold");
@@ -197,6 +198,20 @@ function userNode(message) {
     bubble.append(fold);
   }
   return node;
+}
+
+// Картинки реплики (чат вики): миниатюры, щелчок открывает картинку целиком.
+function imagesNode(names) {
+  const box = el("div", "msg-images");
+  for (const name of names) {
+    const link = el("a");
+    Object.assign(link, { href: `/api/attachments/${name}`, target: "_blank", rel: "noopener" });
+    const image = el("img");
+    Object.assign(image, { src: link.href, alt: name, loading: "lazy" });
+    link.append(image);
+    box.append(link);
+  }
+  return box;
 }
 
 function assistantNode(message, last) {
@@ -245,11 +260,21 @@ function copyButton(className, text) {
   return button;
 }
 
-export function renderMarkdown(target, text, withTools = true) {
+// images — адрес картинки по ссылке из текста (заметки вики); по умолчанию картинки не показываются.
+export function renderMarkdown(target, text, withTools = true, images = () => null) {
   appendMarkdown(target, text);
-  // Чужие картинки не грузим: картинка из интернета выдала бы, что страницу открыли.
   for (const image of target.querySelectorAll("img[data-src]")) {
-    image.replaceWith(document.createTextNode(`[картинка: ${image.alt || image.dataset.src}]`));
+    const url = images(image.dataset.src);
+    if (!url) {
+      // Чужие адреса не грузим: картинка из интернета выдала бы, что страницу открыли.
+      image.replaceWith(document.createTextNode(`[картинка: ${image.alt || image.dataset.src}]`));
+      continue;
+    }
+    const link = el("a", "md-image");
+    Object.assign(link, { href: url, target: "_blank", rel: "noopener" });
+    Object.assign(image, { src: url, loading: "lazy" });
+    image.replaceWith(link);
+    link.append(image);
   }
   for (const code of target.querySelectorAll("pre > code")) {
     highlightCode(code, code.dataset.language);

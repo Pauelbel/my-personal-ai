@@ -29,7 +29,9 @@ class TitleBody(BaseModel):
 
 
 class TurnBody(BaseModel):
-    content: str
+    content: str = ""
+    # Картинки, вставленные в реплику чата вики: имена из POST /api/attachments.
+    attachments: list[str] = []
 
 
 class DecisionBody(BaseModel):
@@ -37,6 +39,8 @@ class DecisionBody(BaseModel):
     text: str = ""
     trust: bool = False
     card_id: str = ""
+    # Карточка со списком: номера отмеченных пунктов.
+    selected: list[int] | None = None
 
 
 def _services(request: Request):
@@ -120,7 +124,8 @@ def list_folders(path: str = "") -> dict:
 
 @router.get("/sessions")
 def list_sessions(request: Request) -> list[dict]:
-    return _services(request).sessions.list()
+    """Сессии проектов; служебная сессия чата вики видна только в разделе «Вики»."""
+    return [session for session in _services(request).sessions.list() if session.get("kind", "chat") == "chat"]
 
 
 @router.post("/sessions", status_code=201)
@@ -158,13 +163,17 @@ def session_messages(session_id: str, request: Request) -> list[dict]:
 @router.post("/sessions/{session_id}/turn")
 async def start_turn(session_id: str, body: TurnBody, request: Request) -> StreamingResponse:
     services = _services(request)
-    _session(request, session_id)
-    if not body.content.strip():
+    session = _session(request, session_id)
+    if not body.content.strip() and not body.attachments:
         raise HTTPException(400, "Пустое сообщение")
+    if missing := [name for name in body.attachments if services.attachments.path(name) is None]:
+        raise HTTPException(400, f"Картинки не найдены: {', '.join(missing)} — вставьте их заново")
+    agent = services.wiki_agent if session.get("kind") == "wiki" else services.agent
     request_id = uuid4().hex
+    content, attachments = body.content.strip(), tuple(body.attachments)
     try:
         turn = services.turns.start(
-            session_id, lambda emit: services.agent.run(session_id, body.content.strip(), request_id, emit))
+            session_id, lambda emit: agent.run(session_id, content, request_id, emit, attachments))
     except TurnError as exc:
         raise HTTPException(409, str(exc)) from exc
     return _follow(services.turns, turn, 0)

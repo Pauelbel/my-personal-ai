@@ -28,6 +28,7 @@
       </div>
       <nav class="tabs" aria-label="Разделы">
         <button type="button" data-view="chat" aria-pressed="true">Чат</button>
+        <button type="button" data-view="wiki" aria-pressed="false">Вики</button>
         <button type="button" data-view="skills" aria-pressed="false">Скиллы</button>
         <button type="button" data-view="memory" aria-pressed="false">Память</button>
         <button type="button" data-view="settings" aria-pressed="false">Настройки</button>
@@ -68,6 +69,73 @@
               </div>
             </div>
           </form>
+        </div>
+      </main>
+
+      <main class="view wiki-view" id="view-wiki" hidden>
+        <aside class="wiki-chat" id="wiki-chat" aria-label="Чат вики">
+          <div class="wiki-chat-head">
+            <strong>○ Чат вики</strong>
+            <span class="wiki-tools" id="wiki-tools">
+              <span class="wiki-actions">
+                <button id="wiki-actions" type="button" aria-haspopup="menu" aria-expanded="false" title="Ваши проверки вики: просьба встанет в поле ввода чата вики, агент покажет список правок — применит только отмеченные">Действия ▾</button>
+                <div class="wiki-actions-menu" id="wiki-actions-menu" role="menu" hidden></div>
+              </span>
+            </span>
+            <button type="button" class="ghost" id="wiki-chat-clear" title="Начать разговор заново: агент его забудет, заметки останутся">Очистить</button>
+            <button type="button" class="ghost icon" id="wiki-chat-close" title="Скрыть чат вики">«</button>
+          </div>
+          <div class="wiki-actions-editor" id="wiki-actions-editor" hidden>
+            <strong>Действия вики</strong>
+            <p class="hint">Название и что искать. Остальное не меняется: агент сам ничего не правит и показывает список правок с галочками.</p>
+            <div class="wiki-actions-rows" id="wiki-actions-rows"></div>
+            <p class="error" id="wiki-actions-error" role="status"></p>
+            <div class="rules-actions">
+              <button type="button" id="wiki-actions-add">+ Добавить</button><span></span>
+              <button type="button" id="wiki-actions-cancel">Отмена</button>
+              <button class="primary" type="button" id="wiki-actions-save">Сохранить</button>
+            </div>
+          </div>
+          <div class="messages wiki-chat-log" id="wiki-chat-log" aria-live="polite"></div>
+          <div class="wiki-chat-cards" id="wiki-chat-cards"></div>
+          <div class="composer wiki-chat-composer">
+            <div class="composer-box frame">
+              <div class="frame-head">
+                <span class="frame-left"><span class="frame-label">◇ вики</span></span>
+                <span class="wiki-chat-status" id="wiki-chat-status"></span>
+              </div>
+              <div class="attachments" id="wiki-attachments" aria-label="Картинки к сообщению" hidden></div>
+              <div class="composer-row">
+                <span class="prompt-mark" aria-hidden="true">◆</span>
+                <textarea id="wiki-chat-input" rows="1" placeholder="Текст, ссылка, картинка или вопрос" aria-label="Сообщение в чат вики"></textarea>
+                <button class="attach" id="wiki-attach" type="button" title="Добавить картинку — или вставьте её из буфера (Ctrl+V), или перетащите сюда">＋</button>
+                <button class="send" type="button" id="wiki-chat-send" title="Отправить (Enter)">↵</button>
+              </div>
+              <div class="frame-foot"><span>Enter — отправить</span></div>
+            </div>
+          </div>
+        </aside>
+        <div class="resizer" id="wiki-chat-resizer" aria-label="Ширина чата вики"></div>
+        <div class="wiki-main page">
+          <div class="page-head">
+            <button id="wiki-chat-toggle" type="button" title="Показать чат вики" hidden>» Чат вики</button>
+            <h2>Вики</h2>
+          </div>
+          <p class="hint">Пришлите в чат вики текст или ссылку и попросите «добавь заметку»: агент сверит ключевые слова с <code>index.md</code> и дополнит подходящую заметку или создаст новую. Файлы лежат в <code>data/wiki</code>.</p>
+          <nav class="subtabs" id="wiki-tabs" aria-label="Вид вики">
+            <button type="button" data-mode="list" aria-pressed="true">Список</button>
+            <button type="button" data-mode="graph" aria-pressed="false">Граф</button>
+          </nav>
+          <div class="wiki-find">
+            <input id="wiki-search" type="search" placeholder="Найти заметку · Ctrl+K" aria-label="Найти заметку" autocomplete="off" />
+            <div class="wiki-tags" id="wiki-tags" aria-label="Теги"></div>
+          </div>
+          <div class="split" id="wiki-split">
+            <div class="list tree-list" id="wiki-list"></div>
+            <div class="graph" id="wiki-graph" hidden></div>
+            <div class="resizer" id="wiki-list-resizer" aria-label="Ширина списка заметок"></div>
+            <article class="reader" id="wiki-page"><p class="hint">Выберите страницу.</p></article>
+          </div>
         </div>
       </main>
 

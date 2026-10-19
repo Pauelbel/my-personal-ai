@@ -42,10 +42,11 @@ class SessionStore:
         self.history_dir = data_path / "conversations"
         self._lock = RLock()
 
-    def create(self, project_id: str | None, title: str = DEFAULT_TITLE) -> dict:
+    def create(self, project_id: str | None, title: str = DEFAULT_TITLE, kind: str = "chat") -> dict:
+        """kind: chat — разговор в проекте; wiki — служебная сессия чата вики, без проекта."""
         stamp = now()
         session = {
-            "id": uuid4().hex, "title": title, "project_id": project_id, "created_at": stamp, "updated_at": stamp,
+            "id": uuid4().hex, "title": title, "project_id": project_id, "kind": kind, "created_at": stamp, "updated_at": stamp,
             "trusted": [], "plan": [], "plan_request": None, "pending": None,
             "context_tokens": None, "context_window": None,
         }

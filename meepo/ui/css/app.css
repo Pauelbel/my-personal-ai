@@ -489,3 +489,158 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 .setting.check { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; }
 .setting.check .hint { grid-column: 2; }
 .setting-name { font-weight: 500; }
+
+
+/* ---------- Вики (перенос) ---------- */
+/* Вики: слева чат вики со своим полем ввода, справа заметки */
+.wiki-view { display: grid; grid-template-columns: var(--wiki-chat-w, minmax(320px, 420px)) 0 minmax(0, 1fr); min-height: 0; }
+.wiki-view.chat-hidden { grid-template-columns: minmax(0, 1fr); }
+/* Только разделитель самого чата: разделитель списка и заметки держит свою колонку в #wiki-split. */
+.wiki-view.chat-hidden > .resizer { display: none; }
+/* Разделитель панелей: невидимая полоса для мыши поверх границы колонок; при наведении и перетаскивании
+   граница подсвечивается тонкой линией. --line-at — где граница относительно разделителя. */
+.resizer { position: relative; z-index: 2; cursor: col-resize; touch-action: none; --line-at: -1px; }
+.resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--line-at) - 4px); width: 10px; }
+.resizer::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: var(--line-at); width: 2px; transition: background .15s;
+}
+.resizer:hover::before, .resizer:focus-visible::before, body.resizing .resizer::before { background: var(--accent-2); }
+.resizer:focus-visible { outline: none; }
+body.resizing { cursor: col-resize; user-select: none; }
+#wiki-split { grid-template-columns: var(--wiki-list-w, 260px) 0 minmax(0, 1fr); }
+#wiki-split.graph-mode { grid-template-columns: var(--wiki-graph-w, minmax(0, 3fr)) 0 minmax(280px, 2fr); }
+#wiki-split { column-gap: 8px; }
+#wiki-split .resizer { --line-at: -9px; }
+.wiki-main { min-width: 0; min-height: 0; }
+.wiki-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); background: var(--surface); --frame-bg: var(--surface); }
+.wiki-chat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 10px 10px 14px; border-bottom: 1px solid var(--line); }
+.wiki-chat-status { font: 12px var(--mono); color: var(--muted); }
+.wiki-chat-status:empty { display: none; }
+.wiki-chat-status.running { color: var(--accent-2); }
+.wiki-chat-status.waiting { color: var(--warn); }
+.wiki-chat-log { padding: 14px 14px 6px; }
+.wiki-chat-empty { margin: 8px 0; }
+.wiki-forgotten { opacity: .5; }
+.wiki-forget-line { display: flex; align-items: center; gap: 10px; margin: -4px 0 16px; font: 11px var(--mono); color: var(--muted); }
+.wiki-forget-line::before, .wiki-forget-line::after { content: ""; flex: 1; border-top: 1px dashed var(--line-strong); }
+.wiki-chat-cards .card { margin: 0 14px 10px; }
+.wiki-chat-composer { padding: 16px 14px 18px; border-top: 1px solid var(--line); }
+.wiki-chat-head strong { flex: none; white-space: nowrap; }
+.wiki-tools { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.wiki-chat-head .wiki-tools { margin-left: auto; }
+.wiki-tools button { white-space: nowrap; padding: 3px 8px; }
+.wiki-chat-head #wiki-chat-clear { padding: 3px 6px; }
+.page-head .wiki-tools { flex: 0 1 auto; }
+.tabs button.attention::after { content: " ●"; color: var(--warn); font-size: 10px; vertical-align: 2px; }
+.note-meta { margin: 4px 0 2px; }
+.note-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px var(--mono); padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.chip.type { color: var(--accent-fg); background: var(--accent); }
+/* Поиск заметки и теги над списком: щелчок по тегу оставляет в списке только его заметки. */
+.wiki-find { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 10px; }
+.wiki-find input { flex: 0 1 320px; min-width: 0; padding: 4px 10px; }
+.wiki-tags { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+button.chip { border: 0; cursor: pointer; }
+button.chip:hover:not(:disabled) { background: var(--line); color: var(--fg); }
+button.chip.on, button.chip.on:hover:not(:disabled) { background: var(--accent-2); color: var(--accent-fg); }
+.chip-count { opacity: .7; }
+.note-description { margin: 8px 0 0; color: var(--muted); font-style: italic; }
+.split.graph-mode { height: calc(100vh - 230px); min-height: 380px; }
+.split.graph-mode .reader { overflow: auto; }
+.graph { position: relative; min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.graph[hidden] { display: none; }
+.graph-svg { display: block; position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; user-select: none; }
+.graph-svg.pointing { cursor: pointer; }
+.graph-svg.panning { cursor: grabbing; }
+/* Цвета графа — токены темы: тёмный режим браузера перекрашивает их вместе со страницей. */
+/* Линии — средним тоном: видны и на светлом, и на тёмном фоне, даже если браузер перекрасил только страницу. */
+.graph-edge { stroke: var(--muted); stroke-opacity: .6; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.graph-edge.similar { stroke-dasharray: 4 4; stroke-opacity: .45; }
+.graph-legend {
+  position: absolute; left: 10px; bottom: 8px; display: flex; gap: 14px; font: 11px var(--mono); color: var(--muted);
+  pointer-events: none;
+}
+.graph-legend span::before { content: ""; display: inline-block; width: 18px; margin: 0 6px 3px 0; vertical-align: middle; border-top: 1px solid var(--muted); }
+.graph-legend .graph-legend-similar::before { border-top-style: dashed; }
+.graph-svg.hovering .graph-edge { stroke-opacity: .12; }
+.graph-svg.hovering .graph-edge.lit { stroke: var(--accent-2); stroke-opacity: .9; }
+.graph-node { fill: var(--muted); }
+.graph-node.c1 { fill: var(--cluster-1); }
+.graph-node.c2 { fill: var(--cluster-2); }
+.graph-node.c3 { fill: var(--cluster-3); }
+.graph-node.c4 { fill: var(--cluster-4); }
+.graph-node.c5 { fill: var(--cluster-5); }
+.graph-node.c6 { fill: var(--cluster-6); }
+.graph-node.c7 { fill: var(--cluster-7); }
+.graph-node.c8 { fill: var(--cluster-8); }
+.graph-svg.hovering .graph-node:not(.lit) { opacity: .25; }
+.graph-ring { display: none; fill: none; stroke: var(--fg); stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.graph-ring.shown { display: inline; }
+.graph-labels { font-family: var(--mono); }
+/* Обводка цветом фона под текстом: подпись читается поверх линий и чужих точек. */
+.graph-label {
+  fill: var(--fg); stroke: var(--surface); stroke-linejoin: round; paint-order: stroke;
+  text-anchor: middle; dominant-baseline: hanging; pointer-events: none; opacity: var(--label-opacity, 1);
+}
+.graph-label.lit { opacity: 1; }
+.graph-svg.hovering .graph-label:not(.lit) { opacity: calc(var(--label-opacity, 1) * .25); }
+.graph-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; }
+.graph-empty[hidden] { display: none; }
+
+/* Картинки к сообщению: кнопка «＋», миниатюры над строкой ввода и в реплике */
+.attach {
+  flex: none; width: 30px; height: 28px; padding: 0; border-radius: 4px; font: 15px var(--mono);
+  border-color: transparent; background: transparent; color: var(--muted);
+}
+.attach:hover:not(:disabled) { border-color: var(--line-strong); background: transparent; color: var(--fg); }
+.attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 4px 10px 26px; }
+.thumb { position: relative; width: 64px; height: 64px; border: 1px solid var(--line-strong); border-radius: 6px; overflow: hidden; background: var(--surface-2); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb.loading img { opacity: .45; }
+.thumb-remove {
+  position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%;
+  font: 12px/18px var(--mono); background: var(--fg); color: var(--bg); opacity: .75;
+}
+.thumb-remove:hover:not(:disabled) { background: var(--fg); opacity: 1; }
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.msg-images img { display: block; max-width: 220px; max-height: 160px; border-radius: 6px; object-fit: cover; }
+.diagram { position: relative; margin: 10px 0; padding: 12px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.diagram-source { position: absolute; top: 6px; right: 6px; padding: 1px 8px; font: 12px var(--mono); color: var(--muted); background: var(--surface); }
+.md-image img { display: block; max-width: 100%; max-height: 480px; margin: 8px 0; border-radius: 6px; border: 1px solid var(--line); }
+.edits { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.edit { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.edit:has(input:not(:checked)) { opacity: .55; }
+.edit input { margin-top: 3px; flex: none; }
+.edit-text { min-width: 0; overflow-wrap: anywhere; }
+.edit-head { font: 12px var(--mono); color: var(--accent-2); }
+.edit-problem { margin-top: 2px; }
+.edit-change { margin-top: 2px; color: var(--muted); }
+/* Меню «Действия ▾» чата вики и панель их правки над лентой. */
+.wiki-actions { position: relative; }
+.wiki-actions-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; min-width: 220px;
+  max-width: 320px; padding: 4px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface);
+  box-shadow: 0 8px 24px var(--shadow);
+}
+.wiki-actions-menu[hidden] { display: none; }
+.wiki-tools .wiki-actions-menu button { border: 0; background: none; text-align: left; padding: 6px 10px; white-space: normal; }
+.wiki-actions-menu button:hover, .wiki-actions-menu button:focus-visible { background: var(--surface-2); }
+.wiki-actions-sep { margin: 4px 0; border-top: 1px solid var(--line); }
+.wiki-actions-editor { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); max-height: 60%; overflow: auto; }
+.wiki-actions-editor[hidden] { display: none; }
+.wiki-actions-editor .hint, .wiki-actions-editor .error { margin: 0; }
+.wiki-actions-editor .error:empty { display: none; }
+.wiki-actions-rows { display: flex; flex-direction: column; gap: 10px; }
+.wiki-actions-row { display: flex; flex-direction: column; gap: 4px; }
+.wiki-actions-row-head { display: flex; gap: 6px; align-items: center; }
+.wiki-actions-row-head input { flex: 1; min-width: 0; }
+.wiki-actions-row textarea { resize: vertical; }
+@media (max-width: 900px) {
+  .split.graph-mode { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+  .wiki-view { display: block; overflow: auto; }
+  .resizer { display: none; }
+  #wiki-split, #wiki-split.graph-mode { grid-template-columns: 1fr; }
+  .wiki-main { overflow: visible; }
+  .wiki-chat { height: 75vh; border-right: 0; border-bottom: 1px solid var(--line); }
+}
