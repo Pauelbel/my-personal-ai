@@ -4,6 +4,7 @@
 
 # Локальная база и рабочие данные
 data/
+data-old/
 
 # Кэш и байткод Python
 __pycache__/
@@ -14,14 +15,9 @@ __pycache__/
 build/
 dist/
 
-# Снимки и логи Playwright MCP, если сервер запущен вне data/logs
-.playwright-mcp/
 
 # Кэши инструментов разработки
 .pytest_cache/
 .pytest_tmp*/
 .mypy_cache/
 .ruff_cache/
-
-# Локальная память пользователя, если выбран путь внутри репозитория
-/memory/
