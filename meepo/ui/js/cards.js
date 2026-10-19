@@ -1,5 +1,6 @@
 // Карточка подтверждения над полем ввода: что агент хочет сделать, diff файла и решение —
 // «Да», «Нет» или ответить словами; галочка «разрешать такие до конца сессии».
+import { highlightInto } from "./highlight.js";
 import { el } from "./util.js";
 
 const GROUPS = {
@@ -16,8 +17,9 @@ export function renderCard(root, card, decide) {
   node.append(el("div", "where", card.kind === "limit" ? "лимит шагов" : `✋ ${card.tool}`));
   node.append(el("div", "title", card.title || `Вызвать ${card.tool}`));
   if (card.text) node.append(el("p", "reason", card.text));
+  if (card.skill) node.append(skillNode(card.skill));
   if (card.diff) node.append(diffNode(card.diff));
-  else if (card.arguments && Object.keys(card.arguments).length) {
+  else if (!card.skill && card.arguments && Object.keys(card.arguments).length) {
     const details = el("details");
     details.append(el("summary", "", "Аргументы"), el("pre", "", JSON.stringify(card.arguments, null, 2)));
     node.append(details);
@@ -94,4 +96,21 @@ function diffNode(text) {
   }
   root.prepend(el("div", "diff-summary", text.trim() ? `+${added} −${removed}` : "без изменений"));
   return root;
+}
+
+// Новый скилл одним экраном: библиотеки, секреты и все файлы с подсветкой.
+function skillNode(skill) {
+  const box = el("div", "card-skill");
+  const facts = [skill.requires.length && `Библиотеки: ${skill.requires.join(", ")}`,
+    skill.secrets.length && `Секреты (заполните в разделе «Скиллы»): ${skill.secrets.join(", ")}`].filter(Boolean);
+  for (const fact of facts) box.append(el("p", "reason", fact));
+  for (const [path, content] of Object.entries(skill.files)) {
+    const details = el("details");
+    details.open = path !== "SKILL.md";
+    const pre = el("pre");
+    highlightInto(pre, content, path);
+    details.append(el("summary", "", path), pre);
+    box.append(details);
+  }
+  return box;
 }

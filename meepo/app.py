@@ -10,16 +10,22 @@ from fastapi.staticfiles import StaticFiles
 
 from meepo.agent.approvals import Approvals, reset_pending
 from meepo.agent.loop import Agent
-from meepo.agent.tools import files, plan, search
+from meepo.agent.tools import files, plan, search, skills
 from meepo.agent.turns import TurnHub
 from meepo.api import chat
 from meepo.api import settings as settings_api
+from meepo.api import skills as skills_api
 from meepo.llm.client import LLMClient
 from meepo.settings import Env, UserSettings
+from meepo.skills.env import SkillsEnv
+from meepo.skills.history import SkillHistory
+from meepo.skills.registry import SkillRegistry
+from meepo.skills.secrets import SecretStore
 from meepo.storage.projects import ProjectStore
 from meepo.storage.sessions import SessionStore
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
+BUILTIN_SKILLS = Path(__file__).resolve().parent / "skills" / "builtin"
 LOCAL_HOSTS = {"127.0.0.1", "localhost"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -34,15 +40,28 @@ class Services:
         self.projects = ProjectStore(env.data_path)
         self.approvals = Approvals(self.sessions)
         self.turns = TurnHub()
+        self.skills = SkillRegistry(env.data_path / "skills", BUILTIN_SKILLS)
+        self.skills_env = SkillsEnv(env.data_path / "skills-env")
+        self.secrets = SecretStore(env.data_path / "secrets")
+        self.history = SkillHistory(env.data_path / "skills")
         self._fixed_llm = llm
         self._client: LLMClient | None = None
         self.agent = Agent(
             sessions=self.sessions, projects=self.projects, approvals=self.approvals, llm=self.llm,
-            settings=self.settings, tools=[*files.TOOLS, *search.TOOLS, *plan.TOOLS], default_model=env.default_model,
+            settings=self.settings, tools=[*files.TOOLS, *search.TOOLS, *plan.TOOLS, *skills.TOOLS],
+            default_model=env.default_model,
+            services={"registry": self.skills, "env": self.skills_env, "secrets": self.secrets,
+                      "history": self.history, "llm_info": self.llm_info},
         )
 
     def settings(self) -> UserSettings:
         return UserSettings.load(self.settings_path)
+
+    def llm_info(self) -> dict[str, str]:
+        """Модель сессии для скриптов скиллов: MEEPO_LLM_URL, MEEPO_LLM_MODEL, MEEPO_LLM_KEY."""
+        settings = self.settings()
+        return {"url": settings.llm_base_url or self.env.llm_base_url, "model": settings.model or self.env.default_model,
+                "key": self.env.llm_api_key}
 
     def llm(self):
         if self._fixed_llm is not None:
@@ -67,6 +86,7 @@ def create_app(env: Env | None = None, llm=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         reset_pending(services.sessions)
+        services.skills.install_builtin()
         yield
         await services.close()
 
@@ -90,6 +110,7 @@ def create_app(env: Env | None = None, llm=None) -> FastAPI:
 
     app.include_router(chat.router)
     app.include_router(settings_api.router)
+    app.include_router(skills_api.router)
 
     app.mount("/ui", StaticFiles(directory=UI_DIR), name="ui")
 

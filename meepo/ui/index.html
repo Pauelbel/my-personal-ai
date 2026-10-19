@@ -28,6 +28,7 @@
       </div>
       <nav class="tabs" aria-label="Разделы">
         <button type="button" data-view="chat" aria-pressed="true">Чат</button>
+        <button type="button" data-view="skills" aria-pressed="false">Скиллы</button>
       </nav>
       <div class="topbar-right">
         <button class="ghost icon" id="theme-toggle" type="button" title="Светлая или тёмная тема">☾</button>
@@ -65,6 +66,15 @@
               </div>
             </div>
           </form>
+        </div>
+      </main>
+
+      <main class="view page" id="view-skills" hidden>
+        <div class="page-head"><h2>Скиллы</h2></div>
+        <p class="hint">Программы, которыми Мипо делает большие и повторяемые задачи. Новые агент предлагает сам; папки — в <code>data/skills</code>.</p>
+        <div class="split">
+          <div class="list tree-list" id="skill-list"></div>
+          <div class="skill-card" id="skill-card"></div>
         </div>
       </main>
     </div>

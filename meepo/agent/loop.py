@@ -64,7 +64,7 @@ class TurnState:
 
 class Agent:
     def __init__(self, *, sessions, projects, approvals: Approvals, llm: Callable, settings: Callable,
-                 tools: list[Tool], default_model: str = "") -> None:
+                 tools: list[Tool], default_model: str = "", services: dict | None = None) -> None:
         self.sessions = sessions
         self.projects = projects
         self.approvals = approvals
@@ -72,6 +72,8 @@ class Agent:
         self.settings = settings
         self.tools = {tool.name: tool for tool in tools}
         self.default_model = default_model
+        # Сервисы для инструментов (скиллы, окружение, секреты); registry даёт список скиллов в промпт.
+        self.services = services or {}
 
     async def run(self, session_id: str, text: str, request_id: str, emit: Callable[[dict], None]) -> None:
         session = self.sessions.get(session_id)
@@ -87,7 +89,7 @@ class Agent:
         history = self.sessions.messages(session_id)
         state = TurnState(session_id, request_id, project, model, window, context.build("", history),
                           settings.max_tool_rounds, emit)
-        ctx = ToolContext(Path(project["path"]), session_id, self.sessions, request_id, emit)
+        ctx = ToolContext(Path(project["path"]), session_id, self.sessions, request_id, emit, self.services)
         try:
             await self._loop(state, ctx)
         except asyncio.CancelledError:
@@ -115,7 +117,9 @@ class Agent:
     async def _ask(self, state: TurnState, tools: list[dict] | None) -> Reply:
         session = self.sessions.get(state.session_id)
         # Промпт пересобирается каждый раунд: план мог измениться посреди хода.
-        state.messages[0] = {"role": "system", "content": system_prompt(state.project, session["plan"])}
+        registry = self.services.get("registry")
+        skills = registry.prompt_list() if registry else ""
+        state.messages[0] = {"role": "system", "content": system_prompt(state.project, session["plan"], skills=skills)}
         messages = state.messages + ([{"role": "user", "content": STOP_NOTE}] if state.stopped else [])
         state.note(f"Запрос к модели {state.model} · раунд {state.rounds + 1}" + ("" if tools else " · без инструментов"))
         started = time.perf_counter()
@@ -211,8 +215,11 @@ class Agent:
         except Exception as exc:  # noqa: BLE001 — сбой одного инструмента не роняет ход: модель получает ошибку
             logger.exception("Инструмент %s упал", tool.name)
             result = ToolResult(f"Внутренняя ошибка инструмента: {type(exc).__name__}: {exc}", True)
+        elapsed = time.perf_counter() - started
+        # Время работы инструментов входит в сводку хода; ожидание решения по карточке — нет.
+        state.spent += elapsed
         outcome = f"ошибка — {_shorten(result.content)}" if result.is_error else f"готово, {len(result.content)} символов"
-        state.note(f"{tool.name}: {outcome} за {time.perf_counter() - started:.1f} с")
+        state.note(f"{tool.name}: {outcome} за {elapsed:.1f} с")
         return result
 
     async def _limit(self, state: TurnState) -> None:

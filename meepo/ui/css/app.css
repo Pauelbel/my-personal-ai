@@ -463,3 +463,18 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 
 /* Карточка подтверждения: галочка доверия на сессию — в строке кнопок. */
 .card .trust { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--mono); color: var(--muted); margin-left: auto; }
+
+/* Скиллы: карточка скилла — разделы друг под другом, код с подсветкой, секреты строками с полем ввода. */
+.skill-card { min-width: 0; }
+.skill-section h3 { font: 600 12px/1.4 var(--mono); color: var(--muted); margin: 18px 0 6px; }
+.skill-section .reader { border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 14px; background: var(--surface); }
+.code-view { margin: 0; padding: 10px 12px; overflow: auto; max-height: 420px; white-space: pre; font: 13px/1.5 var(--mono);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.skill-packages, .skill-history { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.skill-card .ok { color: var(--ok); font-size: 13px; }
+.skill-card p.error { margin: 6px 0; }
+.secret-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; font-size: 13px; }
+.secret-row input { flex: 1; min-width: 180px; }
+.secret-row .error { min-height: 0; }
+.editor textarea.code { min-height: 0; }
+.card-skill pre { max-height: 320px; }

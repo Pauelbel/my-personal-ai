@@ -6,7 +6,6 @@ import { highlightCode } from "./highlight.js";
 import { appendMarkdown } from "./markdown.js";
 import { el, parse, plural } from "./util.js";
 
-const FLUSH_MS = 80;
 const STEP_ICON = { done: "✓", failed: "✕", pending: "◌" };
 const USER_FOLD_CHARS = 600;
 const USER_FOLD_LINES = 10;
@@ -14,7 +13,6 @@ const STOPPED_TEXT = "_(ход остановлен)_";
 // Раскрытые строки остаются раскрытыми после перерисовки.
 const opened = new Set();
 const unfolded = new Set();
-let liveOpen = false;
 
 // Шаги хода человеческими словами: [что сделано, группа для заголовка строки хода].
 const TOOL_STEPS = {
@@ -36,7 +34,7 @@ function describe(name) {
 }
 
 // Заголовок строки хода: чем модель была занята больше всего. Без вызовов — «Думаю».
-function activityOf(names, now) {
+export function activityOf(names, now) {
   const counts = new Map();
   for (const name of names) {
     const group = describe(name)[1];
@@ -121,7 +119,7 @@ function workNode(work, results, log, state) {
   return node;
 }
 
-function meta(parts) {
+export function meta(parts) {
   const text = parts.filter(Boolean).join(" · ");
   return text ? `· ${text}` : "";
 }
@@ -146,11 +144,11 @@ function row(className, key, icon, name, target, metaText, body) {
   return node;
 }
 
-function thoughtNode(id, text) {
+export function thoughtNode(id, text) {
   return row("thought", `thought:${id}`, "∴", "Размышление", preview(text), `${text.length} симв.`, el("pre", "", text));
 }
 
-function noteNode(id, text) {
+export function noteNode(id, text) {
   const body = el("div", "text step-text");
   renderMarkdown(body, text);
   return row("note", `note:${id}`, "›", "Заметка", preview(text), "", body);
@@ -160,7 +158,7 @@ function replyNode(text) {
   return row("note", `reply:${text}`, "↳", "Ваш ответ", preview(text), "", el("pre", "", text));
 }
 
-function stepNode(call, result) {
+export function stepNode(call, result) {
   const state = !result ? "pending" : result.is_error ? "failed" : "done";
   const args = parse(call.arguments);
   const target = args.path || args.name || args.query || args.url || args.command || args.action || "";
@@ -172,7 +170,7 @@ function stepNode(call, result) {
   return node;
 }
 
-function logNode(text) {
+export function logNode(text) {
   const node = el("details", "live-log");
   node.append(el("summary", "", "журнал"), el("pre", "", text));
   return node;
@@ -226,7 +224,7 @@ export function compact(value) {
   return value < 1e4 ? `${(value / 1e3).toFixed(1).replace(/\.0$/, "").replace(".", ",")}k` : `${Math.round(value / 1e3)}k`;
 }
 
-function duration(seconds) {
+export function duration(seconds) {
   if (seconds < 60) return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1).replace(".", ",")} с`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes} мин ${Math.round(seconds - minutes * 60)} с`;
@@ -263,107 +261,4 @@ export function renderMarkdown(target, text, withTools = true) {
 
 export function scrollDown(container) {
   container.scrollTop = container.scrollHeight;
-}
-
-// Идущий ход — одна строка «◌ Работаю с файлами · 4 шага · 17 с ›». Внутри — шаги, размышление и текст текущего
-// запроса, журнал. Строится из событий хода, поэтому после перезагрузки страницы восстанавливается их повтором.
-export class Live {
-  constructor(container) {
-    this.container = container;
-    this.node = el("article", "msg assistant streaming");
-    this.details = el("details", "work live");
-    this.details.open = liveOpen;
-    this.details.addEventListener("toggle", () => { liveOpen = this.details.open; });
-    const head = el("summary", "work-head live-head");
-    this.title = el("span", "work-title");
-    this.meta = el("span", "work-meta");
-    head.append(el("span", "spinner"), this.title, this.meta, el("span", "work-caret", "▾"));
-    this.steps = el("div", "steps");
-    this.steps.hidden = true;
-    this.reasoning = el("pre", "work-thought");
-    this.reasoning.hidden = true;
-    this.textNode = el("div", "work-note text");
-    this.textNode.hidden = true;
-    this.log = logNode("");
-    const body = el("div", "work-body");
-    body.append(this.steps, this.reasoning, this.textNode, this.log);
-    this.details.append(head, body);
-    this.node.append(this.details);
-    this.calls = new Map();
-    this.names = [];
-    this.text = "";
-    this.thought = "";
-    this.state = "";
-    this.progress = "";
-    this.timer = null;
-    this.started = Date.now();
-    this.ticker = setInterval(() => this.#status(), 1000);
-    this.#status();
-    container.append(this.node);
-  }
-
-  // Одно событие хода: delta, reasoning, tool_call, tool_result, progress, approval, log.
-  handle(event) {
-    if (event.type === "delta") this.#write(event.text);
-    else if (event.type === "reasoning") {
-      this.thought += event.text;
-      this.reasoning.hidden = false;
-      this.reasoning.textContent = this.thought;
-    } else if (event.type === "tool_call") this.#call(event.call);
-    else if (event.type === "tool_result") this.#result(event);
-    else if (event.type === "progress") this.progress = event.text;
-    else if (event.type === "approval") this.state = "ждёт решения";
-    else if (event.type === "log") this.log.querySelector("pre").textContent += `${event.text}\n`;
-    this.#status();
-  }
-
-  finish() {
-    clearTimeout(this.timer);
-    clearInterval(this.ticker);
-    this.node.remove();
-  }
-
-  #write(text) {
-    this.text += text;
-    this.timer ??= setTimeout(() => {
-      this.timer = null;
-      this.textNode.hidden = !this.text.trim();
-      this.textNode.replaceChildren();
-      renderMarkdown(this.textNode, this.text, false);
-    }, FLUSH_MS);
-  }
-
-  // Модель позвала инструмент: её текст и рассуждения этого запроса становятся строками хода.
-  #call(call) {
-    this.steps.hidden = false;
-    if (this.thought.trim()) this.steps.append(thoughtNode(`live-${this.names.length}`, this.thought));
-    if (this.text.trim()) this.steps.append(noteNode(`live-${this.names.length}`, this.text));
-    this.thought = this.text = "";
-    this.reasoning.hidden = this.textNode.hidden = true;
-    const node = stepNode(call, null);
-    this.calls.set(call.id, { call, node });
-    this.names.push(call.name);
-    this.steps.append(node);
-  }
-
-  #result(event) {
-    const entry = this.calls.get(event.call_id);
-    if (!entry) return;
-    const result = { content: event.content, is_error: event.is_error };
-    const node = stepNode(entry.call, result);
-    entry.node.replaceWith(node);
-    entry.node = node;
-    this.state = "";
-    this.progress = "";
-  }
-
-  #status() {
-    const seconds = Math.floor((Date.now() - this.started) / 1000);
-    const now = this.names.length && this.calls.size && [...this.calls.values()].at(-1).node.classList.contains("pending");
-    this.title.textContent = now || this.names.length ? activityOf(this.names, true) : this.text ? "Пишу ответ" : "Думаю";
-    this.meta.textContent = meta([
-      this.names.length && `${this.names.length} ${plural(this.names.length, "шаг", "шага", "шагов")}`,
-      this.progress, seconds && duration(seconds), this.state,
-    ]);
-  }
 }

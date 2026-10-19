@@ -69,6 +69,13 @@ export const api = {
   stop: (id) => request(`/sessions/${id}/turn/stop`, { method: "POST" }),
   decide: (id, decision) => request(`/sessions/${id}/approve`, json("POST", decision)),
 
+  skills: () => request("/skills"),
+  skill: (name) => request(`/skills/${encodeURIComponent(name)}`),
+  saveSkill: (name, files) => request(`/skills/${encodeURIComponent(name)}/files`, json("PUT", { files })),
+  setSecret: (name, secret, value) => request(`/skills/${encodeURIComponent(name)}/secrets/${secret}`, json("PUT", { value })),
+  deleteSecret: (name, secret) => request(`/skills/${encodeURIComponent(name)}/secrets/${secret}`, { method: "DELETE" }),
+  rollback: (name, version) => request(`/skills/${encodeURIComponent(name)}/rollback`, json("POST", { version })),
+
   settings: () => request("/settings"),
   saveSettings: (fields) => request("/settings", json("PUT", fields)),
   models: () => request("/models"),

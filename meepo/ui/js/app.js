@@ -1,8 +1,11 @@
 // Точка входа интерфейса: проекты и сессии слева, чат с идущим ходом, карточки подтверждения, «Стоп».
 import { api } from "./api.js";
 import { renderCard } from "./cards.js";
-import { Live, renderMessages, scrollDown } from "./chat.js";
+import { renderMessages, scrollDown } from "./chat.js";
+import { Live } from "./live.js";
+import { initProjects, openProject } from "./projects.js";
 import { initial, tone } from "./marks.js";
+import { showSkills } from "./skills.js";
 import { editLabel, rowAction, treeRow } from "./tree.js";
 import { el, fitInput, recall, remember } from "./util.js";
 
@@ -17,8 +20,6 @@ const state = {
   live: null,
   controller: null,
   card: null,
-  editingProject: null,
-  autoName: null,
   collapsed: new Set(JSON.parse(recall("collapsed-projects") || "[]")),
 };
 
@@ -41,6 +42,7 @@ async function loadSessions() {
 
 async function selectSession(id) {
   detach();
+  showView("chat");
   state.current = id;
   state.card = current()?.pending ?? null;
   remember("session", id);
@@ -146,80 +148,6 @@ async function openFirst() {
   $("#messages").replaceChildren(empty);
   renderChrome();
   renderSidebar();
-}
-
-// ---------- проект и выбор папки ----------
-
-const baseName = (path) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-
-function openProject(project = null) {
-  state.editingProject = project;
-  state.autoName = project && project.name === baseName(project.path) ? project.name : null;
-  $("#project-dialog-title").textContent = project ? "Настройки проекта" : "Новый проект";
-  $("#project-name").value = project?.name ?? "";
-  $("#project-path").value = project?.path ?? "";
-  $("#project-error").textContent = "";
-  $("#project-delete").hidden = !project;
-  $("#project-dialog").showModal();
-  void browse(project?.path ?? "");
-}
-
-async function browse(path) {
-  try {
-    const listing = await api.folders(path);
-    $("#folder-current").textContent = listing.path ?? "Корень";
-    $("#folder-up").disabled = !listing.path;
-    $("#folder-up").onclick = () => browse(listing.parent ?? "");
-    $("#folder-list").replaceChildren(...listing.folders.map((folder) => {
-      const item = el("li");
-      const button = el("button", "", `📁 ${folder.name}`);
-      button.type = "button";
-      button.addEventListener("click", () => {
-        $("#project-path").value = folder.path;
-        const input = $("#project-name");
-        if (!input.value.trim() || input.value === state.autoName) input.value = state.autoName = baseName(folder.path);
-        void browse(folder.path);
-      });
-      item.append(button);
-      return item;
-    }));
-  } catch (error) {
-    $("#project-error").textContent = error.message;
-  }
-}
-
-async function saveProject(event) {
-  event.preventDefault();
-  const name = $("#project-name").value.trim();
-  const path = $("#project-path").value.trim();
-  try {
-    if (state.editingProject) {
-      await api.updateProject(state.editingProject.id, name, path);
-      $("#project-dialog").close();
-      await loadSessions();
-      render();
-    } else {
-      const project = await api.createProject(name, path);
-      $("#project-dialog").close();
-      await newSession(project.id);
-    }
-  } catch (error) {
-    $("#project-error").textContent = error.message;
-  }
-}
-
-async function deleteProject() {
-  const project = state.editingProject;
-  if (!project || !window.confirm(`Удалить проект «${project.name}» вместе с его сессиями? Папка на диске останется.`)) return;
-  try {
-    await api.deleteProject(project.id);
-    $("#project-dialog").close();
-    await loadSessions();
-    if (!current()) await openFirst();
-    else render();
-  } catch (error) {
-    $("#project-error").textContent = error.message;
-  }
 }
 
 // ---------- ход ----------
@@ -366,6 +294,12 @@ async function showModel() {
   }
 }
 
+function showView(view) {
+  for (const button of document.querySelectorAll(".tabs button")) button.setAttribute("aria-pressed", String(button.dataset.view === view));
+  for (const node of document.querySelectorAll("main.view")) node.hidden = node.id !== `view-${view}`;
+  if (view === "skills") void showSkills(toast);
+}
+
 function showTheme() {
   $("#theme-toggle").textContent = document.documentElement.dataset.theme === "dark" ? "☀" : "☾";
 }
@@ -382,11 +316,22 @@ function bind() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.live && !document.querySelector("dialog[open]")) void stop();
   });
+  for (const button of document.querySelectorAll(".tabs button")) button.addEventListener("click", () => showView(button.dataset.view));
   $("#new-project").addEventListener("click", () => openProject());
   $("#project-chip").addEventListener("click", () => openProject(projectOf(current())));
-  $("#project-form").addEventListener("submit", saveProject);
-  $("#project-cancel").addEventListener("click", () => $("#project-dialog").close());
-  $("#project-delete").addEventListener("click", deleteProject);
+  initProjects({
+    toast,
+    saved: async (project, created) => {
+      if (created) return newSession(project.id);
+      await loadSessions();
+      render();
+    },
+    deleted: async () => {
+      await loadSessions();
+      if (!current()) await openFirst();
+      else render();
+    },
+  });
   $("#sessions-toggle").addEventListener("click", () => { $("#sidebar").hidden = !$("#sidebar").hidden; });
   $("#theme-toggle").addEventListener("click", () => {
     const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
