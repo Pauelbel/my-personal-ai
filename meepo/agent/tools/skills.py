@@ -5,6 +5,7 @@ llm_info() — адрес, модель и ключ для MEEPO_LLM_*. Пров
 не видит, его исправляет модель.
 """
 
+import re
 import sys
 
 from meepo.agent.tools.base import Tool, ToolContext, ToolResult
@@ -17,7 +18,6 @@ MAX_FIXES = 3
 SKILL_TEMPLATE = """---
 name: имя-скилла
 description: Что делает и когда применять — одной строкой.
-entry: scripts/main.py
 requires: []
 secrets: []
 timeout: 600
@@ -104,8 +104,8 @@ def _secrets_note(ctx: ToolContext, skill) -> str:
     empty = [name for name, ok in ctx.services["secrets"].status(skill.name, skill.secrets).items() if not ok]
     if not empty:
         return ""
-    return (f" Секреты не заданы: {', '.join(empty)}. Попроси пользователя заполнить их в разделе «Скиллы» → "
-            f"{skill.name} и дождись ответа; значения в чат не пиши и не проси.")
+    return (f" Секреты не заданы: {', '.join(empty)}. Попроси пользователя заполнить их в разделе «Настройки» → "
+            f"«Скиллы» → {skill.name} и дождись ответа; значения в чат не пиши и не проси.")
 
 
 async def _install(ctx: ToolContext, requirements: list[str]) -> str:
@@ -164,14 +164,26 @@ async def update_skill(args: dict, ctx: ToolContext) -> ToolResult:
 
 # ---------- run_skill ----------
 
+def _arguments(skill) -> tuple[str, list[str]]:
+    """Раздел «# Аргументы» из SKILL.md и обязательные из него: строки «- имя — … (обязательно)»."""
+    section = re.search(r"(?ms)^# Аргументы[^\n]*\n(.*?)(?=^# |\Z)", skill.text)
+    text = section.group(1).strip() if section else ""
+    return text, re.findall(r"(?m)^- (\w+) — .*\(обязательно\)", text)
+
+
 def _runnable(args: dict, ctx: ToolContext):
     skill = _skill(ctx, args["name"])
     if skill.error:
         raise ValueError(f"Скилл {skill.name} сломан: {skill.error}. Прочитай его и исправь через update_skill")
+    section, required = _arguments(skill)
+    given = args.get("args") or {}
+    if missing := [name for name in required if given.get(name) in (None, "", [], {})]:
+        raise ValueError(f"Не хватает обязательных аргументов скилла {skill.name}: {', '.join(missing)}. "
+                         f"Вызови run_skill снова, args — JSON-объект. Аргументы скилла:\n{section}")
     empty = [name for name, ok in ctx.services["secrets"].status(skill.name, skill.secrets).items() if not ok]
     if empty:
         raise ValueError(f"Скилл {skill.name} не настроен: не заданы {', '.join(empty)}. Попроси пользователя заполнить "
-                         f"их в разделе «Скиллы» → {skill.name}; значения в чат не пиши и не проси.")
+                         f"их в разделе «Настройки» → «Скиллы» → {skill.name}; значения в чат не пиши и не проси.")
     return skill
 
 
@@ -203,20 +215,22 @@ async def run_skill(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 NAME = {"type": "string", "description": "Имя скилла (имя папки)"}
-FILES = {"type": "object", "description": "Файлы скилла: путь → полный текст, например {\"scripts/main.py\": \"…\"}"}
+FILES = {"type": "object", "description": "Файлы скилла: SKILL.md и/или script.py → полный текст, например "
+         "{\"script.py\": \"…\"}. Других файлов у скилла нет: весь код — в одном script.py"}
 PACKAGES = {"type": "array", "items": {"type": "string"},
             "description": "Пакеты PyPI с версиями, например [\"pypdf==5.1.0\"]; без ссылок и флагов"}
 SECRETS = {"type": "array", "items": {"type": "string"}, "description": "Имена секретов, например [\"JIRA_TOKEN\"]"}
 
 TOOLS = [
     Tool("read_skill", "Прочитать скилл: SKILL.md (что делает, аргументы, примеры), список файлов, пакеты, секреты. "
-         "Читай перед первым запуском скилла. С file — текст одного файла скилла (код перед правкой через update_skill).",
+         "Читай перед первым запуском скилла. С file=script.py — код скилла (перед правкой через update_skill).",
          {"type": "object", "properties": {
-             "name": NAME, "file": {"type": "string", "description": "Файл скилла, например scripts/main.py"},
+             "name": NAME, "file": {"type": "string", "description": "Файл скилла: script.py или SKILL.md"},
          }, "required": ["name"], "additionalProperties": False},
          read_skill),
-    Tool("create_skill", "Создать новый скилл, когда для задачи нет подходящего: Python-скрипт scripts/main.py "
-         "(аргументы — JSON из stdin, результат — в stdout, прогресс — строками в stderr) и SKILL.md. Секреты (токены, "
+    Tool("create_skill", "Создать новый скилл, когда для задачи нет подходящего: ровно два файла — SKILL.md и "
+         "script.py, весь код в одном script.py (аргументы — JSON из stdin, результат — в stdout, прогресс — строками "
+         "в stderr). Секреты (токены, "
          "пароли) — не аргументы: их значения скрипт получает переменными окружения с теми же именами, "
          "например os.environ[\"JIRA_TOKEN\"]; в secrets перечисли имена. "
          "Большие объёмы обрабатывай по кускам и сохраняй прогресс в meepo_skill.State — повторный запуск продолжит "

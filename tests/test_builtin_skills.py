@@ -21,11 +21,12 @@ CASE = {"title": "Авторизация пользователя", "priority": 
 
 
 class FakeModel:
-    """OpenAI-совместимый сервер: на схему test_cases — кейсы, на схему ревью — замечания, иначе — текст."""
+    """OpenAI-совместимый сервер: на схему test_cases — кейсы, на схему ревью — замечания, иначе — text."""
 
     def __init__(self) -> None:
         self.requests: list[dict] = []
         self.fail_after: int | None = None
+        self.text = "Дублей нет"
         model = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -44,7 +45,7 @@ class FakeModel:
                                           "questions": [{"case": "TC-001", "question": "Сколько попыток входа?"}],
                                           "verdict": "Можно отдавать после правки TC-001."}, ensure_ascii=False)
                 else:
-                    content = "Дублей нет"
+                    content = model.text
                 data = json.dumps({"choices": [{"message": {"content": content}}]}, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -81,7 +82,7 @@ def test_builtin_skills_are_valid(tmp_path):
     registry = SkillRegistry(tmp_path / "skills", BUILTIN_SKILLS)
     registry.install_builtin()
     skills = {skill.name: skill for skill in registry.list()}
-    assert set(skills) == {"testcase-generate", "testcase-review", "to-markdown"}
+    assert set(skills) == {"autotest-write", "testcase-generate", "testcase-review", "to-markdown"}
     for skill in skills.values():
         assert not skill.error, skill.error
         assert check_files(skill.name, registry.read_files(skill.name)) is None
@@ -142,3 +143,43 @@ def test_review_any_markdown_without_docs_resumes(tmp_path, model):
     assert "Документации нет" in first[0]["content"] and "<документация>" not in first[1]["content"]
     assert "Вопросы" not in first[1]["content"]
     assert "Дубли по всему файлу" in (project / "cases/login.review.md").read_text(encoding="utf-8")
+
+
+AUTOTEST = """### FILE: tests/api/test_api_orders.py
+```python
+import allure
+
+from checks.base import Checker
+
+
+@allure.epic("API")
+@allure.feature("/api/v1/orders")
+class TestOrders:
+
+    @allure.title("Заказы отдаются")
+    def test_orders(self, app_api):
+        with Checker() as checker:
+            checker.check_true(True, "заказы есть")
+```
+### NOTES
+- заполнить STAGE_APP_API_URL"""
+
+
+def test_autotest_write_from_local_harness(tmp_path, model):
+    harness = tmp_path / "qa_harness"
+    files = {"AGENTS.md": "# Правила\n", "pytest.ini": "[pytest]\n", "config.py": "ACTIVE_CONFIG = {}\n",
+             "checks/base.py": "class Checker:\n    def check_true(self, condition, message):\n        return self\n",
+             "examples/conftest.py": "import pytest\n", "examples/api/test_api_crm.py": "from checks.base import Checker\n"}
+    for path, text in files.items():
+        (harness / path).parent.mkdir(parents=True, exist_ok=True)
+        (harness / path).write_text(text, encoding="utf-8")
+    (tmp_path / "project").mkdir()
+    model.text = AUTOTEST
+    text, failed = run_skill(tmp_path, "autotest-write", {"task": "GET /api/v1/orders отдаёт заказы", "harness": str(harness)}, model)
+    assert not failed, text
+    project = tmp_path / "project"
+    assert "Слой: api" in text and "- tests/api/test_api_orders.py" in text and "заполнить STAGE_APP_API_URL" in text
+    assert (project / "tests/api/test_api_orders.py").read_text(encoding="utf-8").startswith("import allure")
+    # Обвязка, которой не было в проекте, взята из harness; правила AGENTS.md ушли модели.
+    assert (project / "checks/base.py").is_file() and (project / "tests/conftest.py").is_file()
+    assert "# Правила" in model.requests[-1]["messages"][0]["content"]

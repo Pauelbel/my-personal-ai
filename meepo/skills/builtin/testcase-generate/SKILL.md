@@ -1,7 +1,6 @@
 ---
 name: testcase-generate
 description: Пишет ручные тест-кейсы по Markdown-документации. Применять, когда просят тест-кейсы по требованиям или документации.
-entry: scripts/main.py
 requires: []
 secrets: []
 timeout: 3600

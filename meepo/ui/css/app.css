@@ -415,6 +415,8 @@ button.trow-main:hover:not(:disabled) { background: transparent; }
 }
 .subtabs button:hover:not(:disabled) { background: transparent; color: var(--fg); }
 .subtabs button[aria-pressed="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+/* Рамка фокуса — внутри кнопки: снаружи её обрезает прокрутка полосы вкладок. */
+.subtabs button:focus-visible { outline-offset: -2px; }
 .subtabs .count { font: 11px var(--mono); color: var(--muted); }
 /* Окна */
 dialog { border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--fg); width: min(560px, calc(100vw - 32px)); box-shadow: 0 16px 40px var(--shadow); }
@@ -483,6 +485,17 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 .skill-packages, .skill-history { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
 .skill-card .ok { color: var(--ok); font-size: 13px; }
 .skill-card p.error { margin: 6px 0; }
+/* Заплатки: тот же вид карточки; исходный код — целиком, без своей прокрутки. */
+.guard-card .code-view { max-height: none; }
+.guard-toggle { font-size: 14px; }
+/* Инструменты: блок на каждый инструмент темы — имя, нужна ли карточка, описание, параметры. */
+.tool-block { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.tool-block:last-child { border-bottom: 0; }
+.tool-block p { margin: 6px 0; font-size: 14px; }
+.tool-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tool-title code { font: 600 13px var(--mono); }
+.tool-badge { font-size: 12px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line-strong); color: var(--muted); }
+.tool-badge.free { border-style: dashed; }
 .secret-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; font-size: 13px; }
 .secret-row input { flex: 1; min-width: 180px; }
 .secret-row .error { min-height: 0; }
@@ -491,8 +504,11 @@ dialog label.check { flex-direction: row; align-items: center; gap: 6px; font: 1
 .card-command { white-space: pre-wrap; margin: 4px 0; padding: 6px 10px; font: 13px/1.5 var(--mono); color: var(--fg);
   background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
 
-/* Настройки: поля столбиком, переключатели guards — галочка, название и пояснение в строку. */
-.settings { max-width: 720px; display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+/* Настройки: группы — колонки рядом на широком экране, поля в группе столбиком; переключатель — галочка,
+   название и пояснение в строку. */
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px 32px; margin-top: 8px; align-items: start; }
+.settings-group { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.settings-actions { grid-column: 1 / -1; }
 .settings h3 { font: 600 12px/1.4 var(--mono); color: var(--muted); margin: 14px 0 0; text-transform: uppercase; letter-spacing: .06em; }
 .setting { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
 .setting .hint { margin: 0; font-size: 12px; }
@@ -720,5 +736,5 @@ button.chip.on, button.chip.on:hover:not(:disabled) { background: var(--accent-2
   .split.files { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .files-tree { border-right: 0; border-bottom: 1px solid var(--line); max-height: 30vh; }
 }
-/* Настройки — одной колонкой по центру страницы: заголовок, пояснение и поля на одной оси. */
-#view-settings > * { width: 100%; max-width: 720px; margin-left: auto; margin-right: auto; }
+/* Настройки — на всю ширину окна во всех подвкладках. */
+#view-settings > * { width: 100%; }

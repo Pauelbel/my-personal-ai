@@ -1,4 +1,4 @@
-// Раздел «Скиллы»: список слева, карточка скилла справа — SKILL.md, код скриптов с подсветкой, библиотеки,
+// «Настройки» → «Скиллы»: список слева, карточка скилла справа — SKILL.md, код script.py с подсветкой, библиотеки,
 // секреты (ввод значений; обратно сервер их не отдаёт), история версий с откатом, ручная правка файлов.
 import { api } from "./api.js";
 import { renderMarkdown } from "./chat.js";
@@ -40,7 +40,7 @@ async function openSkill(name, toast) {
   }
 }
 
-function section(title, ...children) {
+export function section(title, ...children) {
   const node = el("section", "skill-section");
   node.append(el("h3", "", title), ...children);
   return node;
@@ -58,7 +58,7 @@ function renderCard(toast) {
     renderCard(toast);
   });
   head.append(edit);
-  const parts = [head, el("p", "hint", `${skill.description} · запуск ${skill.entry} · таймаут ${skill.timeout} с`)];
+  const parts = [head, el("p", "hint", `${skill.description} · таймаут ${skill.timeout} с`)];
   if (skill.error) parts.push(el("p", "error", `Скилл сломан: ${skill.error}`));
   if (state.editing) parts.push(editor(skill, toast));
   else {

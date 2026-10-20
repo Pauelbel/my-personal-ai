@@ -20,6 +20,7 @@ from meepo.api import memory as memory_api
 from meepo.api import wiki as wiki_api
 from meepo.api import settings as settings_api
 from meepo.api import skills as skills_api
+from meepo.api import tools as tools_api
 from meepo.llm.client import LLMClient
 from meepo.memory.store import MemoryStore
 from meepo.memory.updater import MemoryUpdater
@@ -143,6 +144,7 @@ def create_app(env: Env | None = None, llm=None) -> FastAPI:
     app.include_router(files_api.router)
     app.include_router(settings_api.router)
     app.include_router(skills_api.router)
+    app.include_router(tools_api.router)
     app.include_router(memory_api.router)
     app.include_router(wiki_api.router)
 

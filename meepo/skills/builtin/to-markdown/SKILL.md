@@ -1,7 +1,6 @@
 ---
 name: to-markdown
 description: Переводит документы проекта (PDF, DOCX, XLSX, PPTX, HTML, CSV, JSON, XML, EPUB) в Markdown. Применять перед работой с такими документами.
-entry: scripts/main.py
 requires: [markitdown[pdf,docx,xlsx,pptx]]
 secrets: []
 timeout: 1800

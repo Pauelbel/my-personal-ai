@@ -1,13 +1,13 @@
 """Запуск скрипта скилла.
 
-Команда: `<python из data/skills-env> -s -X utf8 <папка скилла>/<entry>`, рабочая папка — папка проекта.
+Команда: `<python из data/skills-env> -s -X utf8 <папка скилла>/script.py`, рабочая папка — папка проекта.
 stdin — JSON аргументов; stdout — результат (модели — не больше OUTPUT_CHARS, длиннее — целиком в
 `.meepo/skills/<name>/last-output.md`, модели — начало, конец и путь); stderr — строки прогресса, идут в UI
 построчно. Код возврата не 0 — ошибка, модель получает хвост stderr.
 
 Окружение чистое (без переменных пользователя), плюс MEEPO_* для доступа к модели и папке состояния,
 PYTHONPATH с помощником meepo_skill и значения объявленных секретов. Флаг -I не используется: он отключил бы
-PYTHONPATH и импорт соседних файлов scripts/; изоляцию от переменных пользователя даёт чистое окружение.
+PYTHONPATH; изоляцию от переменных пользователя даёт чистое окружение.
 По таймауту и по «Стоп» убивается всё дерево процессов (Windows и Linux).
 """
 
@@ -55,7 +55,7 @@ async def run(skill: Skill, arguments: dict, *, project: Path, python: Path, env
               on_progress: Callable[[str], None]) -> tuple[str, bool]:
     """(текст для модели, ошибка ли)."""
     state_dir(project, skill.name).mkdir(parents=True, exist_ok=True)
-    command = [str(python), "-s", "-X", "utf8", str(skill.folder / skill.entry)]
+    command = [str(python), "-s", "-X", "utf8", str(skill.script)]
     # Своя группа процессов: по таймауту и «Стоп» убирается вместе со всем, что запустил скрипт.
     group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
     process = await asyncio.create_subprocess_exec(

@@ -1,8 +1,13 @@
-"""Раздел «Настройки»: data/settings.json и список моделей сервера."""
+"""Раздел «Настройки»: data/settings.json, список моделей сервера и заплатки для маленькой модели."""
+
+import re
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
+from meepo.agent import guards
 from meepo.llm.client import LLMClient, LLMError
+from meepo.settings import ROOT
 from meepo.settings import UserSettings, default_guards
 
 router = APIRouter(prefix="/api")
@@ -51,6 +56,22 @@ def put_settings(body: dict, request: Request) -> dict:
     current = services.settings().__dict__
     UserSettings(**{**current, **body}).save(services.settings_path)
     return get_settings(request)
+
+
+@router.get("/guards")
+def list_guards(request: Request) -> list[dict]:
+    """Заплатки: название и описание — из docstring файла («Guard «язык»: …»), исходный код — сам файл."""
+    enabled = request.app.state.services.settings().guards
+    items = []
+    for name, module in guards.ALL.items():
+        path = Path(module.__file__)
+        doc = (module.__doc__ or "").strip()
+        title = re.match(r"Guard «([^»]+)»", doc)
+        items.append({
+            "name": name, "title": title.group(1).capitalize() if title else name, "enabled": enabled.get(name, True),
+            "doc": doc, "file": path.relative_to(ROOT).as_posix(), "source": path.read_text(encoding="utf-8"),
+        })
+    return items
 
 
 @router.get("/models")

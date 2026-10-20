@@ -22,10 +22,16 @@ ERROR_DETAIL_CHARS = 300
 # Gemma 4 закрывает рассуждения маркером «<channel|>». Бывает, что сервер шлёт их обычным текстом без
 # открывающей метки: тогда всё до маркера — рассуждения, а ответ — после него.
 THINKING_END = "<channel|>"
+# Коды, которыми сервер отвергает незнакомый параметр запроса (reasoning_effort).
+REJECTED_PARAMETER = (400, 422)
 
 
 class LLMError(Exception):
     """Сервер модели не смог вернуть корректный ответ."""
+
+
+class _ReasoningRejected(Exception):
+    """Сервер не принял reasoning_effort: запрос повторяется без него."""
 
 
 class LLMUnavailable(LLMError):
@@ -93,6 +99,10 @@ class LLMClient:
             headers={"Authorization": f"Bearer {api_key}"} if api_key else None,
         )
         self._context_cache: dict[str, tuple[float, int]] = {}
+        # Рассуждения отключаются (reasoning_effort: none), как и в скиллах: Ollama с qwen3.5 кладёт в них и сам
+        # ответ, оставляя текст пустым, — ход падал с «пустым ответом»; без рассуждений ответ ещё и в 2–3 раза быстрее.
+        # Сервер параметр не принял — дальше запросы идут без него.
+        self._reasoning_off = True
 
     async def stream(
         self, model: str, messages: list[dict], tools: list[dict] | None = None, response_format: dict | None = None,
@@ -104,6 +114,8 @@ class LLMClient:
             payload["tools"] = tools
         if response_format:
             payload["response_format"] = response_format
+        if self._reasoning_off:
+            payload["reasoning_effort"] = "none"
         parts: list[str] = []
         thoughts: list[str] = []
         # Рассуждения, которые сервер не отделил и прислал в ответе (метки Gemma, <think>), уходят в рассуждения.
@@ -115,6 +127,9 @@ class LLMClient:
             async with self._client.stream("POST", "chat/completions", json=payload) as response:
                 if response.is_error:
                     await response.aread()
+                    if response.status_code in REJECTED_PARAMETER and "reasoning_effort" in payload:
+                        self._reasoning_off = False
+                        raise _ReasoningRejected
                     raise LLMError(self._http_error(response))
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
@@ -141,6 +156,10 @@ class LLMClient:
                             function = item.get("function") or {}
                             slot["name"] += function.get("name") or ""
                             slot["arguments"] += function.get("arguments") or ""
+        except _ReasoningRejected:
+            async for item in self.stream(model, messages, tools, response_format):
+                yield item
+            return
         except httpx.TimeoutException as exc:
             raise LLMUnavailable("Сервер модели не ответил за отведённое время") from exc
         except httpx.RequestError as exc:

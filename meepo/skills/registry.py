@@ -1,6 +1,7 @@
-"""Реестр скиллов: папки `data/skills/<name>/` с `SKILL.md` и `scripts/`.
+"""Реестр скиллов: папки `data/skills/<name>/` ровно из двух файлов — `SKILL.md` и `script.py`.
 
-Заголовок SKILL.md — блок между строками `---`: `name`, `description`, `entry`, `requires`, `secrets`, `timeout`.
+Весь код скилла — в одном `script.py`: его и запускают, и читают, и правят целиком.
+Заголовок SKILL.md — блок между строками `---`: `name`, `description`, `requires`, `secrets`, `timeout`.
 Списки пишутся в квадратных скобках через запятую: `requires: [markitdown[pdf,docx]==0.1.2, httpx]`.
 Битая папка не роняет приложение: в списке она видна с ошибкой, запустить её нельзя.
 """
@@ -19,13 +20,12 @@ from meepo.skills.secrets import check_secret_names
 logger = logging.getLogger(__name__)
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
-KEYS = ("name", "description", "entry", "requires", "secrets", "timeout")
+KEYS = ("name", "description", "requires", "secrets", "timeout")
 DEFAULT_TIMEOUT = 600
 MAX_TIMEOUT = 6 * 3600
 MAX_FILE_BYTES = 256 * 1024
-MAX_FILES = 20
-# Файлы скилла: SKILL.md и всё внутри scripts/ (вложенные папки можно).
-FILE_PATH = re.compile(r"^(SKILL\.md|scripts/[A-Za-z0-9_./-]+)$")
+SCRIPT = "script.py"
+FILES = ("SKILL.md", SCRIPT)
 
 
 @dataclass
@@ -33,7 +33,6 @@ class Skill:
     name: str
     folder: Path
     description: str = ""
-    entry: str = "scripts/main.py"
     requires: list[str] = field(default_factory=list)
     secrets: list[str] = field(default_factory=list)
     timeout: int = DEFAULT_TIMEOUT
@@ -41,10 +40,13 @@ class Skill:
     # Почему скилл не загрузился; пусто — скилл исправен.
     error: str = ""
 
+    @property
+    def script(self) -> Path:
+        return self.folder / SCRIPT
+
     def files(self) -> list[str]:
-        """Файлы скилла относительно его папки, кроме служебных (__pycache__)."""
-        return sorted(path.relative_to(self.folder).as_posix() for path in self.folder.rglob("*")
-                      if path.is_file() and "__pycache__" not in path.parts)
+        """Файлы скилла, которые есть на диске: SKILL.md и script.py."""
+        return [name for name in FILES if (self.folder / name).is_file()]
 
 
 def split_list(value: str) -> list[str]:
@@ -94,16 +96,16 @@ def set_header(text: str, **values) -> str:
 
 
 def check_files(name: str, files: dict[str, str]) -> str | None:
-    """Проверка нового или изменённого скилла целиком: имя, SKILL.md, entry, синтаксис Python, пакеты, секреты."""
+    """Проверка нового или изменённого скилла целиком: имя, два файла, SKILL.md, синтаксис Python, пакеты, секреты."""
     if not NAME.fullmatch(name or ""):
         return "name — латиница в нижнем регистре, цифры и дефис, 2–41 символ, например testcase-generate"
-    if "SKILL.md" not in files:
-        return "Нужен файл SKILL.md"
-    if len(files) > MAX_FILES:
-        return f"Не больше {MAX_FILES} файлов в скилле"
+    if extra := sorted(set(files) - set(FILES)):
+        return (f"Лишние файлы: {', '.join(extra)}. Скилл — ровно два файла: SKILL.md и {SCRIPT}; "
+                f"весь код — в одном {SCRIPT}")
+    for path in FILES:
+        if path not in files:
+            return f"Нужен файл {path}"
     for path, content in files.items():
-        if not FILE_PATH.fullmatch(path) or ".." in path.split("/"):
-            return f"Недопустимый путь файла «{path}»: только SKILL.md и файлы в scripts/"
         if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_FILE_BYTES:
             return f"Файл {path} — текст не больше {MAX_FILE_BYTES // 1024} КБ"
     try:
@@ -114,15 +116,10 @@ def check_files(name: str, files: dict[str, str]) -> str | None:
         return f"В заголовке SKILL.md name должен быть {name}"
     if not fields.get("description"):
         return "В заголовке SKILL.md нет description — одна строка: что делает и когда применять"
-    entry = fields.get("entry") or "scripts/main.py"
-    if entry not in files:
-        return f"Нет файла entry {entry}"
-    for path, content in files.items():
-        if path.endswith(".py"):
-            try:
-                ast.parse(content, filename=path)
-            except SyntaxError as exc:
-                return f"Синтаксическая ошибка в {path}, строка {exc.lineno}: {exc.msg}"
+    try:
+        ast.parse(files[SCRIPT], filename=SCRIPT)
+    except SyntaxError as exc:
+        return f"Синтаксическая ошибка в {SCRIPT}, строка {exc.lineno}: {exc.msg}"
     if fields["requires"] and (problem := check_requirements(fields["requires"])):
         return f"requires: {problem}"
     if fields["secrets"] and (problem := check_secret_names(fields["secrets"])):
@@ -164,16 +161,20 @@ class SkillRegistry:
 
     def load(self, folder: Path) -> Skill:
         skill = Skill(folder.name, folder)
+        if (folder / "scripts").is_dir() and not skill.script.is_file():
+            skill.error = (f"старый формат: код в папке scripts/. Собери его в один {SCRIPT} рядом с SKILL.md "
+                           "и убери строку entry из заголовка")
+            logger.warning("Скилл %s не загружен: %s", folder.name, skill.error)
+            return skill
         try:
             skill.text = (folder / "SKILL.md").read_text(encoding="utf-8")
             fields, _ = parse_skill_md(skill.text)
             skill.description = fields.get("description", "")
-            skill.entry = fields.get("entry") or skill.entry
             skill.requires, skill.secrets, skill.timeout = fields["requires"], fields["secrets"], fields["timeout"]
             if fields.get("name") != folder.name:
                 skill.error = f"name в SKILL.md ({fields.get('name')}) не совпадает с именем папки"
-            elif not (folder / skill.entry).is_file():
-                skill.error = f"нет файла entry {skill.entry}"
+            elif not skill.script.is_file():
+                skill.error = f"нет файла {SCRIPT}: весь код скилла — в одном {SCRIPT}"
         except (OSError, UnicodeError, ValueError) as exc:
             skill.error = str(exc)
         if skill.error:
@@ -195,10 +196,9 @@ class SkillRegistry:
             raise ValueError(f"Скилл {name} уже есть: правка — через update_skill")
         self.root.mkdir(parents=True, exist_ok=True)
         staging = self.root / f".{name}.{uuid4().hex}"
+        staging.mkdir()
         for path, content in files.items():
-            file = staging / path
-            file.parent.mkdir(parents=True, exist_ok=True)
-            file.write_text(content, encoding="utf-8", newline="\n")
+            (staging / path).write_text(content, encoding="utf-8", newline="\n")
         if target.exists():
             shutil.rmtree(target)
         staging.rename(target)

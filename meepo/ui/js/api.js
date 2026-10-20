@@ -100,6 +100,10 @@ export const api = {
 
   settings: () => request("/settings"),
   saveSettings: (fields) => request("/settings", json("PUT", fields)),
+  // Заплатки для маленькой модели: включена ли, описание и исходный код файла.
+  guards: () => request("/guards"),
+  // Встроенные инструменты агента по темам: описание, параметры, исходный код; у браузера — окно.
+  tools: () => request("/tools"),
   // Модели сервера: текущего или по адресу (проверка до сохранения настроек).
   models: (baseUrl = "") => request(`/models${baseUrl ? `?${q({ base_url: baseUrl })}` : ""}`),
 };

@@ -110,7 +110,7 @@ function diffNode(text) {
 function skillNode(skill) {
   const box = el("div", "card-skill");
   const facts = [skill.requires.length && `Библиотеки: ${skill.requires.join(", ")}`,
-    skill.secrets.length && `Секреты (заполните в разделе «Скиллы»): ${skill.secrets.join(", ")}`].filter(Boolean);
+    skill.secrets.length && `Секреты (заполните в «Настройки» → «Скиллы»):${skill.secrets.join(", ")}`].filter(Boolean);
   for (const fact of facts) box.append(el("p", "reason", fact));
   for (const [path, content] of Object.entries(skill.files)) {
     const details = el("details");

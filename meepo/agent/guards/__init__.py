@@ -6,10 +6,12 @@ from meepo.agent.guards import language, plan, promise, retry
 
 # Порядок важен: сначала язык (ответ переписывается целиком), затем план, затем обещание.
 ANSWER_GUARDS = {"language": language, "plan": plan, "promise": promise}
+# Все заплатки — для «Настройки» → «Заплатки»: описание и исходный код берутся из самих файлов.
+ALL = {**ANSWER_GUARDS, "retry": retry}
 LOG = {"language": "ответ не по-русски — прошу переписать", "plan": "в плане есть несделанные пункты — прошу продолжить",
        "promise": "модель пообещала действие без вызова инструмента — прошу сделать вызов"}
 
-__all__ = ["ANSWER_GUARDS", "LOG", "answer_hint", "retry"]
+__all__ = ["ALL", "ANSWER_GUARDS", "LOG", "answer_hint", "retry"]
 
 
 def answer_hint(state) -> tuple[str, str] | None:

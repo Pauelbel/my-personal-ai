@@ -30,7 +30,6 @@
         <button type="button" data-view="chat" aria-pressed="true">Чат</button>
         <button type="button" data-view="wiki" aria-pressed="false">Вики</button>
         <button type="button" data-view="memory" aria-pressed="false">Память</button>
-        <button type="button" data-view="skills" aria-pressed="false">Скиллы</button>
         <button type="button" data-view="settings" aria-pressed="false">Настройки</button>
       </nav>
       <div class="topbar-right">
@@ -165,15 +164,6 @@
         </div>
       </main>
 
-      <main class="view page" id="view-skills" hidden>
-        <div class="page-head"><h2>Скиллы</h2></div>
-        <p class="hint">Программы, которыми Мипо делает большие и повторяемые задачи. Новые агент предлагает сам; папки — в <code>data/skills</code>.</p>
-        <div class="split">
-          <div class="list tree-list" id="skill-list"></div>
-          <div class="skill-card" id="skill-card"></div>
-        </div>
-      </main>
-
       <main class="view page" id="view-memory" hidden>
         <div class="page-head">
           <h2>Память</h2>
@@ -191,8 +181,37 @@
 
       <main class="view page" id="view-settings" hidden>
         <div class="page-head"><h2>Настройки</h2></div>
-        <p class="hint">Хранятся в <code>data/settings.json</code>; адрес сервера и модель по умолчанию — в <code>.env</code>.</p>
-        <div class="settings" id="settings"></div>
+        <nav class="subtabs" id="settings-tabs" aria-label="Раздел настроек">
+          <button type="button" data-pane="general" aria-pressed="true">Основные</button>
+          <button type="button" data-pane="tools" aria-pressed="false">Инструменты</button>
+          <button type="button" data-pane="skills" aria-pressed="false">Скиллы</button>
+          <button type="button" data-pane="guards" aria-pressed="false">Заплатки</button>
+        </nav>
+        <section class="settings-pane" id="settings-general">
+          <p class="hint">Хранятся в <code>data/settings.json</code>; адрес сервера и модель по умолчанию — в <code>.env</code>.</p>
+          <div class="settings" id="settings"></div>
+        </section>
+        <section class="settings-pane" id="settings-skills" hidden>
+          <p class="hint">Программы, которыми Мипо делает большие и повторяемые задачи: <code>SKILL.md</code> и один исполняемый <code>script.py</code>. Новые агент предлагает сам; папки — в <code>data/skills</code>.</p>
+          <div class="split">
+            <div class="list tree-list" id="skill-list"></div>
+            <div class="skill-card" id="skill-card"></div>
+          </div>
+        </section>
+        <section class="settings-pane" id="settings-tools" hidden>
+          <p class="hint">Встроенные инструменты агента — его доступ к проекту и системе. Действия, которые что-то меняют, вы подтверждаете карточкой. Новые возможности добавляются скиллами, а не инструментами.</p>
+          <div class="split">
+            <div class="list tree-list" id="tool-list"></div>
+            <div class="skill-card tool-card" id="tool-card"></div>
+          </div>
+        </section>
+        <section class="settings-pane" id="settings-guards" hidden>
+          <p class="hint">Заплатки для маленькой модели: каждая ловит свою типичную ошибку и просит модель исправиться. Сработавшая видна в логе хода строкой «Guard …». Файлы — в <code>meepo/agent/guards</code>.</p>
+          <div class="split">
+            <div class="list tree-list" id="guard-list"></div>
+            <div class="skill-card guard-card" id="guard-card"></div>
+          </div>
+        </section>
       </main>
     </div>
 

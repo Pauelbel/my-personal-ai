@@ -20,6 +20,18 @@ def test_settings_roundtrip_and_validation(tmp_path):
         assert client.get("/api/models").json() == ["fake"]
 
 
+def test_guards_list_with_source(tmp_path):
+    app = create_app(Env(data_path=tmp_path, default_model="m"), FakeLLM([]))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.put("/api/settings", json={"guards": {"language": False, "promise": True, "plan": True, "retry": True}})
+        guards = {item["name"]: item for item in client.get("/api/guards").json()}
+    assert set(guards) == {"language", "promise", "plan", "retry"}
+    language = guards["language"]
+    assert language["title"] == "Язык" and language["enabled"] is False and guards["plan"]["enabled"] is True
+    assert language["file"] == "meepo/agent/guards/language.py"
+    assert "def check(state)" in language["source"] and language["doc"].startswith("Guard «язык»")
+
+
 def test_models_probe_other_server(tmp_path):
     app = create_app(Env(data_path=tmp_path, default_model="m"), FakeLLM([]))
     with TestClient(app, base_url="http://127.0.0.1") as client:
@@ -27,3 +39,18 @@ def test_models_probe_other_server(tmp_path):
         # Порт 9 закрыт: сервер модели недоступен — понятная ошибка, а не падение.
         response = client.get("/api/models", params={"base_url": "http://127.0.0.1:9/v1"})
         assert response.status_code == 503 and "Не удалось подключиться" in response.json()["detail"]
+
+
+def test_tools_by_theme_with_browser_window(tmp_path):
+    app = create_app(Env(data_path=tmp_path, default_model="m"), FakeLLM([]))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.put("/api/settings", json={"browser_headed": False})
+        themes = {theme["id"]: theme for theme in client.get("/api/tools").json()}
+    assert list(themes)[:4] == ["files", "search", "command", "browser"]
+    files = {tool["name"]: tool for tool in themes["files"]["tools"]}
+    assert files["read_file"]["group"] is None and files["write_file"]["group"] == "files_write"
+    browser = themes["browser"]
+    assert browser["title"] == "Браузер" and browser["settings"] == {"browser_headed": False}
+    assert "open" in browser["tools"][0]["parameters"]["action"]
+    assert [item["file"] for item in browser["files"]] == ["meepo/agent/tools/browser.py", "meepo/agent/tools/snapshot.js"]
+    assert "settings" not in themes["files"]

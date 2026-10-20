@@ -9,7 +9,6 @@ import { initMemory, showMemory } from "./memory.js";
 import { initWikiPage, showWiki } from "./wiki.js";
 import { refreshWikiChat } from "./wikichat.js";
 import { showSettings } from "./settings.js";
-import { showSkills } from "./skills.js";
 import { makeResizable } from "./resize.js";
 import { renderSidebar as renderSidebarTree } from "./sidebar.js";
 import { el, fitInput, recall, remember } from "./util.js";
@@ -339,7 +338,6 @@ function showView(view) {
     void showWiki(toast);
     void refreshWikiChat();
   }
-  if (view === "skills") void showSkills(toast);
   if (view === "memory") void showMemory(toast);
   if (view === "settings") void showSettings(toast, (saved) => void showModel(saved));
 }

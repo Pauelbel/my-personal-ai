@@ -1,4 +1,4 @@
-"""Раздел «Скиллы»: список, карточка скилла, ручная правка файлов, секреты, история и откат.
+"""«Настройки» → «Скиллы»: список, карточка скилла, ручная правка файлов, секреты, история и откат.
 
 Значения секретов наружу не отдаются никогда: только «задан / не задан».
 """
@@ -46,7 +46,7 @@ def skill_detail(name: str, request: Request) -> dict:
     skill = _skill(request, name)
     installed = services.skills_env.packages()
     return {
-        "name": skill.name, "description": skill.description, "error": skill.error, "entry": skill.entry,
+        "name": skill.name, "description": skill.description, "error": skill.error,
         "timeout": skill.timeout, "files": services.skills.read_files(name),
         "requires": [{"spec": spec, "installed": installed.get(requirement_name(spec) or "")} for spec in skill.requires],
         "secrets": services.secrets.status(name, skill.secrets),

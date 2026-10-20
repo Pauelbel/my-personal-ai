@@ -1,7 +1,6 @@
 ---
 name: testcase-review
 description: Ревью любого Markdown-файла с тест-кейсами (и больших объёмов), с необязательной сверкой с документацией. Применять, когда просят проверить тест-кейсы.
-entry: scripts/main.py
 requires: []
 secrets: []
 timeout: 3600

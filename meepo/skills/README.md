@@ -1,6 +1,7 @@
 # skills
 
-Скиллы — папки в `data/skills/` с `SKILL.md` и `scripts/`.
+Скиллы — папки в `data/skills/` ровно из двух файлов: `SKILL.md` (что делает, аргументы, пакеты, секреты)
+и `script.py` — единственный исполняемый файл, весь код скилла в нём.
 
 - `registry.py` — список и разбор `SKILL.md`; `runner.py` — запуск скрипта (stdin/stdout/stderr, таймаут).
 - `env.py` — общее venv `data/skills-env/`; `secrets.py` — значения секретов вне папки скилла.
