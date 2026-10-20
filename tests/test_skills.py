@@ -109,11 +109,12 @@ def test_syntax_error_and_missing_entry(harness):
     assert "Нет файла entry scripts/x.py" in second
 
 
-def test_run_requires_read_first(harness):
-    h = with_env(harness([{"calls": [("run_skill", {"name": "echo"})]}, "Ок."]))
+def test_run_without_read_skill(harness):
+    # Чтение скилла — совет в промпте, а не условие: верный первый вызов не отклоняется.
+    h = with_env(harness([{"calls": [("run_skill", {"name": "echo", "args": {"x": 1}})]}, "Готово."]))
     h.services.skills.write("echo", {"SKILL.md": SKILL_MD, "scripts/main.py": ECHO}, replace=False)
-    h.turn("запусти echo")
-    assert "Сначала прочитай скилл" in [m for m in h.messages() if m["role"] == "tool"][0]["content"]
+    h.turn("запусти echo", [YES])
+    assert 'аргументы: {"x": 1}' in [m for m in h.messages() if m["role"] == "tool"][0]["content"]
 
 
 def test_timeout_kills_process_tree(tmp_path):

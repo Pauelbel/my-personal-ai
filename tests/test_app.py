@@ -54,3 +54,22 @@ def test_chat_api_turn_stream(tmp_path):
         # Изменяющий запрос со сторонней страницы отклоняется.
         assert client.post("/api/sessions", json={"project_id": project["id"]},
                            headers={"Origin": "http://evil.example"}).status_code == 403
+
+
+def test_files_api(tmp_path):
+    project_dir = tmp_path / "project"
+    (project_dir / "docs").mkdir(parents=True)
+    (project_dir / "docs" / "a.md").write_text("# A\n", encoding="utf-8")
+    (project_dir / "bin.dat").write_bytes(b"\x00\x01")
+    with TestClient(create_app(Env(data_path=tmp_path / "data")), base_url="http://127.0.0.1") as client:
+        project = client.post("/api/projects", json={"path": str(project_dir)}).json()
+        base = f"/api/projects/{project['id']}/files"
+        assert [(e["name"], e["is_dir"]) for e in client.get(base).json()] == [("docs", True), ("bin.dat", False)]
+        assert client.get(f"{base}/content", params={"path": "docs/a.md"}).json()["content"] == "# A\n"
+        assert client.get(f"{base}/content", params={"path": "bin.dat"}).status_code == 415
+        assert client.get(f"{base}/content", params={"path": "../x"}).status_code == 400
+        assert client.put(f"{base}/content", params={"path": "docs/a.md"}, json={"content": "# Б\n"}).status_code == 200
+        assert client.post(f"{base}/move", params={"path": "docs/a.md"}, json={"new_path": "b.md"}).json()["path"] == "b.md"
+        assert (project_dir / "b.md").read_text(encoding="utf-8") == "# Б\n"
+        assert client.delete(base, params={"path": "docs"}).status_code == 204 and not (project_dir / "docs").exists()
+        assert client.delete(base, params={"path": "."}).status_code == 400

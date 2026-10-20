@@ -55,6 +55,11 @@ export const api = {
   createProject: (name, path) => request("/projects", json("POST", { name, path })),
   updateProject: (id, name, path) => request(`/projects/${id}`, json("PUT", { name, path })),
   deleteProject: (id) => request(`/projects/${id}`, { method: "DELETE" }),
+  files: (projectId, path) => request(`/projects/${projectId}/files?${q({ path })}`),
+  file: (projectId, path) => request(`/projects/${projectId}/files/content?${q({ path })}`),
+  saveFile: (projectId, path, content) => request(`/projects/${projectId}/files/content?${q({ path })}`, json("PUT", { content })),
+  moveFile: (projectId, path, newPath) => request(`/projects/${projectId}/files/move?${q({ path })}`, json("POST", { new_path: newPath })),
+  deleteFile: (projectId, path) => request(`/projects/${projectId}/files?${q({ path })}`, { method: "DELETE" }),
   folders: (path) => request(`/folders${path ? `?${q({ path })}` : ""}`),
 
   sessions: () => request("/sessions"),
@@ -95,5 +100,6 @@ export const api = {
 
   settings: () => request("/settings"),
   saveSettings: (fields) => request("/settings", json("PUT", fields)),
-  models: () => request("/models"),
+  // Модели сервера: текущего или по адресу (проверка до сохранения настроек).
+  models: (baseUrl = "") => request(`/models${baseUrl ? `?${q({ base_url: baseUrl })}` : ""}`),
 };

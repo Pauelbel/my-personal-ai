@@ -183,7 +183,9 @@ def summary(root: Path, start: Path, pages: list[Path], results: list[Result], s
         lines.append("Новых страниц для генерации нет." if not remaining else "Ничего не сгенерировано.")
     if done:
         target = done[0].output if len(done) == 1 else f"{OUTPUT_DIR}"
-        lines.append(f"\nДальше проверь кейсы скиллом testcase-review: {json.dumps({'cases': target, 'docs': section}, ensure_ascii=False)}")
+        # Ревью — отдельное решение пользователя: модель его только предлагает, а не запускает сама.
+        lines.append("\nПредложи пользователю проверить кейсы скиллом testcase-review с аргументами "
+                     f"{json.dumps({'cases': target, 'docs': section}, ensure_ascii=False)} — запускай, только если он согласится.")
     return "\n".join(lines)
 
 

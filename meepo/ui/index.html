@@ -29,8 +29,8 @@
       <nav class="tabs" aria-label="Разделы">
         <button type="button" data-view="chat" aria-pressed="true">Чат</button>
         <button type="button" data-view="wiki" aria-pressed="false">Вики</button>
-        <button type="button" data-view="skills" aria-pressed="false">Скиллы</button>
         <button type="button" data-view="memory" aria-pressed="false">Память</button>
+        <button type="button" data-view="skills" aria-pressed="false">Скиллы</button>
         <button type="button" data-view="settings" aria-pressed="false">Настройки</button>
       </nav>
       <div class="topbar-right">
@@ -47,7 +47,11 @@
         <div class="nav-tree" id="session-list"></div>
       </aside>
 
-      <main class="view chat-pane" id="view-chat">
+      <main class="view workspace" id="view-chat">
+        <section class="chat-pane" aria-label="Чат">
+        <div class="chat-bar">
+          <button class="ghost small files-toggle" id="files-open" type="button" title="Показать файлы проекта рядом с чатом">Файлы ‹</button>
+        </div>
         <div class="messages" id="messages" aria-live="polite"></div>
         <div class="chat-bottom">
           <section class="chat-cards" id="cards" aria-label="Ждёт вашего решения" hidden></section>
@@ -55,7 +59,7 @@
             <p class="composer-retry" id="composer-error" hidden></p>
             <div class="composer-box frame">
               <div class="frame-head">
-                <span class="frame-left"><span class="model-name" id="model-name" title="Модель — в настройках"></span></span>
+                <span class="frame-left"><select id="model-select" aria-label="Модель" title="Модель для всех сессий; сервер — в настройках"></select></span>
                 <span class="usage" id="usage"></span>
               </div>
               <div class="composer-row">
@@ -70,6 +74,28 @@
             </div>
           </form>
         </div>
+        </section>
+        <div class="resizer" id="files-resizer" aria-label="Ширина чата"></div>
+        <section class="files-panel" id="files-panel" aria-label="Файлы проекта">
+          <div class="files-panel-head">
+            <span class="hint files-root" id="files-root"></span>
+            <button class="ghost icon" id="files-close" type="button" title="Скрыть файлы">»</button>
+          </div>
+          <div class="split files" id="files-split">
+            <div class="files-tree" id="files-tree" aria-label="Файлы проекта"></div>
+            <div class="resizer" id="files-tree-resizer" aria-label="Ширина дерева файлов"></div>
+            <div class="editor files-pane">
+              <div class="editor-actions">
+                <span class="files-path" id="files-path"></span>
+                <span class="files-actions"><span class="hint" id="files-status"></span>
+                  <button type="button" id="files-source" hidden>‹› Исходник</button>
+                  <button type="button" id="files-edit" hidden>✎ Править</button>
+                  <button class="primary" type="button" id="files-save" hidden>Сохранить</button></span>
+              </div>
+              <div class="files-body" id="files-body"><p class="hint files-note">Выберите файл слева.</p></div>
+            </div>
+          </div>
+        </section>
       </main>
 
       <main class="view wiki-view" id="view-wiki" hidden>

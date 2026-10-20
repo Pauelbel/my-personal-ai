@@ -5,6 +5,9 @@ import { el } from "./util.js";
 
 const $ = (selector) => document.querySelector(selector);
 
+// Локальные серверы с OpenAI-совместимым API: подставляются выбором, свой адрес — вручную.
+const SERVERS = { lmstudio: ["LM Studio", "http://127.0.0.1:1234/v1"], ollama: ["Ollama", "http://127.0.0.1:11434/v1"] };
+
 const GUARDS = {
   language: ["Русский язык", "Ответ не по-русски (а вы не просили другой язык) — модель переписывает его. До 3 раз за ход."],
   promise: ["Пообещал и не сделал", "Ответ кончается обещанием действия без вызова инструмента — модель делает шаг. До 3 раз за ход."],
@@ -33,20 +36,57 @@ function input(type, value, attributes = {}) {
   return node;
 }
 
-function render(settings, toast, onSaved) {
-  const server = input("text", settings.llm_base_url, { placeholder: settings.env_base_url });
-  const model = input("text", settings.model, { placeholder: settings.env_model || "id модели" });
-  model.setAttribute("list", "model-options");
-  const options = el("datalist");
-  options.id = "model-options";
-  const loadModels = async () => {
+function option(value, label) {
+  return Object.assign(el("option"), { value, textContent: label });
+}
+
+// Сервер: из .env, LM Studio, Ollama или свой адрес; модель — из списка моделей выбранного сервера.
+function modelBlock(settings) {
+  const kind = el("select");
+  kind.append(option("env", `Из .env — ${settings.env_base_url}`),
+    ...Object.entries(SERVERS).map(([key, [name, url]]) => option(key, `${name} — ${url}`)), option("custom", "Другой адрес…"));
+  const preset = Object.entries(SERVERS).find(([, [, url]]) => url === settings.llm_base_url.replace(/\/$/, ""));
+  kind.value = !settings.llm_base_url ? "env" : preset ? preset[0] : "custom";
+  const custom = input("text", kind.value === "custom" ? settings.llm_base_url : "", { placeholder: "http://адрес:порт/v1" });
+  const check = el("button", "", "Проверить подключение");
+  check.type = "button";
+  const probe = el("span", "hint");
+  const model = el("select");
+  const url = () => (kind.value === "env" ? "" : kind.value === "custom" ? custom.value.trim() : SERVERS[kind.value][1]);
+  const load = async () => {
+    custom.hidden = kind.value !== "custom";
+    const chosen = model.value || settings.model;
+    probe.textContent = "Проверяю…";
+    probe.className = "hint";
+    let names = [];
     try {
-      options.replaceChildren(...(await api.models()).map((name) => Object.assign(el("option"), { value: name })));
-      status.textContent = "";
+      names = await api.models(url() || settings.env_base_url);
+      probe.textContent = `✓ Сервер доступен, моделей: ${names.length}`;
+      probe.className = "ok";
     } catch (error) {
-      status.textContent = error.message;
+      probe.textContent = `✕ ${error.message}`;
+      probe.className = "error";
     }
+    model.replaceChildren(option("", `Из .env — ${settings.env_model || "не задана"}`), ...names.map((name) => option(name, name)));
+    // Сохранённой модели нет на этом сервере: показываем это, а не подставляем молча другую.
+    if (chosen && !names.includes(chosen)) model.append(option(chosen, `${chosen} — нет на сервере`));
+    model.value = chosen;
   };
+  kind.addEventListener("change", load);
+  check.addEventListener("click", load);
+  custom.addEventListener("change", load);
+  const server = el("div", "setting-row");
+  server.append(kind, check);
+  const nodes = [
+    field("Сервер модели", server, "LM Studio или Ollama на этом компьютере; адрес — с /v1 на конце."), custom, probe,
+    field("Модель", model, `Сейчас: ${settings.active_model || "не выбрана"}. Её же можно сменить над полем ввода чата.`),
+  ];
+  void load();
+  return { nodes, values: () => ({ llm_base_url: url(), model: model.value }) };
+}
+
+function render(settings, toast, onSaved) {
+  const block = modelBlock(settings);
   const windowSize = input("number", settings.default_context_tokens, { min: 1024, step: 1024 });
   const rounds = input("number", settings.max_tool_rounds, { min: 1, max: 200 });
   const memory = input("number", settings.memory_auto_update_messages, { min: 0 });
@@ -58,7 +98,7 @@ function render(settings, toast, onSaved) {
   save.addEventListener("click", async () => {
     try {
       const saved = await api.saveSettings({
-        llm_base_url: server.value.trim(), model: model.value.trim(),
+        ...block.values(),
         default_context_tokens: Number(windowSize.value), max_tool_rounds: Number(rounds.value),
         memory_auto_update_messages: Number(memory.value), browser_headed: headed.checked,
         guards: Object.fromEntries(Object.entries(guards).map(([name, box]) => [name, box.checked])),
@@ -80,9 +120,7 @@ function render(settings, toast, onSaved) {
   headedRow.append(headed, el("span", "setting-name", "Показывать окно браузера"), el("span", "hint", "Выключено — браузер работает без окна (headless)."));
   $("#settings").replaceChildren(
     el("h3", "", "Модель"),
-    field("Сервер модели", server, `Пусто — из .env: ${settings.env_base_url}. LM Studio — http://127.0.0.1:1234/v1, Ollama — http://127.0.0.1:11434/v1.`),
-    field("Модель", model, `Пусто — из .env: ${settings.env_model || "не задана"}. Сейчас: ${settings.active_model || "не выбрана"}.`),
-    options,
+    ...block.nodes,
     field("Окно по умолчанию, токенов", windowSize, "Если сервер модели сам не сообщает размер окна."),
     field("Лимит шагов за ход", rounds, "Дальше — карточка «продолжить или остановить»."),
     el("h3", "", "Заплатки для маленькой модели"),
@@ -94,5 +132,4 @@ function render(settings, toast, onSaved) {
     field("Обновлять память каждые N сообщений", memory, "0 — только вручную, кнопкой в разделе «Память»."),
     actions,
   );
-  void loadModels();
 }

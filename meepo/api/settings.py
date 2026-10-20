@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Request
 
-from meepo.llm.client import LLMError
+from meepo.llm.client import LLMClient, LLMError
 from meepo.settings import UserSettings, default_guards
 
 router = APIRouter(prefix="/api")
@@ -54,8 +54,21 @@ def put_settings(body: dict, request: Request) -> dict:
 
 
 @router.get("/models")
-async def list_models(request: Request) -> list[str]:
+async def list_models(request: Request, base_url: str = "") -> list[str]:
+    """Модели сервера: текущего или по адресу base_url — чтобы проверить сервер до сохранения настроек."""
+    services = request.app.state.services
+    current = (services.settings().llm_base_url or services.env.llm_base_url).rstrip("/")
+    if not base_url or base_url.rstrip("/") == current:
+        client, own = services.llm(), False
+    elif base_url.startswith(("http://", "https://")):
+        client, own = LLMClient(base_url, api_key=services.env.llm_api_key, timeout=10,
+                                verify_ssl=services.env.llm_verify_ssl), True
+    else:
+        raise HTTPException(400, "Адрес сервера модели — http://… или https://…, с /v1 на конце")
     try:
-        return await request.app.state.services.llm().list_models()
+        return await client.list_models()
     except LLMError as exc:
         raise HTTPException(503, str(exc)) from exc
+    finally:
+        if own:
+            await client.close()

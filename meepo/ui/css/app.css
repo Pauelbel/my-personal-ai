@@ -68,7 +68,17 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 /* Раскладка */
 .layout { display: flex; flex: 1; min-height: 0; }
 .view { flex: 1; min-width: 0; min-height: 0; }
+/* Рабочее место: чат слева, файлы проекта справа; граница тянется, файлы можно скрыть. Ширина колонки,
+   которую тянут разделителем, нужна только самой сетке: ненаследуемая, чтобы перетаскивание не пересчитывало всё внутри. */
+@property --chat-w { syntax: "*"; inherits: false; }
+#view-chat { display: grid; grid-template-columns: var(--chat-w, minmax(0, 45fr)) 0 minmax(0, 55fr); min-height: 0; }
+#view-chat.files-hidden { grid-template-columns: minmax(0, 1fr); }
+#view-chat.files-hidden > .resizer, #view-chat.files-hidden > .files-panel { display: none; }
 .chat-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* Полоса над чатом: кнопка «Файлы» справа. */
+.chat-bar { display: flex; align-items: center; gap: 10px; flex: none; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.chat-bar:has(.files-toggle[hidden]) { display: none; }
+.files-toggle { flex: none; margin-left: auto; color: var(--muted); }
 /* Проекты и сессии — навигация, а не дерево терминала: крупные строки, цветной значок проекта,
    открытая сессия — плашкой. Сессии выровнены по названию проекта. */
 .sidebar {
@@ -644,3 +654,71 @@ button.chip.on, button.chip.on:hover:not(:disabled) { background: var(--accent-2
   .wiki-main { overflow: visible; }
   .wiki-chat { height: 75vh; border-right: 0; border-bottom: 1px solid var(--line); }
 }
+
+/* Выбор модели на кромке поля ввода: без рамки, своя стрелка — у нативной длинное название залезает под неё. */
+#model-select {
+  min-width: 0; max-width: 280px; border: 0; border-radius: 4px; padding: 0 16px 0 2px;
+  font: 600 12px var(--mono); color: var(--fg); cursor: pointer; appearance: none; -webkit-appearance: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: transparent no-repeat right 4px center / 8px 5px
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23888'/%3E%3C/svg%3E");
+}
+#model-select:hover { background-color: var(--surface-2); }
+#model-select option { background: var(--surface); color: var(--fg); }
+.setting-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.setting-row select { flex: 1; min-width: 220px; }
+.settings select { padding: 6px 8px; }
+.settings .ok { color: var(--ok); font-size: 13px; }
+.settings > .error { margin: 0; }
+@media (max-width: 900px) { #model-select { max-width: 150px; } }
+
+/* Файлы — панель справа от чата: дерево | файл, граница между ними тоже тянется. */
+.files-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
+.files-panel-head { display: flex; align-items: center; gap: 8px; flex: none; padding: 4px 6px 4px 12px; border-bottom: 1px solid var(--line); }
+.files-root { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split.files { flex: 1; min-height: 0; margin: 0; gap: 0; height: auto; grid-template-columns: var(--tree-w, 220px) 0 minmax(0, 1fr); }
+.split.files .files-pane { padding: 8px 10px 10px; }
+.files-tree { border-right: 1px solid var(--line); overflow: auto; padding: 6px 4px 6px 6px; }
+.code-changed { position: absolute; left: 0; right: 0; pointer-events: none; background: color-mix(in srgb, var(--ok) 18%, transparent); box-shadow: inset 3px 0 var(--ok); }
+.files-markdown .line-changed { background: color-mix(in srgb, var(--ok) 16%, transparent); box-shadow: -8px 0 0 color-mix(in srgb, var(--ok) 16%, transparent); }
+.files-tree.drop, .files-tree .trow.drop { outline: 1px dashed var(--accent); outline-offset: -1px; }
+.files-pane { min-width: 0; min-height: 0; }
+.files-path { display: flex; min-width: 0; font-size: 13px; white-space: nowrap; }
+.files-dir { color: var(--muted); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.files-path strong { flex: none; }
+.files-sep { margin: 0 .3em; }
+.files-actions { display: flex; gap: 6px; align-items: center; flex: none; }
+.files-body { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.files-body.editing { overflow: hidden; }
+.files-body .files-note { padding: 10px; margin: 0; }
+.code-lines { position: relative; display: flex; min-width: max-content; }
+.code-gutter {
+  position: sticky; left: 0; z-index: 1; margin: 0; padding: 10px 10px 10px 12px; flex: none; text-align: right; user-select: none;
+  font: 13px/1.5 var(--mono); color: var(--muted); background: var(--surface); border-right: 1px solid var(--line); opacity: .8;
+}
+.file-view { margin: 0; padding: 10px 12px; white-space: pre; font-family: var(--mono); font-size: 13px; line-height: 1.5; tab-size: 4; }
+.code-mark { position: absolute; left: 0; right: 0; pointer-events: none; background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 3px 0 var(--accent); }
+.code-mark:not([style]) { display: none; }
+.files-markdown { padding: 8px 20px 20px; max-width: 980px; min-width: 0; flex: 1; }
+/* Широкая таблица в файле прокручивается всей панелью: у своей прокрутки полоса стояла бы под последней строкой,
+   за краем экрана, и правые колонки казались бы обрезанными. */
+.reader.files-markdown .markdown-table-container { overflow: visible; }
+.md-lines { position: relative; display: flex; min-height: 100%; }
+.md-gutter {
+  position: relative; flex: none; width: 3.6em; user-select: none; border-right: 1px solid var(--line); background: var(--surface);
+  font: 12px/20px var(--mono); color: var(--muted); opacity: .8;
+}
+.md-gutter span { position: absolute; right: 10px; }
+.files-markdown .line-mark { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: -8px 0 0 color-mix(in srgb, var(--accent) 16%, transparent); }
+.files-markdown pre { background: var(--bg); }
+.files-editor { display: block; width: 100%; height: 100%; min-height: 0; border: 0; border-radius: var(--radius); resize: none; font-family: var(--mono); font-size: 13px; line-height: 1.5; tab-size: 4; padding: 10px 12px; }
+.files-tree { font: 13px/1.65 var(--mono); }
+@media (max-width: 900px) {
+  /* Узкий экран: файлы — поверх чата, закрываются кнопкой » в их шапке. */
+  #view-chat { grid-template-columns: minmax(0, 1fr); }
+  .files-panel { position: fixed; inset: var(--topbar) 0 0 0; z-index: 15; border-left: 0; }
+  .split.files { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .files-tree { border-right: 0; border-bottom: 1px solid var(--line); max-height: 30vh; }
+}
+/* Настройки — одной колонкой по центру страницы: заголовок, пояснение и поля на одной оси. */
+#view-settings > * { width: 100%; max-width: 720px; margin-left: auto; margin-right: auto; }

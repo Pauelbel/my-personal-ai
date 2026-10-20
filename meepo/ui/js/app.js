@@ -1,7 +1,8 @@
 // Точка входа интерфейса: проекты и сессии слева, чат с идущим ходом, карточки подтверждения, «Стоп».
 import { api } from "./api.js";
 import { renderCard } from "./cards.js";
-import { compact, renderMessages, scrollDown } from "./chat.js";
+import { markPaths, renderMessages, scrollDown } from "./chat.js";
+import { initFiles, openPath, revealChange, showFiles } from "./files.js";
 import { Live } from "./live.js";
 import { initProjects, openProject } from "./projects.js";
 import { initMemory, showMemory } from "./memory.js";
@@ -9,6 +10,7 @@ import { initWikiPage, showWiki } from "./wiki.js";
 import { refreshWikiChat } from "./wikichat.js";
 import { showSettings } from "./settings.js";
 import { showSkills } from "./skills.js";
+import { makeResizable } from "./resize.js";
 import { renderSidebar as renderSidebarTree } from "./sidebar.js";
 import { el, fitInput, recall, remember } from "./util.js";
 
@@ -160,6 +162,11 @@ async function run(sessionId, open) {
         state.card = null;
         renderCards();
       }
+      // Агент записал или поправил файл — во вкладке «Файлы» он открыт с подсвеченными изменениями.
+      if (event.type === "tool_result" && !event.is_error && event.meta?.path) {
+        setFilesPanel(true);
+        void revealChange(event.meta.path);
+      }
       if (event.type === "error") showError(event.message);
       else if (event.type !== "done") {
         const near = isNearBottom();
@@ -230,6 +237,7 @@ function render({ running = Boolean(state.live) } = {}) {
   const box = $("#messages");
   const live = state.live?.node;
   renderMessages(box, state.messages, { running });
+  markPaths(box);
   if (live) box.append(live);
   renderChrome();
   renderSidebar();
@@ -240,9 +248,31 @@ function renderCards() {
   renderCard($("#cards"), state.card, decide);
 }
 
+// Файлы проекта справа от чата: открыта ли панель, запоминается; дерево перечитывается, когда панель открыли
+// или сменился проект.
+let filesOpen = recall("files-panel") !== "closed";
+let filesProject = null;
+
+function setFilesPanel(open) {
+  filesOpen = open;
+  remember("files-panel", open ? "open" : "closed");
+  syncFilesPanel(projectOf(current()));
+}
+
+function syncFilesPanel(project) {
+  const shown = Boolean(project) && filesOpen;
+  $("#view-chat").classList.toggle("files-hidden", !shown);
+  $("#files-open").hidden = !project || filesOpen;
+  const key = shown ? project.id : null;
+  if (key === filesProject) return;
+  filesProject = key;
+  if (shown) void showFiles(project);
+}
+
 function renderChrome() {
   const session = current();
   const project = projectOf(session);
+  syncFilesPanel(project);
   $("#project-chip").textContent = project?.name ?? "";
   $("#project-chip").hidden = !project;
   $("#session-title").textContent = session?.title ?? "—";
@@ -256,26 +286,46 @@ function renderChrome() {
   $("#input").disabled = !session;
 }
 
-// Заполненность окна модели по последнему запросу: «контекст ≈3,2k из 8k».
+// Заполненность окна модели по последнему запросу: шкала из шести делений, как в терминале, процент и скорость.
 function renderUsage(session) {
-  const node = $("#usage");
-  const used = session?.context_tokens;
-  const size = session?.context_window;
-  if (!used || !size) {
-    node.replaceChildren();
+  const usage = $("#usage");
+  if (!session?.context_tokens || !session.context_window) {
+    usage.replaceChildren();
+    usage.title = "";
     return;
   }
-  const share = used / size;
-  const text = el("span", `meter-text${share > 0.9 ? " full" : share > 0.7 ? " warn" : ""}`, `≈${compact(used)} из ${compact(size)}`);
-  node.replaceChildren(el("span", "usage-label", "контекст"), text);
-  node.title = `Последний запрос занял ≈${used} токенов из окна модели ${size}. Не влезает — старые результаты `
-    + "инструментов заменяются пометкой, затем выпадают старые сообщения.";
+  const share = Math.min(session.context_tokens / session.context_window, 1);
+  // Хотя бы одно деление закрашено, пока контекст не пуст.
+  const cells = Math.max(Math.round(share * 6), 1);
+  const meter = el("span", `meter-text${share >= 0.85 ? " full" : share >= 0.6 ? " warn" : ""}`, "▰".repeat(cells) + "▱".repeat(6 - cells));
+  usage.title = `Последний запрос занял ≈${session.context_tokens} из ${session.context_window} токенов окна модели. `
+    + "Не влезает — старые результаты инструментов заменяются пометкой, затем выпадают старые сообщения.";
+  usage.replaceChildren(el("span", "usage-label", "контекст"), meter, el("span", "", `${Math.round(share * 100)}%`));
+  if (session.tokens_per_second) usage.append(el("span", "speed", `· ${Math.round(session.tokens_per_second)} ток/с`));
 }
 
-async function showModel() {
+// Модель над полем ввода: список моделей текущего сервера; выбор сохраняется в настройках и действует со следующего хода.
+async function showModel(settings = null) {
+  const select = $("#model-select");
   try {
-    const settings = await api.settings();
-    $("#model-name").textContent = settings.active_model || "модель не выбрана";
+    settings ??= await api.settings();
+    const names = await api.models().catch(() => []);
+    const active = settings.active_model;
+    select.replaceChildren(...names.map((name) => Object.assign(el("option"), { value: name, textContent: name })));
+    if (active && !names.includes(active)) {
+      select.append(Object.assign(el("option"), { value: active, textContent: `${active} — нет на сервере` }));
+    }
+    if (!active) select.prepend(Object.assign(el("option"), { value: "", textContent: "модель не выбрана" }));
+    select.value = active || "";
+    select.title = `Сервер: ${settings.active_base_url}${names.length ? "" : " — недоступен"}`;
+  } catch (error) {
+    toast(error);
+  }
+}
+
+async function changeModel() {
+  try {
+    await showModel(await api.saveSettings({ model: $("#model-select").value }));
   } catch (error) {
     toast(error);
   }
@@ -291,7 +341,7 @@ function showView(view) {
   }
   if (view === "skills") void showSkills(toast);
   if (view === "memory") void showMemory(toast);
-  if (view === "settings") void showSettings(toast, (saved) => { $("#model-name").textContent = saved.active_model || "модель не выбрана"; });
+  if (view === "settings") void showSettings(toast, (saved) => void showModel(saved));
 }
 
 function showTheme() {
@@ -300,6 +350,20 @@ function showTheme() {
 
 function bind() {
   $("#composer").addEventListener("submit", send);
+  $("#model-select").addEventListener("change", changeModel);
+  initFiles(toast);
+  makeResizable($("#files-resizer"), { grid: $("#view-chat"), variables: ["--chat-w"], min: 360 });
+  makeResizable($("#files-tree-resizer"), { grid: $("#files-split"), variables: ["--tree-w"], min: 140, max: 480 });
+  $("#files-open").addEventListener("click", () => setFilesPanel(true));
+  $("#files-close").addEventListener("click", () => setFilesPanel(false));
+  // Путь в ответе агента открывает файл в панели справа.
+  $("#messages").addEventListener("click", (event) => {
+    const link = event.target.closest(".path-link");
+    if (!link) return;
+    event.preventDefault();
+    setFilesPanel(true);
+    void openPath(link.dataset.path.replace(/^\.\//, ""), Number(link.dataset.line) || null);
+  });
   $("#input").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();

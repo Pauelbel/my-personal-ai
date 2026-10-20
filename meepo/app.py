@@ -15,6 +15,7 @@ from meepo.agent.tools.browser import TOOLS as BROWSER_TOOLS
 from meepo.agent.tools.browser import BrowserPool
 from meepo.agent.turns import TurnHub
 from meepo.api import chat
+from meepo.api import files as files_api
 from meepo.api import memory as memory_api
 from meepo.api import wiki as wiki_api
 from meepo.api import settings as settings_api
@@ -139,6 +140,7 @@ def create_app(env: Env | None = None, llm=None) -> FastAPI:
         return response
 
     app.include_router(chat.router)
+    app.include_router(files_api.router)
     app.include_router(settings_api.router)
     app.include_router(skills_api.router)
     app.include_router(memory_api.router)

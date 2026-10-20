@@ -284,6 +284,37 @@ export function renderMarkdown(target, text, withTools = true, images = () => nu
   if (withTools) renderDiagrams(target);
 }
 
+// Похоже ли на путь: с «/» — любое, без — имя файла с известным расширением. «:42» в конце — строка.
+const FILE_EXTENSIONS = new Set(("md markdown txt py js mjs cjs ts tsx jsx json yaml yml toml ini cfg conf env xml html htm css scss "
+  + "sh bash ps1 sql csv log go rs java kt c h cpp hpp cs rb php vue lock").split(" "));
+
+function pathOf(text) {
+  const value = text.trim();
+  if (!value || value.length > 300 || /[\n<>{}()=,;|*?"'`]|:\/\//.test(value) || value.startsWith("-")) return null;
+  const [, raw, line] = /^(.*?)(?::(\d+))?(?::\d+)?$/.exec(value);
+  const path = raw.replace(/\/+$/, "");
+  if (!path) return null;
+  if (!path.includes("/")) {
+    const extension = /\.([A-Za-z0-9]+)$/.exec(path)?.[1]?.toLowerCase();
+    if (/\s/.test(path) || !FILE_EXTENSIONS.has(extension)) return null;
+  }
+  return { path, line: line ? Number(line) : null };
+}
+
+export function markPath(node, text) {
+  const found = pathOf(text);
+  if (!found) return;
+  node.classList.add("path-link");
+  node.dataset.path = found.path;
+  if (found.line) node.dataset.line = String(found.line);
+  node.title = `Открыть во вкладке «Файлы»${found.line ? `, строка ${found.line}` : ""}`;
+}
+
+// Пути в `коде` ответов — ссылки на вкладку «Файлы»: щелчок ловит app.js по классу path-link.
+export function markPaths(root) {
+  for (const code of root.querySelectorAll(".msg :not(pre) > code, .step-target")) markPath(code, code.textContent);
+}
+
 export function scrollDown(container) {
   container.scrollTop = container.scrollHeight;
 }

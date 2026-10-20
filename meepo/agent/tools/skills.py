@@ -44,9 +44,6 @@ def _skill(ctx: ToolContext, name: str):
     return skill
 
 
-def _session_list(ctx: ToolContext, key: str) -> list:
-    return list(ctx.sessions.get(ctx.session_id).get(key) or [])
-
 
 # ---------- read_skill ----------
 
@@ -64,9 +61,6 @@ def read_skill(args: dict, ctx: ToolContext) -> ToolResult:
                                                                   "поставятся при запуске)" if missing else "")]
     if secrets:
         lines.append("Секреты: " + ", ".join(f"{name} — {'задан' if ok else 'НЕ ЗАДАН'}" for name, ok in secrets.items()))
-    read = _session_list(ctx, "skills_read")
-    if skill.name not in read:
-        ctx.sessions.update(ctx.session_id, skills_read=[*read, skill.name])
     return ToolResult("\n".join(lines) + "\n\n" + skill.text)
 
 
@@ -102,7 +96,6 @@ async def create_skill(args: dict, ctx: ToolContext) -> ToolResult:
     files = _check_new(args, ctx)
     installed = await _install(ctx, args.get("requires", []))
     skill = _registry(ctx).write(args["name"], files, replace=False)
-    ctx.sessions.update(ctx.session_id, skills_read=[*_session_list(ctx, "skills_read"), skill.name])
     return ToolResult(f"Скилл {skill.name} создан." + (f" Установлены пакеты: {installed}." if installed else "")
                       + _secrets_note(ctx, skill) + " Теперь запусти его на задаче пользователя через run_skill.")
 
@@ -175,8 +168,6 @@ def _runnable(args: dict, ctx: ToolContext):
     skill = _skill(ctx, args["name"])
     if skill.error:
         raise ValueError(f"Скилл {skill.name} сломан: {skill.error}. Прочитай его и исправь через update_skill")
-    if skill.name not in _session_list(ctx, "skills_read"):
-        raise ValueError("Сначала прочитай скилл через read_skill — там его аргументы")
     empty = [name for name, ok in ctx.services["secrets"].status(skill.name, skill.secrets).items() if not ok]
     if empty:
         raise ValueError(f"Скилл {skill.name} не настроен: не заданы {', '.join(empty)}. Попроси пользователя заполнить "

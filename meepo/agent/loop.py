@@ -215,9 +215,12 @@ class Agent:
             state.note(f"Сжатие контекста под окно {state.window}: {compacted}")
         state.note(f"Запрос к модели {state.model} · раунд {state.rounds + 1}" + ("" if tools else " · без инструментов"))
         started = time.perf_counter()
+        first = None
         state.partial = ""
         reply = None
         async for item in self.llm().stream(state.model, messages, tools):
+            # Скорость генерации считается от первого токена: ожидание ответа сервера в неё не входит.
+            first = first or time.perf_counter()
             if isinstance(item, Reply):
                 reply = item
             elif item[0] == "delta":
@@ -236,7 +239,9 @@ class Agent:
         if reply.input_tokens and estimated:
             state.scale = min(max(reply.input_tokens / estimated, 0.25), 1.5)
         used = reply.input_tokens or int(estimated * state.scale)
-        self.sessions.update(state.session_id, context_tokens=used, context_window=state.window)
+        generating = time.perf_counter() - (first or started)
+        speed = round(reply.output_tokens / generating, 1) if reply.output_tokens and generating > 0.05 else None
+        self.sessions.update(state.session_id, context_tokens=used, context_window=state.window, tokens_per_second=speed)
         return reply
 
     async def _run_calls(self, state: TurnState, ctx: ToolContext, reply: Reply) -> None:
