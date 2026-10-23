@@ -17,7 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from meepo.agent import context, guards
+from meepo.agent import context
+from meepo.agent.guards import registry as guards
 from meepo.agent.approvals import Approvals
 from meepo.agent.prompt import system_prompt
 from meepo.agent.tools.base import Tool, ToolContext, ToolResult, check_arguments, describe_parameters

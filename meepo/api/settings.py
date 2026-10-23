@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
-from meepo.agent import guards
+from meepo.agent.guards import registry as guards
 from meepo.llm.client import LLMClient, LLMError
 from meepo.settings import ROOT
 from meepo.settings import UserSettings, default_guards
