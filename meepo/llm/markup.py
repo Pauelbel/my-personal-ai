@@ -6,6 +6,7 @@
   LM Studio иногда оставляет его в рассуждениях или ответе. recover_tool_calls достаёт такие вызовы,
   если сервер не вернул ни одного настоящего.
 - Вызов голым JSON в конце ответа: recover_json_call узнаёт инструмент по схеме его параметров.
+- Короткая команда `browser open https://…`: некоторые небольшие модели печатают её как текст вместо tool call.
 
 Вызов здесь — словарь {"id", "name", "arguments"}, arguments — строка JSON, как в OpenAI API.
 """
@@ -23,6 +24,7 @@ GEMMA_STRING = re.compile(r'<\|"\|>(.*?)<\|"\|>', re.S)
 BARE_KEY = re.compile(r'([{,]\s*)([A-Za-z_][\w-]*)\s*:')
 # Мусор перед JSON вместо служебного токена вызова: символы не латиницы и не кириллицы («पायल»).
 FOREIGN_TAIL = re.compile(r"[^\s\x00-ɏЀ-ӿ -⁯]+\s*$")
+PLAIN_BROWSER_OPEN = re.compile(r"^\s*browser\s+open\s+(https?://\S+)\s*$", re.I)
 
 
 def new_call(name: str, arguments: str) -> dict:
@@ -87,8 +89,19 @@ def recover(tools: list[dict], content: str, reasoning: str) -> tuple[list[dict]
     calls, _ = recover_tool_calls(reasoning, known)
     if calls:
         return calls, content
+    call = recover_plain_call(content, known)
+    if call:
+        return [call], ""
     call, rest = recover_json_call(content, tools)
     return ([call], rest) if call else ([], content)
+
+
+def recover_plain_call(text: str, known: set[str]) -> dict | None:
+    """Строго одна команда браузера без пояснений — вызов, а не пользовательский текст или пример кода."""
+    match = PLAIN_BROWSER_OPEN.fullmatch(text)
+    if not match or "browser" not in known or "```" in text:
+        return None
+    return new_call("browser", json.dumps({"action": "open", "url": match.group(1)}, ensure_ascii=False))
 
 
 def recover_tool_calls(text: str, known: set[str]) -> tuple[list[dict], str]:

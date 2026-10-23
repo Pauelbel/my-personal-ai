@@ -46,6 +46,8 @@ class Tool:
     run: Callable[[dict, ToolContext], ToolResult | Awaitable[ToolResult]]
     group: str | None = None
     preview: Callable[[dict, ToolContext], dict] | None = None
+    # Некоторые варианты одного инструмента требуют подтверждения каждый раз, даже для доверенной группы.
+    always_confirm: Callable[[dict], bool] | None = None
     # Чинит мелкие промахи модели до проверки по схеме: список строкой «a, b», номер строкой «2».
     prepare: Callable[[dict], None] | None = None
 

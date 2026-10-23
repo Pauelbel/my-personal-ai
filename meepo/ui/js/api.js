@@ -106,4 +106,5 @@ export const api = {
   tools: () => request("/tools"),
   // Модели сервера: текущего или по адресу (проверка до сохранения настроек).
   models: (baseUrl = "") => request(`/models${baseUrl ? `?${q({ base_url: baseUrl })}` : ""}`),
+  probeModels: (baseUrl, apiKey = "") => request("/models/probe", json("POST", { base_url: baseUrl, api_key: apiKey })),
 };

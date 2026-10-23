@@ -42,11 +42,13 @@ def test_write_needs_card_with_diff(harness):
 
 
 def test_rejected_card_does_nothing(harness):
-    h = harness([{"calls": [("write_file", {"path": "notes.md", "content": "x"})]}, "Хорошо, не создаю."])
+    h = harness([{"calls": [("write_file", {"path": "notes.md", "content": "x"})]}])
     h.turn("создай notes.md", [NO])
     assert not (h.project_dir / "notes.md").exists()
     tool = [m for m in h.messages() if m["role"] == "tool"][0]
-    assert tool["is_error"] and "отклонил" in tool["content"]
+    assert tool["is_error"] and tool["content"] == "Действие отменено через карточку"
+    assert h.messages()[-1]["content"] == "Действие отменено."
+    assert len(h.llm.requests) == 1
 
 
 def test_reply_text_goes_to_model(harness):

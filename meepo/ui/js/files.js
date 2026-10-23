@@ -87,7 +87,7 @@ function rememberOpened(path) {
 function renderTree() {
   const tree = $("#files-tree");
   const root = view.children.get("");
-  if (!view.projectId) tree.replaceChildren(note("Проект сессии не найден: файлов нет."));
+  if (!view.projectId) tree.replaceChildren(note("Файловый браузер доступен в чатах проектов."));
   else if (!root) tree.replaceChildren(note(view.message || "Загрузка…"));
   else if (!root.length) tree.replaceChildren(note("Папка пуста."));
   else {

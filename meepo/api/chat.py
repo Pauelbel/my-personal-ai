@@ -21,7 +21,7 @@ class ProjectBody(BaseModel):
 
 
 class SessionBody(BaseModel):
-    project_id: str
+    project_id: str | None = None
 
 
 class TitleBody(BaseModel):
@@ -131,7 +131,7 @@ def list_sessions(request: Request) -> list[dict]:
 @router.post("/sessions", status_code=201)
 def create_session(body: SessionBody, request: Request) -> dict:
     services = _services(request)
-    if services.projects.get(body.project_id) is None:
+    if body.project_id is not None and services.projects.get(body.project_id) is None:
         raise HTTPException(404, "Проект не найден")
     return services.sessions.create(body.project_id)
 

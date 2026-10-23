@@ -73,3 +73,21 @@ def test_files_api(tmp_path):
         assert (project_dir / "b.md").read_text(encoding="utf-8") == "# Б\n"
         assert client.delete(base, params={"path": "docs"}).status_code == 204 and not (project_dir / "docs").exists()
         assert client.delete(base, params={"path": "."}).status_code == 400
+
+
+def test_chat_without_project(tmp_path):
+    from meepo.llm.fake import FakeLLM
+
+    app = create_app(Env(data_path=tmp_path / "data", default_model="fake"), FakeLLM(["Привет!"]))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        assert client.post("/api/sessions", json={"project_id": "missing"}).status_code == 404
+        response = client.post("/api/sessions", json={})
+        assert response.status_code == 201
+        session = response.json()
+        assert session["project_id"] is None
+        with client.stream("POST", f"/api/sessions/{session['id']}/turn", json={"content": "привет"}) as stream:
+            assert stream.status_code == 200
+            assert 'Привет!' in stream.read().decode()
+        assert [m["content"] for m in client.get(f"/api/sessions/{session['id']}/messages").json()] == ["привет", "Привет!"]
+        assert (tmp_path / "data" / "chat-workspaces" / session["id"]).is_dir()
+        assert any(item["id"] == session["id"] for item in client.get("/api/sessions").json())

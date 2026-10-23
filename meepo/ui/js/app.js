@@ -60,7 +60,7 @@ async function selectSession(id) {
 async function newSession(projectId) {
   try {
     const session = await api.createSession(projectId);
-    state.collapsed.delete(projectId);
+    state.collapsed.delete(projectId ?? "__no_project__");
     await loadSessions();
     await selectSession(session.id);
     $("#input").focus();
@@ -112,10 +112,13 @@ async function openFirst() {
   const empty = el("div", "empty");
   const mascot = el("img");
   Object.assign(mascot, { src: "/ui/assets/meepo-mascot.png", alt: "" });
+  const chat = el("button", "primary", "Начать чат");
+  chat.type = "button";
+  chat.addEventListener("click", () => newSession(null));
   const choose = el("button", "primary", "Выбрать папку проекта");
   choose.type = "button";
   choose.addEventListener("click", () => openProject());
-  empty.append(mascot, el("strong", "", "Привет! Я Мипо."), "Выберите папку проекта: в ней я буду читать и править файлы.", choose);
+  empty.append(mascot, el("strong", "", "Привет! Я Мипо."), "Начните чат или выберите папку проекта.", chat, choose);
   $("#messages").replaceChildren(empty);
   renderChrome();
   renderSidebar();
@@ -308,6 +311,11 @@ async function showModel(settings = null) {
   const select = $("#model-select");
   try {
     settings ??= await api.settings();
+    select.parentElement.hidden = !settings.configured;
+    if (!settings.configured) {
+      select.replaceChildren();
+      return;
+    }
     const names = await api.models().catch(() => []);
     const active = settings.active_model;
     select.replaceChildren(...names.map((name) => Object.assign(el("option"), { value: name, textContent: name })));

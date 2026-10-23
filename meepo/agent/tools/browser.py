@@ -2,7 +2,7 @@
 
 open(url), snapshot() — текст страницы и интерактивные элементы с ref, ролью, именем и готовым локатором
 Playwright (по нему агент пишет автотест), click(ref), type(ref, text), press(key), select(ref, value),
-screenshot() — файл в .meepo/screenshots/, close().
+highlight(refs) — визуально выделить найденные элементы на странице, screenshot() — файл в .meepo/screenshots/, close().
 Браузер запускается при первом вызове, свой на каждую сессию, и живёт до конца сессии или close.
 Окно видимое (headed) по умолчанию — переключатель в настройках. Нет скачанного Chromium — пробуется
 установленный Google Chrome; нет и его — понятная ошибка с командой установки.
@@ -23,7 +23,34 @@ TEXT_CHARS = 4000
 MAX_ELEMENTS = 120
 INSTALL_HINT = "Браузер не установлен: выполните один раз `uv run playwright install chromium` в папке Мипо"
 SNAPSHOT_JS = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8")
-ACTIONS = ("open", "snapshot", "click", "type", "press", "select", "screenshot", "close")
+ACTIONS = ("open", "snapshot", "highlight", "click", "type", "press", "select", "screenshot", "close")
+INTERACTIVE_ACTIONS = {"click", "type", "press", "select"}
+
+HIGHLIGHT_JS = """async (refs) => {
+  document.querySelectorAll('[data-meepo-highlighted]').forEach((node) => node.removeAttribute('data-meepo-highlighted'));
+  document.querySelectorAll('.meepo-highlight-overlay').forEach((node) => node.remove());
+  const found = refs.map((ref) => [ref, document.querySelector(`[data-meepo-ref="${CSS.escape(ref)}"]`)]).filter(([, node]) => node);
+  if (found[0]) found[0][1].scrollIntoView({block: 'center', inline: 'center'});
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  for (const [ref, node] of found) {
+    node.setAttribute('data-meepo-highlighted', '');
+    let target = node;
+    let rect = target.getBoundingClientRect();
+    while ((rect.width < 2 || rect.height < 2) && target.parentElement) {
+      target = target.parentElement;
+      rect = target.getBoundingClientRect();
+    }
+    const box = document.createElement('div');
+    box.className = 'meepo-highlight-overlay';
+    Object.assign(box.style, {position:'absolute',left:`${rect.left + scrollX - 4}px`,top:`${rect.top + scrollY - 4}px`,width:`${Math.max(rect.width + 8, 16)}px`,height:`${Math.max(rect.height + 8, 16)}px`,zIndex:'2147483646',border:'4px solid #ff2d20',borderRadius:'5px',boxSizing:'border-box',background:'rgba(255,230,0,.18)',boxShadow:'0 0 0 2px #fff,0 0 0 6px rgba(255,45,32,.3)',pointerEvents:'none'});
+    const label = document.createElement('div');
+    label.textContent = ref;
+    Object.assign(label.style, {position:'absolute',left:'-4px',top:'-27px',padding:'3px 8px',borderRadius:'4px 4px 0 0',background:'#ff2d20',color:'#fff',font:'bold 14px/20px sans-serif',whiteSpace:'nowrap'});
+    box.append(label);
+    document.body.append(box);
+  }
+  return found.map(([ref]) => ref);
+}"""
 
 
 class BrowserPool:
@@ -46,24 +73,27 @@ class BrowserPool:
             from playwright.async_api import async_playwright
 
             self._playwright = await async_playwright().start()
-        browser = await self._launch()
-        context = await browser.new_context(viewport={"width": 1280, "height": 860})
+        headed = self._headed()
+        browser = await self._launch(headed)
+        # У видимого Chrome страница занимает всё настоящее окно. Фиксированный viewport нужен только
+        # фоновому браузеру: иначе в развёрнутом окне остаётся узкая область страницы слева.
+        context = await browser.new_context(**({"no_viewport": True} if headed else {"viewport": {"width": 1280, "height": 860}}))
         context.set_default_timeout(ACTION_TIMEOUT_MS)
         page = await context.new_page()
         self._sessions[session_id] = {"browser": browser, "page": page, "elements": {}}
         return page
 
-    async def _launch(self):
+    async def _launch(self, headed: bool):
         from playwright.async_api import Error
 
-        headless = not self._headed()
+        options = {"headless": not headed, "args": ["--start-maximized"] if headed else []}
         try:
-            return await self._playwright.chromium.launch(headless=headless)
+            return await self._playwright.chromium.launch(**options)
         except Error as exc:
             if "Executable doesn't exist" not in str(exc):
                 raise
         try:
-            return await self._playwright.chromium.launch(headless=headless, channel="chrome")
+            return await self._playwright.chromium.launch(**options, channel="chrome")
         except Error:
             raise ValueError(INSTALL_HINT) from None
 
@@ -144,6 +174,14 @@ def _ref(args: dict) -> str:
     return ref
 
 
+def _highlight_refs(args: dict) -> list[str]:
+    """Один ref тоже принимается: небольшим моделям так проще вызвать highlight."""
+    values = args.get("refs")
+    if not isinstance(values, list):
+        values = [args.get("ref")] if args.get("ref") else []
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
 async def _element(page, args: dict):
     element = page.locator(f'[data-meepo-ref="{_ref(args)}"]')
     if await element.count() == 0:
@@ -162,6 +200,8 @@ def preview(args: dict, ctx: ToolContext) -> dict:
         target = f"{ref} {pool.described(ctx.session_id, ref)}".strip()
         if action in ("type", "select"):
             target += f" ← «{args.get('text') or args.get('value') or ''}»"
+    if action == "highlight":
+        target = ", ".join(_highlight_refs(args))
     return {"title": f"Браузер: {action} {target}".strip(), "text": "Отметьте галочку, чтобы не спрашивать о браузере до конца сессии."}
 
 
@@ -188,6 +228,16 @@ async def _act(args: dict, ctx: ToolContext) -> ToolResult:
         body, elements = render_snapshot(await page.evaluate(SNAPSHOT_JS))
         pool.remember(ctx.session_id, elements)
         return ToolResult(body, meta={"snapshot": True})
+    elif action == "highlight":
+        refs = _highlight_refs(args)
+        if not refs:
+            raise ValueError("Для highlight нужен ref или список refs из последнего snapshot")
+        found = await page.evaluate(HIGHLIGHT_JS, refs)
+        missing = [ref for ref in refs if ref not in found]
+        if not found:
+            raise ValueError("Элементы не найдены: " + ", ".join(missing) + ". Сними snapshot заново")
+        suffix = f"; не найдены: {', '.join(missing)}" if missing else ""
+        return ToolResult(f"На странице выделены элементы: {', '.join(found)}{suffix}")
     elif action == "click":
         await (await _element(page, args)).click()
     elif action == "type":
@@ -213,16 +263,18 @@ async def _act(args: dict, ctx: ToolContext) -> ToolResult:
 
 TOOLS = [
     Tool("browser", "Браузер: action open (url) — открыть страницу; snapshot — текст страницы и элементы с ref и готовыми "
-         "локаторами Playwright (по ним пиши автотесты); click (ref), type (ref, text), select (ref, value), "
+         "локаторами Playwright (по ним пиши автотесты); highlight (refs) — обвести элементы на открытой странице; "
+         "click (ref), type (ref, text), select (ref, value), "
          "press (key, например Enter); screenshot — снимок экрана в файл; close — закрыть браузер. "
          "ref берутся из последнего snapshot; после перехода на другую страницу сними snapshot заново.",
          {"type": "object", "properties": {
              "action": {"type": "string", "enum": list(ACTIONS)},
              "url": {"type": "string", "description": "Для open: адрес страницы"},
              "ref": {"type": "string", "description": "Для click, type, select: ref элемента из snapshot, например e5"},
+             "refs": {"type": "array", "items": {"type": "string"}, "description": "Для highlight: ref элементов из snapshot"},
              "text": {"type": "string", "description": "Для type: что ввести"},
              "value": {"type": "string", "description": "Для select: значение или подпись пункта списка"},
              "key": {"type": "string", "description": "Для press: клавиша, например Enter, Tab, Escape"},
          }, "required": ["action"], "additionalProperties": False},
-         browser, "browser", preview),
+         browser, "browser", preview, lambda args: args.get("action") in INTERACTIVE_ACTIONS),
 ]

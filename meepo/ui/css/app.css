@@ -79,8 +79,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .chat-bar { display: flex; align-items: center; gap: 10px; flex: none; padding: 8px 16px; border-bottom: 1px solid var(--line); }
 .chat-bar:has(.files-toggle[hidden]) { display: none; }
 .files-toggle { flex: none; margin-left: auto; color: var(--muted); }
-/* Проекты и сессии — навигация, а не дерево терминала: крупные строки, цветной значок проекта,
-   открытая сессия — плашкой. Сессии выровнены по названию проекта. */
+/* Чаты, проекты и сессии — компактная навигация; открытая сессия выделена плашкой. */
 .sidebar {
   width: var(--sidebar); flex: none; display: flex; flex-direction: column; gap: 2px; padding: 10px 8px;
   border-right: 1px solid var(--line); background: var(--surface); overflow: auto; font: 14px/1.4 var(--sans);
@@ -96,17 +95,16 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .nav-tree { display: flex; flex-direction: column; gap: 1px; user-select: none; }
 .nav-tree .trow { min-height: 34px; border-radius: var(--radius); }
 .nav-tree .trow-main { align-self: stretch; gap: 10px; padding: 6px 10px; border-radius: var(--radius); }
+.nav-tree .trow-guide:empty { display: none; }
 /* Контур фокуса — только с клавиатуры и внутри строки, чтобы не вылезал за плашку. */
 .nav-tree .trow-main:focus-visible { outline-offset: -2px; }
 .nav-tree .trow-label { font-weight: 400; }
 .nav-tree .trow.group .trow-label { font-weight: 500; color: var(--fg); }
 .nav-tree .trow.group .trow-mark {
-  width: 20px; height: 20px; display: grid; place-items: center; border-radius: 6px;
-  background: var(--tone, var(--marker)); color: var(--surface); font: 700 11px/1 var(--sans);
+  width: 18px; height: 18px; display: grid; place-items: center; color: var(--muted);
 }
-.nav-tree .trow.group .trow-mark:is(.running, .waiting) { color: var(--surface); box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px currentColor; }
-.nav-tree .trow.group .trow-mark.running { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--accent); }
-.nav-tree .trow.group .trow-mark.waiting { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--warn); }
+.nav-tree .trow.group .trow-mark svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.nav-tree .trow.group:hover .trow-mark { color: var(--fg); }
 /* Сессия: 24px отступа + точка 6px + зазор 10px = название под названием проекта. Точка видна, только пока сессия занята. */
 .nav-tree .trow:not(.group) .trow-main { padding-left: 24px; }
 .nav-tree .trow:not(.group) .trow-mark { width: 6px; height: 6px; border-radius: 50%; color: transparent; background: currentColor; }
@@ -738,3 +736,8 @@ button.chip.on, button.chip.on:hover:not(:disabled) { background: var(--accent-2
 }
 /* Настройки — на всю ширину окна во всех подвкладках. */
 #view-settings > * { width: 100%; }
+
+.guard-guide { margin: 0 0 16px; }
+.guard-guide summary { cursor: pointer; color: var(--fg); }
+.guard-guide p, .guard-guide li { line-height: 1.5; }
+.guard-guide .code-view { max-height: 420px; }

@@ -47,12 +47,10 @@ export function renderCard(root, card, decide) {
       }
       if (reply.value.trim()) send({ action: "reply", text: reply.value.trim() });
     });
-    if (card.group && !checks) {
+    if (card.group && !checks && card.allow_trust !== false) {
       const label = el("label", "trust");
       trust = el("input");
       trust.type = "checkbox";
-      // Браузер — десятки действий подряд: первая карточка предлагает разрешить его на всю сессию.
-      trust.checked = card.group === "browser";
       label.append(trust, ` разрешать ${GROUPS[card.group] ?? card.group} до конца сессии`);
       actions.append(label);
     }

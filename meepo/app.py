@@ -63,7 +63,8 @@ class Services:
         self.wiki_actions = WikiActions(env.data_path / "wiki-actions.md")
         self.memory = MemoryStore(env.data_path / "memory")
         self.memory_updater = MemoryUpdater(
-            self.memory, self.sessions, self.llm, lambda: self.settings().model or env.default_model,
+            self.memory, self.sessions, self.llm,
+            lambda: self.settings().model or ("" if self.settings().llm_kind == "disabled" else env.default_model),
             lambda: self.settings().memory_auto_update_messages)
         self._fixed_llm = llm
         self._client: LLMClient | None = None
@@ -89,16 +90,21 @@ class Services:
     def llm_info(self) -> dict[str, str]:
         """Модель сессии для скриптов скиллов: MEEPO_LLM_URL, MEEPO_LLM_MODEL, MEEPO_LLM_KEY."""
         settings = self.settings()
-        return {"url": settings.llm_base_url or self.env.llm_base_url, "model": settings.model or self.env.default_model,
-                "key": self.env.llm_api_key}
+        disabled = settings.llm_kind == "disabled"
+        return {"url": "" if disabled else settings.llm_base_url or self.env.llm_base_url,
+                "model": "" if disabled else settings.model or self.env.default_model,
+                "key": "" if disabled else settings.llm_api_key or self.env.llm_api_key}
 
     def llm(self):
         if self._fixed_llm is not None:
             return self._fixed_llm
-        base_url = self.settings().llm_base_url or self.env.llm_base_url
+        settings = self.settings()
+        disabled = settings.llm_kind == "disabled"
+        base_url = "" if disabled else settings.llm_base_url or self.env.llm_base_url
+        api_key = "" if disabled else settings.llm_api_key or self.env.llm_api_key
         # Сервер модели сменили в настройках — клиент пересоздаётся (старый закроется при остановке сервера).
-        if self._client is None or self._client.base_url != base_url.rstrip("/"):
-            self._client = LLMClient(base_url, api_key=self.env.llm_api_key, timeout=self.env.llm_timeout_seconds,
+        if self._client is None or self._client.base_url != base_url.rstrip("/") or self._client.api_key != api_key:
+            self._client = LLMClient(base_url, api_key=api_key, timeout=self.env.llm_timeout_seconds,
                                      verify_ssl=self.env.llm_verify_ssl)
         return self._client
 

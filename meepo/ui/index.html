@@ -40,7 +40,7 @@
     <div class="layout">
       <aside class="sidebar" id="sidebar" aria-label="Проекты и сессии">
         <div class="sidebar-head">
-          <h3>Проекты</h3>
+          <h3>Сеансы</h3>
           <button class="ghost icon" id="new-project" type="button" title="Новый проект: папка, в которой работает агент" aria-label="Новый проект">＋</button>
         </div>
         <div class="nav-tree" id="session-list"></div>
@@ -188,7 +188,7 @@
           <button type="button" data-pane="guards" aria-pressed="false">Заплатки</button>
         </nav>
         <section class="settings-pane" id="settings-general">
-          <p class="hint">Хранятся в <code>data/settings.json</code>; адрес сервера и модель по умолчанию — в <code>.env</code>.</p>
+          <p class="hint">Подключение к модели и остальные параметры хранятся локально в <code>data/settings.json</code>.</p>
           <div class="settings" id="settings"></div>
         </section>
         <section class="settings-pane" id="settings-skills" hidden>
@@ -207,6 +207,30 @@
         </section>
         <section class="settings-pane" id="settings-guards" hidden>
           <p class="hint">Заплатки для маленькой модели: каждая ловит свою типичную ошибку и просит модель исправиться. Сработавшая видна в логе хода строкой «Guard …». Файлы — в <code>meepo/agent/guards</code>.</p>
+          <details class="guard-guide">
+            <summary>Как работают заплатки и как создать свою</summary>
+            <p>После текстового ответа модели агент по очереди вызывает <code>check(state)</code> включённых ответных заплаток. Первая вернувшая подсказку просит модель продолжить работу; <code>None</code> означает, что проверка не сработала. Срабатывание видно в логе хода.</p>
+            <p>Создайте файл <code>meepo/agent/guards/example.py</code> по шаблону. Замените условие и подсказку на свои; имя <code>example</code> в счётчике должно совпадать с именем в реестре.</p>
+            <pre class="code-view"><code>"""Guard «название»: какую ошибку исправляет заплатка."""
+
+MAX = 3  # Максимум срабатываний за один ход
+HINT = "Опишите модели, что ей нужно исправить."
+
+
+def check(state) -&gt; str | None:
+    if state.counts.get("example", 0) &gt;= MAX or state.stopped:
+        return None
+    # Замените условие на проверку своей ошибки.
+    if "текст ошибки" in state.answer:
+        return HINT
+    return None</code></pre>
+            <ol>
+              <li>В <code>meepo/agent/guards/registry.py</code> импортируйте модуль и добавьте <code>"example": example</code> в <code>ANSWER_GUARDS</code> в нужном порядке и сообщение для <code>"example"</code> в <code>LOG</code>.</li>
+              <li>В <code>meepo/settings.py</code> добавьте <code>"example": True</code> в <code>default_guards()</code> для переключателя и значения по умолчанию.</li>
+              <li>Добавьте тесты и перезапустите приложение. Новый файл появится в списке заплаток.</li>
+            </ol>
+            <p>Поля состояния описаны в <code>TurnState</code> в <code>meepo/agent/loop.py</code>: <code>answer</code> — ответ модели, <code>rounds</code> — выполненные раунды инструментов, <code>stopped</code> — остановка, <code>counts</code> — счётчики за ход. Заплатка <code>retry</code> обрабатывает ошибки запроса отдельно; этот шаблон предназначен для проверки ответов.</p>
+          </details>
           <div class="split">
             <div class="list tree-list" id="guard-list"></div>
             <div class="skill-card guard-card" id="guard-card"></div>

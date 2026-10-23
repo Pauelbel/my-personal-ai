@@ -5,7 +5,8 @@
 `reset_pending` при старте убирает карточки и пишет в чат, что ход прерван.
 
 Решение: {"action": "approve" | "reject" | "reply", "text": ответ словами, "trust": разрешать такие до конца сессии}.
-Группы доверия: files_write, command, skill_run, skill_edit, browser.
+Группы доверия: files_write, command, skill_run, skill_edit, browser. Отдельные действия инструмента могут
+требовать подтверждения каждый раз и запрещать постоянное доверие.
 """
 
 import asyncio

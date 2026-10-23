@@ -30,7 +30,7 @@ def read_env_file(path: Path) -> dict[str, str]:
 class Env:
     """Параметры запуска из `.env`. Меняются правкой файла и перезапуском сервера."""
 
-    llm_base_url: str = "http://127.0.0.1:1234/v1"
+    llm_base_url: str = ""
     llm_api_key: str = ""
     default_model: str = ""
     llm_timeout_seconds: float = 120.0
@@ -65,7 +65,9 @@ def default_guards() -> dict[str, bool]:
 class UserSettings:
     """Выбор пользователя из раздела «Настройки»; хранится в `data/settings.json`."""
 
+    llm_kind: str = ""
     llm_base_url: str = ""
+    llm_api_key: str = ""
     model: str = ""
     default_context_tokens: int = 8192
     max_tool_rounds: int = 40

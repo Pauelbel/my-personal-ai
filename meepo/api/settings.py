@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 from meepo.agent.guards import registry as guards
 from meepo.llm.client import LLMClient, LLMError
@@ -14,6 +15,11 @@ router = APIRouter(prefix="/api")
 
 # Числовые настройки: допустимые границы.
 LIMITS = {"default_context_tokens": (1024, 1_048_576), "max_tool_rounds": (1, 200), "memory_auto_update_messages": (0, 1000)}
+
+
+class ModelProbe(BaseModel):
+    base_url: str
+    api_key: str = ""
 
 
 def check(fields: dict) -> str | None:
@@ -33,6 +39,8 @@ def check(fields: dict) -> str | None:
                 return "browser_headed — true или false"
         elif not isinstance(value, str):
             return f"{name} — строка"
+    if fields.get("llm_kind", "") not in ("", "llama", "openai", "disabled"):
+        return "llm_kind — llama или openai"
     base = fields.get("llm_base_url", "")
     if base and not base.startswith(("http://", "https://")):
         return "Адрес сервера модели — http://… или https://…, с /v1 на конце"
@@ -43,9 +51,13 @@ def check(fields: dict) -> str | None:
 def get_settings(request: Request) -> dict:
     services = request.app.state.services
     settings = services.settings()
-    return {**settings.__dict__, "env_base_url": services.env.llm_base_url, "env_model": services.env.default_model,
-            "active_model": settings.model or services.env.default_model,
-            "active_base_url": settings.llm_base_url or services.env.llm_base_url}
+    disabled = settings.llm_kind == "disabled"
+    public = {name: value for name, value in settings.__dict__.items() if name != "llm_api_key"}
+    return {**public, "llm_api_key_set": bool(settings.llm_api_key),
+            "env_base_url": services.env.llm_base_url, "env_model": services.env.default_model,
+            "active_model": "" if disabled else settings.model or services.env.default_model,
+            "active_base_url": "" if disabled else settings.llm_base_url or services.env.llm_base_url,
+            "configured": not disabled and bool(settings.llm_base_url or services.env.llm_base_url)}
 
 
 @router.put("/settings")
@@ -93,3 +105,18 @@ async def list_models(request: Request, base_url: str = "") -> list[str]:
     finally:
         if own:
             await client.close()
+
+
+@router.post("/models/probe")
+async def probe_models(body: ModelProbe, request: Request) -> list[str]:
+    """Проверяет ещё не сохранённое подключение; ключ передаётся в теле и не попадает в URL."""
+    if not body.base_url.startswith(("http://", "https://")):
+        raise HTTPException(400, "Адрес сервера модели — http://… или https://…, с /v1 на конце")
+    env = request.app.state.services.env
+    client = LLMClient(body.base_url, api_key=body.api_key, timeout=10, verify_ssl=env.llm_verify_ssl)
+    try:
+        return await client.list_models()
+    except LLMError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    finally:
+        await client.close()

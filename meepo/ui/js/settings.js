@@ -9,8 +9,6 @@ import { el, recall, remember } from "./util.js";
 
 const $ = (selector) => document.querySelector(selector);
 
-// Локальные серверы с OpenAI-совместимым API: подставляются выбором, свой адрес — вручную.
-const SERVERS = { lmstudio: ["LM Studio", "http://127.0.0.1:1234/v1"], ollama: ["Ollama", "http://127.0.0.1:11434/v1"] };
 const PANES = ["general", "tools", "skills", "guards"];
 
 let bound = false;
@@ -58,53 +56,80 @@ function option(value, label) {
   return Object.assign(el("option"), { value, textContent: label });
 }
 
-// Сервер: из .env, LM Studio, Ollama или свой адрес; модель — из списка моделей выбранного сервера.
-function modelBlock(settings) {
+// Подключение добавляется явно. Оба типа используют OpenAI-совместимый протокол; у внешнего API есть ключ.
+function modelBlock(settings, toast, onSaved) {
   const kind = el("select");
-  kind.append(option("env", `Из .env — ${settings.env_base_url}`),
-    ...Object.entries(SERVERS).map(([key, [name, url]]) => option(key, `${name} — ${url}`)), option("custom", "Другой адрес…"));
-  const preset = Object.entries(SERVERS).find(([, [, url]]) => url === settings.llm_base_url.replace(/\/$/, ""));
-  kind.value = !settings.llm_base_url ? "env" : preset ? preset[0] : "custom";
-  const custom = input("text", kind.value === "custom" ? settings.llm_base_url : "", { placeholder: "http://адрес:порт/v1" });
+  kind.append(option("llama", "Локальный LLaMA-сервер"), option("openai", "OpenAI-совместимый API"));
+  kind.value = settings.llm_kind || (settings.llm_api_key_set ? "openai" : "llama");
+  const address = input("url", settings.llm_base_url || settings.env_base_url, { placeholder: "http://127.0.0.1:8080/v1" });
+  const key = input("password", "", { placeholder: settings.llm_api_key_set ? "Ключ сохранён; оставьте пустым, чтобы не менять" : "API-ключ" });
+  let keyChanged = false;
+  key.addEventListener("input", () => { keyChanged = true; });
   const check = el("button", "", "Проверить подключение");
   check.type = "button";
   const probe = el("span", "hint");
   const model = el("select");
-  const url = () => (kind.value === "env" ? "" : kind.value === "custom" ? custom.value.trim() : SERVERS[kind.value][1]);
   const load = async () => {
-    custom.hidden = kind.value !== "custom";
+    key.closest("label").hidden = kind.value !== "openai";
     const chosen = model.value || settings.model;
+    const url = address.value.trim();
+    if (!url) {
+      model.replaceChildren(option("", "Сначала укажите адрес"));
+      probe.textContent = "";
+      return;
+    }
     probe.textContent = "Проверяю…";
     probe.className = "hint";
     let names = [];
     try {
-      names = await api.models(url() || settings.env_base_url);
+      const current = url.replace(/\/$/, "") === settings.active_base_url.replace(/\/$/, "") && !keyChanged;
+      names = current ? await api.models() : await api.probeModels(url, kind.value === "openai" ? key.value : "");
       probe.textContent = `✓ Сервер доступен, моделей: ${names.length}`;
       probe.className = "ok";
     } catch (error) {
       probe.textContent = `✕ ${error.message}`;
       probe.className = "error";
     }
-    model.replaceChildren(option("", `Из .env — ${settings.env_model || "не задана"}`), ...names.map((name) => option(name, name)));
+    model.replaceChildren(option("", "Выберите модель"), ...names.map((name) => option(name, name)));
     // Сохранённой модели нет на этом сервере: показываем это, а не подставляем молча другую.
     if (chosen && !names.includes(chosen)) model.append(option(chosen, `${chosen} — нет на сервере`));
     model.value = chosen;
   };
-  kind.addEventListener("change", load);
+  kind.addEventListener("change", () => {
+    key.closest("label").hidden = kind.value !== "openai";
+  });
   check.addEventListener("click", load);
-  custom.addEventListener("change", load);
   const server = el("div", "setting-row");
-  server.append(kind, check);
+  server.append(address, check);
+  const keyField = field("API-ключ", key, "Хранится локально в data/settings.json и отправляется только выбранному API.");
+  keyField.hidden = kind.value !== "openai";
+  const reset = el("button", "", "Сбросить подключение");
+  reset.type = "button";
+  reset.addEventListener("click", async () => {
+    try {
+      const saved = await api.saveSettings({ llm_kind: "disabled", llm_base_url: "", llm_api_key: "", model: "" });
+      onSaved(saved);
+      render(saved, toast, onSaved);
+    } catch (error) {
+      toast(error);
+    }
+  });
   const nodes = [
-    field("Сервер модели", server, "LM Studio или Ollama на этом компьютере; адрес — с /v1 на конце."), custom, probe,
+    field("Тип подключения", kind, "Локальный llama.cpp/LM Studio/Ollama или любой OpenAI-совместимый API."),
+    field("Адрес API", server, "Адрес OpenAI-совместимого API, обычно с /v1 на конце."), keyField, probe,
     field("Модель", model, `Сейчас: ${settings.active_model || "не выбрана"}. Её же можно сменить над полем ввода чата.`),
+    reset,
   ];
   void load();
-  return { nodes, values: () => ({ llm_base_url: url(), model: model.value }) };
+  return { nodes, values: () => ({
+    llm_kind: kind.value, llm_base_url: address.value.trim(), model: model.value,
+    ...(keyChanged ? { llm_api_key: kind.value === "openai" ? key.value : "" } : {}),
+  }) };
 }
 
-function render(settings, toast, onSaved) {
-  const block = modelBlock(settings);
+function render(settings, toast, onSaved, adding = false) {
+  const configured = settings.configured || adding;
+  const block = configured ? modelBlock(settings, toast, onSaved) : null;
   const windowSize = input("number", settings.default_context_tokens, { min: 1024, step: 1024 });
   const rounds = input("number", settings.max_tool_rounds, { min: 1, max: 200 });
   const memory = input("number", settings.memory_auto_update_messages, { min: 0 });
@@ -114,7 +139,7 @@ function render(settings, toast, onSaved) {
   save.addEventListener("click", async () => {
     try {
       const saved = await api.saveSettings({
-        ...block.values(),
+        ...(block ? block.values() : {}),
         default_context_tokens: Number(windowSize.value), max_tool_rounds: Number(rounds.value),
         memory_auto_update_messages: Number(memory.value),
       });
@@ -126,8 +151,14 @@ function render(settings, toast, onSaved) {
   });
   const actions = el("div", "editor-actions settings-actions");
   actions.append(status, save);
+  const add = el("button", "primary", "Добавить подключение");
+  add.type = "button";
+  add.addEventListener("click", () => render(settings, toast, onSaved, true));
+  const modelGroup = configured
+    ? group("Модель", ...block.nodes)
+    : group("Модель", el("p", "hint", "Подключение к модели не настроено."), add);
   $("#settings").replaceChildren(
-    group("Модель", ...block.nodes),
+    modelGroup,
     group("Ход агента",
       field("Окно по умолчанию, токенов", windowSize, "Если сервер модели сам не сообщает размер окна."),
       field("Лимит шагов за ход", rounds, "Дальше — карточка «продолжить или остановить».")),

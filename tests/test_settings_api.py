@@ -1,5 +1,7 @@
 """Настройки: сохранение и проверка значений."""
 
+import json
+
 from fastapi.testclient import TestClient
 
 from meepo.app import create_app
@@ -18,6 +20,24 @@ def test_settings_roundtrip_and_validation(tmp_path):
         assert client.put("/api/settings", json={"llm_base_url": "ftp://x"}).status_code == 400
         assert client.put("/api/settings", json={"unknown": 1}).status_code == 400
         assert client.get("/api/models").json() == ["fake"]
+
+
+def test_model_connection_key_and_reset(tmp_path):
+    app = create_app(Env(data_path=tmp_path, llm_base_url="http://env/v1", default_model="env-model"), FakeLLM([]))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved = client.put("/api/settings", json={
+            "llm_kind": "openai", "llm_base_url": "https://models.example/v1",
+            "llm_api_key": "secret", "model": "model-a",
+        }).json()
+        assert saved["configured"] is True and saved["llm_api_key_set"] is True
+        assert "llm_api_key" not in saved
+        assert json.loads((tmp_path / "settings.json").read_text())["llm_api_key"] == "secret"
+
+        reset = client.put("/api/settings", json={
+            "llm_kind": "disabled", "llm_base_url": "", "llm_api_key": "", "model": "",
+        }).json()
+        assert reset["configured"] is False
+        assert reset["active_base_url"] == "" and reset["active_model"] == ""
 
 
 def test_guards_list_with_source(tmp_path):

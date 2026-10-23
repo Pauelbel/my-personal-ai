@@ -52,6 +52,8 @@ class TurnState:
     emit: Callable[[dict], None]
     rounds: int = 0
     stopped: bool = False
+    # Пользователь нажал «Нет» в карточке: текущий ход завершается без ещё одного ответа модели.
+    cancelled: bool = False
     # Текст ответа, который модель пишет прямо сейчас: его сохраняет «Стоп».
     partial: str = ""
     spent: float = 0.0
@@ -103,6 +105,10 @@ class Agent:
 
     def workspace(self, session: dict | None) -> dict:
         """Где работают инструменты хода: {"name", "path"} — проект сессии."""
+        if session and session.get("project_id") is None:
+            folder = self.sessions.sessions_dir.parent / "chat-workspaces" / session["id"]
+            folder.mkdir(parents=True, exist_ok=True)
+            return {"name": "Чат", "path": str(folder), "no_project": True}
         project = self.projects.get(session["project_id"]) if session else None
         if project is None:
             raise TurnError("Сессия не привязана к проекту: выберите проект")
@@ -133,7 +139,7 @@ class Agent:
         session = self.sessions.get(session_id)
         project = self.workspace(session)
         settings = self.settings()
-        model = settings.model or self.default_model
+        model = settings.model or ("" if settings.llm_kind == "disabled" else self.default_model)
         if not model:
             raise TurnError("Модель не выбрана: укажите DEFAULT_MODEL в .env или выберите модель в настройках")
         window = await self.llm().context_length(model) or settings.default_context_tokens
@@ -163,6 +169,9 @@ class Agent:
             if reply.tool_calls and tools:
                 await self._run_calls(state, ctx, reply)
                 state.rounds += 1
+                if state.cancelled:
+                    self._finish(state, "Действие отменено.", Reply())
+                    return
                 continue
             text = reply.content
             if reply.tool_calls:
@@ -253,7 +262,9 @@ class Agent:
         replies = []
         for index, call in enumerate(calls):
             state.emit({"type": "tool_call", "call": call})
-            if index >= MAX_CALLS_PER_ROUND:
+            if state.cancelled:
+                result = ToolResult("Ход остановлен после отмены действия", True)
+            elif index >= MAX_CALLS_PER_ROUND:
                 result = ToolResult(f"Не больше {MAX_CALLS_PER_ROUND} вызовов за раунд — повтори этот вызов отдельно", True)
             else:
                 result, answer = await self._call(state, ctx, call)
@@ -288,19 +299,22 @@ class Agent:
             return ToolResult(f"{problem}. Параметры {tool.name}: {describe_parameters(tool.parameters)}. "
                               "Исправь и вызови снова.", True), ""
         session = self.sessions.get(state.session_id)
-        if tool.group and tool.group not in session["trusted"]:
+        always_confirm = bool(tool.always_confirm and tool.always_confirm(arguments))
+        if tool.group and (always_confirm or tool.group not in session["trusted"]):
             try:
                 preview = tool.preview(arguments, ctx) if tool.preview else {}
             except (ValueError, OSError, UnicodeError) as exc:
                 return ToolResult(f"{exc}. Исправь и вызови снова.", True), ""
             decision = await self.approvals.ask(state.session_id, {
-                "kind": "tool", "tool": tool.name, "group": tool.group, "arguments": arguments, **preview,
+                "kind": "tool", "tool": tool.name, "group": tool.group, "arguments": arguments,
+                "allow_trust": not always_confirm, **preview,
             }, state.emit)
             state.note(f"Решение по {tool.name}: {decision['action']}" + (" · доверие на сессию" if decision["trust"] else ""))
-            if decision["trust"]:
+            if decision["trust"] and not always_confirm:
                 self.sessions.trust(state.session_id, tool.group)
             if decision["action"] == "reject":
-                return ToolResult("Пользователь отклонил этот вызов", True), ""
+                state.cancelled = True
+                return ToolResult("Действие отменено через карточку", True), ""
             if decision["action"] == "reply":
                 return ToolResult(f"Пользователь не разрешил вызов и ответил: «{decision['text']}». "
                                   "Учти ответ: доработай действие или спроси, как поступить.", True), decision["text"]

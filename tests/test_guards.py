@@ -69,6 +69,18 @@ def test_promise_not_on_first_answer_or_summary(harness):
     assert len(h.llm.requests) == 1
 
 
+def test_promise_continues_instead_of_offering_next_step(harness):
+    offer = 'Результатов мало. Хочешь открыть Песочницу? Или попробую поиск "автотесты"?'
+    h = harness([{"calls": [("list_dir", {})]}, offer, {"calls": [("list_dir", {})]}, "Нашёл результаты."])
+    h.turn("найди результаты")
+    assert sent(h, 2)[-1]["content"] == promise.HINT
+    assert h.messages()[-1]["content"] == "Нашёл результаты."
+
+
+def test_promise_allows_question_for_missing_data() -> None:
+    assert not promise.promises_action("Какой раздел документа нужно проверить?")
+
+
 def test_promise_limit(harness):
     h = harness([{"calls": [("list_dir", {})]}, *["Приступаю к проверке."] * 4])
     h.turn("посмотри")
@@ -165,14 +177,15 @@ def test_old_snapshots_go_first():
 
 def test_turn_compacts_inside_small_window(harness):
     script = [{"calls": [("read_file", {"path": f"{n}.md"})]} for n in range(4)] + ["Прочитал."]
-    h = harness(script, window=10500)
+    # Окно подобрано так, чтобы старые результаты заменялись маркерами, но сами группы ещё не выпадали целиком.
+    h = harness(script, window=10800)
     for n in range(4):
         (h.project_dir / f"{n}.md").write_text(f"файл {n} " + "текст " * 400, encoding="utf-8")
     h.turn("прочитай все файлы")
     last = h.llm.requests[-1]["messages"]
     assert any(m["content"] == "[результат read_file 0.md убран из контекста — при необходимости прочитай снова]" for m in last)
     assert any("Сжатие контекста" in line for line in h.messages()[-1]["log"])
-    assert h.services.sessions.get(h.sid)["context_window"] == 10500
+    assert h.services.sessions.get(h.sid)["context_window"] == 10800
 
 
 def test_huge_paste_goes_to_file(harness):

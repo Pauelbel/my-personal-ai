@@ -60,6 +60,7 @@ def test_browser_snapshot_locators_and_actions(harness, login_page):
     h = harness([
         {"calls": [("browser", {"action": "open", "url": url})]},
         {"calls": [("browser", {"action": "snapshot"})]},
+        {"calls": [("browser", {"action": "highlight", "refs": ["e1", "e3"]})]},
         {"calls": [("browser", {"action": "type", "ref": "e1", "text": "admin"}),
                    ("browser", {"action": "click", "ref": "e3"})]},
         {"calls": [("browser", {"action": "snapshot"}), ("browser", {"action": "close"})]},
@@ -67,8 +68,10 @@ def test_browser_snapshot_locators_and_actions(harness, login_page):
     ])
     h.services.settings_path.parent.mkdir(parents=True, exist_ok=True)
     h.services.settings_path.write_text('{"browser_headed": false}', encoding="utf-8")
-    h.turn("проверь вход", [{"action": "approve", "trust": True}])
-    assert len(h.cards()) == 1 and h.cards()[0]["group"] == "browser"
+    h.turn("проверь вход", [{"action": "approve", "trust": True}, YES, YES])
+    assert len(h.cards()) == 3 and all(card["group"] == "browser" for card in h.cards())
+    assert h.cards()[0]["allow_trust"] is True
+    assert all(card["allow_trust"] is False for card in h.cards()[1:])
     out = [m["content"] for m in results(h)]
     assert all(not m.get("is_error") for m in results(h)), out
     snapshot = out[1]
@@ -77,8 +80,9 @@ def test_browser_snapshot_locators_and_actions(harness, login_page):
     assert 'page.get_by_placeholder("Пароль")' in snapshot or 'get_by_role("textbox", name="Пароль")' in snapshot
     assert 'e3 button «Войти» — page.get_by_role("button", name="Войти")' in snapshot
     assert 'e4 link «Помощь»' in snapshot
-    assert "Привет, admin" in out[4]
-    assert out[5] == "Браузер закрыт"
+    assert out[2] == "На странице выделены элементы: e1, e3"
+    assert "Привет, admin" in out[5]
+    assert out[6] == "Браузер закрыт"
 
 
 def test_browser_bad_ref_is_error_for_model(harness, login_page):
@@ -91,6 +95,25 @@ def test_browser_bad_ref_is_error_for_model(harness, login_page):
     ])
     h.services.settings_path.parent.mkdir(parents=True, exist_ok=True)
     h.services.settings_path.write_text('{"browser_headed": false}', encoding="utf-8")
-    h.turn("кликни", [{"action": "approve", "trust": True}])
+    h.turn("кликни", [{"action": "approve", "trust": True}, YES])
     failed = results(h)[1]
     assert failed["is_error"] and "Нет элемента e99" in failed["content"]
+
+
+def test_trusted_browser_still_confirms_each_interaction(harness, login_page):
+    if not (shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("chromium")):
+        pytest.skip("нет браузера для Playwright")
+    h = harness([
+        {"calls": [("browser", {"action": "open", "url": login_page.as_uri()})]},
+        {"calls": [("browser", {"action": "snapshot"})]},
+        {"calls": [("browser", {"action": "click", "ref": "e3"})]},
+    ])
+    h.services.settings_path.parent.mkdir(parents=True, exist_ok=True)
+    h.services.settings_path.write_text('{"browser_headed": false}', encoding="utf-8")
+    h.turn("открой страницу", [{"action": "approve", "trust": True}, {"action": "reject"}])
+    cards = h.cards()
+    assert len(cards) == 2 and cards[1]["title"].startswith("Браузер: click")
+    assert cards[1]["allow_trust"] is False
+    assert results(h)[2]["content"] == "Действие отменено через карточку"
+    assert h.messages()[-1]["content"] == "Действие отменено."
+    assert len(h.llm.requests) == 3

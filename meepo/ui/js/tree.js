@@ -19,7 +19,7 @@ export function stem(lines, last) {
 // mark и state меняют значок: например, ● с классом running у сессии, в которой идёт ход.
 export function treeRow({
   prefix = "", label, note = "", noteClass = "", title = "", group = false, open = true, current = false, onClick,
-  extra = [], detail = "", detailPrefix = "", mark = null, state = "",
+  extra = [], detail = "", detailPrefix = "", mark = null, state = "", icon = null,
 }) {
   const row = el("div", `trow${group ? " group" : ""}${current ? " current" : ""}`);
   const main = el(onClick ? "button" : "div", "trow-main");
@@ -30,7 +30,9 @@ export function treeRow({
   if (group) main.setAttribute("aria-expanded", String(open));
   main.title = title;
   const sign = mark ?? (group ? (open ? "◆" : "◇") : current ? "●" : "○");
-  main.append(el("span", "trow-guide", prefix), el("span", `trow-mark${state ? ` ${state}` : ""}`, sign), el("span", "trow-label", label));
+  const marker = el("span", `trow-mark${state ? ` ${state}` : ""}`, icon ? "" : sign);
+  if (icon) marker.append(icon);
+  main.append(el("span", "trow-guide", prefix), marker, el("span", "trow-label", label));
   if (note) main.append(el("span", `trow-note${noteClass ? ` ${noteClass}` : ""}`, note));
   row.append(main, ...extra.filter(Boolean));
   if (!detail) return row;
